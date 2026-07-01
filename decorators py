@@ -1,0 +1,665 @@
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║                     PYTHON DECORATORS — Full Guide                  ║
+# ║                                                                     ║
+# ║  A decorator = a function that WRAPS another function               ║
+# ║  It adds extra behavior BEFORE and/or AFTER the original function   ║
+# ║                                                                     ║
+# ║  @decorator        ← this is just shortcut for:                     ║
+# ║  def my_func():       my_func = decorator(my_func)                  ║
+# ║                                                                     ║
+# ║  FastAPI's @app.get("/path") is a decorator!                        ║
+# ║  It registers your function as a route handler                      ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+
+
+# ════════════════════════════════════════════════════
+# STEP 1: Functions are objects in Python
+#
+#  Before decorators, understand this:
+#  Functions can be stored in variables, passed as arguments,
+#  and returned from other functions — just like any object
+# ════════════════════════════════════════════════════
+
+def greet():
+    return "Hello!"
+
+# Store function in a variable (no parentheses = don't call it)
+my_func = greet        # my_func now POINTS to the same function
+print(my_func())       # "Hello!" — calling it through the variable
+
+# Pass function as an argument
+def call_twice(func):
+    print(func())      # call it once
+    print(func())      # call it again
+
+call_twice(greet)      # prints "Hello!" twice
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# STEP 2: A function that returns a function
+#
+#  A function can CREATE and RETURN a new function
+#  The inner function "remembers" variables from outer function
+#  This is called a "closure"
+# ════════════════════════════════════════════════════
+
+def make_greeter(name):
+    def greeter():
+        return f"Hello, {name}!"    # "remembers" name from outer function
+    return greeter                   # return the function itself (not calling it)
+
+greet_alice = make_greeter("Alice")  # returns a function
+greet_bob = make_greeter("Bob")
+
+print(greet_alice())    # "Hello, Alice!"
+print(greet_bob())      # "Hello, Bob!"
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 1. Simplest decorator — no arguments
+#
+#  A decorator takes a function, wraps it, returns the wrapper
+#
+#  @my_decorator       is EXACTLY the same as:
+#  def say_hello():    say_hello = my_decorator(say_hello)
+# ════════════════════════════════════════════════════
+
+def my_decorator(func):
+    def wrapper():
+        print("BEFORE the function runs")
+        result = func()                   # call the original function
+        print("AFTER the function runs")
+        return result
+    return wrapper
+
+@my_decorator
+def say_hello():
+    print("Hello!")
+    return "done"
+
+# When you call say_hello(), it actually calls wrapper()
+# which runs: BEFORE → Hello! → AFTER
+say_hello()
+# Output:
+#   BEFORE the function runs
+#   Hello!
+#   AFTER the function runs
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 2. Decorator with function arguments — *args, **kwargs
+#
+#  If the original function takes arguments,
+#  the wrapper must accept and pass them through
+# ════════════════════════════════════════════════════
+
+def log_call(func):
+    def wrapper(*args, **kwargs):       # accept ANY arguments
+        print(f"Calling {func.__name__} with args={args}, kwargs={kwargs}")
+        result = func(*args, **kwargs)  # pass them to original function
+        print(f"{func.__name__} returned {result}")
+        return result
+    return wrapper
+
+@log_call
+def add(a, b):
+    return a + b
+
+@log_call
+def greet_person(name, greeting="Hi"):
+    return f"{greeting}, {name}!"
+
+print(add(3, 5))
+# Calling add with args=(3, 5), kwargs={}
+# add returned 8
+# 8
+
+print(greet_person("Alice", greeting="Hey"))
+# Calling greet_person with args=('Alice',), kwargs={'greeting': 'Hey'}
+# greet_person returned Hey, Alice!
+# Hey, Alice!
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 3. Decorator WITH parameters — decorator factory
+#
+#  @my_decorator(param)  ← decorator itself takes arguments
+#  This needs THREE levels of nesting:
+#    1. outer function — receives decorator's own arguments
+#    2. decorator function — receives the function being decorated
+#    3. wrapper function — runs when the decorated function is called
+#
+#  THIS IS EXACTLY HOW @app.get("/path") WORKS IN FASTAPI!
+# ════════════════════════════════════════════════════
+
+def repeat(times):                        # 1. receives decorator argument
+    def decorator(func):                  # 2. receives the function
+        def wrapper(*args, **kwargs):     # 3. runs when function is called
+            for i in range(times):
+                result = func(*args, **kwargs)
+            return result
+        return wrapper
+    return decorator
+
+@repeat(times=3)        # repeat(3) returns decorator, which wraps say_hi
+def say_hi(name):
+    print(f"Hi {name}!")
+
+say_hi("Alice")
+# Hi Alice!
+# Hi Alice!
+# Hi Alice!
+
+# Without @ syntax, this is what happens:
+# step 1: repeat(3)         → returns decorator function
+# step 2: decorator(say_hi) → returns wrapper function
+# step 3: say_hi = wrapper  → say_hi is now the wrapper
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 4. HOW @app.get("/path") WORKS — simplified version
+#
+#  FastAPI's @app.get("/shipments") is the SAME pattern:
+#    app.get("/shipments") → returns a decorator
+#    decorator(your_function) → registers it as a route
+#
+#  Let's build a mini version to understand it:
+# ════════════════════════════════════════════════════
+
+class MiniApp:
+    def __init__(self):
+        self.routes = {}    # stores {"/path": function}
+
+    def get(self, path):                # like app.get("/path")
+        def decorator(func):           # receives your endpoint function
+            self.routes[path] = func   # REGISTER the function for this path
+            return func                # return original function unchanged
+        return decorator
+
+    def handle_request(self, path):
+        if path in self.routes:
+            return self.routes[path]()
+        return "404 Not Found"
+
+mini_app = MiniApp()
+
+@mini_app.get("/hello")          # mini_app.get("/hello") returns decorator
+def hello_endpoint():            # decorator receives this function
+    return "Hello World!"        # decorator stores it in routes["/hello"]
+
+@mini_app.get("/shipments")
+def shipments_endpoint():
+    return [{"id": 1, "content": "Box"}]
+
+# Now the routes are registered:
+print(mini_app.routes)
+# {'/hello': <function hello_endpoint>, '/shipments': <function shipments_endpoint>}
+
+print(mini_app.handle_request("/hello"))       # "Hello World!"
+print(mini_app.handle_request("/shipments"))   # [{"id": 1, "content": "Box"}]
+print(mini_app.handle_request("/unknown"))     # "404 Not Found"
+
+# THIS IS WHAT FASTAPI DOES!
+# @app.get("/shipments")   → registers your function for GET /shipments
+# @app.post("/shipments")  → registers your function for POST /shipments
+# @app.put("/shipments")   → registers your function for PUT /shipments
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 5. HOW @app.middleware("http") WORKS — simplified
+#
+#  Same pattern — app.middleware("http") returns a decorator
+#  that stores your function in a middleware list
+# ════════════════════════════════════════════════════
+
+class MiniAppWithMiddleware:
+    def __init__(self):
+        self.routes = {}
+        self.middlewares = []
+
+    def get(self, path):
+        def decorator(func):
+            self.routes[path] = func
+            return func
+        return decorator
+
+    def middleware(self, middleware_type):
+        def decorator(func):
+            self.middlewares.append(func)   # store middleware function
+            return func
+        return decorator
+
+    def handle_request(self, path):
+        # Run all middlewares, then the route
+        print(f"Running {len(self.middlewares)} middleware(s)...")
+        for mw in self.middlewares:
+            print(f"  Middleware: {mw.__name__}")
+        if path in self.routes:
+            return self.routes[path]()
+        return "404"
+
+app2 = MiniAppWithMiddleware()
+
+@app2.middleware("http")        # stores log_middleware in app2.middlewares
+def log_middleware():
+    print("Logging...")
+
+@app2.get("/data")
+def data_endpoint():
+    return {"data": [1, 2, 3]}
+
+print(app2.handle_request("/data"))
+# Running 1 middleware(s)...
+#   Middleware: log_middleware
+# {'data': [1, 2, 3]}
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 6. Timer decorator — measure execution time
+# ════════════════════════════════════════════════════
+
+import time
+
+def timer(func):
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        end = time.time()
+        print(f"{func.__name__} took {end - start:.4f} seconds")
+        return result
+    return wrapper
+
+@timer
+def slow_function():
+    time.sleep(1)
+    return "done"
+
+slow_function()
+# slow_function took 1.0012 seconds
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 7. Auth decorator — check permission before running
+# ════════════════════════════════════════════════════
+
+current_user = {"name": "Alice", "role": "admin"}
+
+def require_role(role):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            if current_user["role"] != role:
+                return f"ACCESS DENIED: need {role} role, have {current_user['role']}"
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+@require_role("admin")
+def delete_all_data():
+    return "All data deleted!"
+
+@require_role("superadmin")
+def shutdown_server():
+    return "Server shutting down..."
+
+print(delete_all_data())    # "All data deleted!" — Alice is admin
+print(shutdown_server())    # "ACCESS DENIED: need superadmin role, have admin"
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 8. Retry decorator — retry on failure
+# ════════════════════════════════════════════════════
+
+attempt_count = 0
+
+def retry(max_attempts=3):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    print(f"  Attempt {attempt} failed: {e}")
+            raise last_error
+        return wrapper
+    return decorator
+
+@retry(max_attempts=3)
+def unreliable_api():
+    global attempt_count
+    attempt_count += 1
+    if attempt_count < 3:
+        raise ConnectionError("Server down")
+    return "Success!"
+
+attempt_count = 0
+print(unreliable_api())
+#   Attempt 1 failed: Server down
+#   Attempt 2 failed: Server down
+#   Success!
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 9. Cache/memoize decorator — remember results
+# ════════════════════════════════════════════════════
+
+def cache(func):
+    stored_results = {}
+    def wrapper(*args):
+        if args in stored_results:
+            print(f"  Cache HIT for {args}")
+            return stored_results[args]
+        print(f"  Cache MISS for {args} — computing...")
+        result = func(*args)
+        stored_results[args] = result
+        return result
+    return wrapper
+
+@cache
+def expensive_multiply(a, b):
+    time.sleep(0.5)    # simulate slow computation
+    return a * b
+
+print(expensive_multiply(3, 4))   # Cache MISS — computes (slow)
+print(expensive_multiply(3, 4))   # Cache HIT — instant
+print(expensive_multiply(5, 6))   # Cache MISS — new args
+print(expensive_multiply(5, 6))   # Cache HIT
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 10. Multiple decorators — stacking
+#
+#  Decorators apply BOTTOM to TOP
+#  @A
+#  @B
+#  def func():   →   func = A(B(func))
+#
+#  Execution order: A's wrapper → B's wrapper → func
+# ════════════════════════════════════════════════════
+
+def bold(func):
+    def wrapper(*args, **kwargs):
+        return f"<b>{func(*args, **kwargs)}</b>"
+    return wrapper
+
+def italic(func):
+    def wrapper(*args, **kwargs):
+        return f"<i>{func(*args, **kwargs)}</i>"
+    return wrapper
+
+@bold       # applied second (outer)
+@italic     # applied first (inner)
+def format_text(text):
+    return text
+
+print(format_text("Hello"))    # <b><i>Hello</i></b>
+
+# Same as: format_text = bold(italic(format_text))
+# Call chain: bold's wrapper → italic's wrapper → format_text
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 11. functools.wraps — preserve function metadata
+#
+#  Problem: decorators replace __name__ and __doc__
+#  Solution: @functools.wraps(func) copies them over
+# ════════════════════════════════════════════════════
+
+import functools
+
+def bad_decorator(func):
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+def good_decorator(func):
+    @functools.wraps(func)              # preserves name & docstring
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+@bad_decorator
+def my_function_bad():
+    """This is my function"""
+    pass
+
+@good_decorator
+def my_function_good():
+    """This is my function"""
+    pass
+
+print(f"Bad:  name={my_function_bad.__name__}, doc={my_function_bad.__doc__}")
+# Bad:  name=wrapper, doc=None
+
+print(f"Good: name={my_function_good.__name__}, doc={my_function_good.__doc__}")
+# Good: name=my_function_good, doc=This is my function
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 12. Class-based decorator — using __call__
+#
+#  A class with __call__ method can be used as a decorator
+#  __call__ makes an object callable like a function
+# ════════════════════════════════════════════════════
+
+class CountCalls:
+    def __init__(self, func):
+        self.func = func
+        self.count = 0
+
+    def __call__(self, *args, **kwargs):   # called when you do my_func()
+        self.count += 1
+        print(f"{self.func.__name__} has been called {self.count} time(s)")
+        return self.func(*args, **kwargs)
+
+@CountCalls         # same as: say_wow = CountCalls(say_wow)
+def say_wow():
+    return "Wow!"
+
+say_wow()    # say_wow has been called 1 time(s)
+say_wow()    # say_wow has been called 2 time(s)
+say_wow()    # say_wow has been called 3 time(s)
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 13. Class-based decorator WITH parameters
+# ════════════════════════════════════════════════════
+
+class RateLimit:
+    def __init__(self, max_calls):
+        self.max_calls = max_calls
+
+    def __call__(self, func):       # receives the function
+        call_count = {"n": 0}
+        def wrapper(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] > self.max_calls:
+                return f"RATE LIMITED! Max {self.max_calls} calls allowed"
+            return func(*args, **kwargs)
+        return wrapper
+
+@RateLimit(max_calls=2)     # RateLimit(2) creates object, __call__ decorates
+def get_secret():
+    return "The secret is 42"
+
+print(get_secret())    # "The secret is 42"
+print(get_secret())    # "The secret is 42"
+print(get_secret())    # "RATE LIMITED! Max 2 calls allowed"
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 14. Decorator that modifies return value
+# ════════════════════════════════════════════════════
+
+def to_json(func):
+    import json
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        return json.dumps(result, indent=2)
+    return wrapper
+
+@to_json
+def get_user():
+    return {"name": "Alice", "age": 30, "active": True}
+
+print(get_user())
+# {
+#   "name": "Alice",
+#   "age": 30,
+#   "active": true
+# }
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 15. Decorator for validation — check inputs
+# ════════════════════════════════════════════════════
+
+def validate_positive(func):
+    def wrapper(*args, **kwargs):
+        for arg in args:
+            if isinstance(arg, (int, float)) and arg < 0:
+                raise ValueError(f"Negative value not allowed: {arg}")
+        return func(*args, **kwargs)
+    return wrapper
+
+@validate_positive
+def calculate_area(width, height):
+    return width * height
+
+print(calculate_area(5, 10))    # 50
+
+try:
+    print(calculate_area(-3, 10))
+except ValueError as e:
+    print(f"Error: {e}")    # Error: Negative value not allowed: -3
+
+print("=" * 50)
+
+
+# ════════════════════════════════════════════════════
+# 16. FULL @app pattern — mini FastAPI with all methods
+#
+#  This is the FULL pattern that FastAPI uses:
+#  - Class stores routes in a dict
+#  - .get(), .post() etc. are decorator factories
+#  - Each returns a decorator that registers the function
+#  - When a request comes in, it looks up the right function
+# ════════════════════════════════════════════════════
+
+class SimpleAPI:
+    def __init__(self):
+        self.routes = {"GET": {}, "POST": {}, "PUT": {}, "DELETE": {}}
+
+    def get(self, path):
+        def decorator(func):
+            self.routes["GET"][path] = func
+            return func
+        return decorator
+
+    def post(self, path):
+        def decorator(func):
+            self.routes["POST"][path] = func
+            return func
+        return decorator
+
+    def put(self, path):
+        def decorator(func):
+            self.routes["PUT"][path] = func
+            return func
+        return decorator
+
+    def delete(self, path):
+        def decorator(func):
+            self.routes["DELETE"][path] = func
+            return func
+        return decorator
+
+    def request(self, method, path, **kwargs):
+        method = method.upper()
+        if method in self.routes and path in self.routes[method]:
+            return self.routes[method][path](**kwargs)
+        return {"error": f"{method} {path} not found"}
+
+api = SimpleAPI()
+
+@api.get("/users")
+def list_users():
+    return [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+
+@api.post("/users")
+def create_user(name="Unknown"):
+    return {"id": 3, "name": name, "created": True}
+
+@api.get("/users/1")
+def get_user_by_id():
+    return {"id": 1, "name": "Alice"}
+
+@api.delete("/users/1")
+def delete_user():
+    return {"id": 1, "deleted": True}
+
+# Simulate requests — exactly like FastAPI routing
+print("GET /users     →", api.request("GET", "/users"))
+print("POST /users    →", api.request("POST", "/users", name="Charlie"))
+print("GET /users/1   →", api.request("GET", "/users/1"))
+print("DELETE /users/1→", api.request("DELETE", "/users/1"))
+print("GET /unknown   →", api.request("GET", "/unknown"))
+
+print("\nRegistered routes:")
+for method, paths in api.routes.items():
+    for path, func in paths.items():
+        print(f"  {method:6} {path:15} → {func.__name__}()")
+
+
+# ════════════════════════════════════════════════════
+# SUMMARY — Why FastAPI uses @app.get("/path")
+#
+#  @app.get("/path")     = decorator factory pattern (example 3)
+#  app                   = class instance with routes dict (example 16)
+#  .get("/path")         = method that returns a decorator
+#  decorator(your_func)  = registers your function for that path
+#
+#  When a request comes in:
+#    1. FastAPI looks up the path in its routes dict
+#    2. Finds your function
+#    3. Calls it with the right arguments
+#    4. Returns the result as JSON
+#
+#  Same for @app.middleware("http"):
+#    1. app.middleware("http") returns a decorator
+#    2. decorator stores your function in a middleware list
+#    3. Every request runs through all middleware functions
+# ════════════════════════════════════════════════════
