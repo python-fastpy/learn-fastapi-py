@@ -1,7 +1,7 @@
 # ══════════════════════════════════════════════════════════════════
 # AWS Deployment — Cleanup & Summary
 # ══════════════════════════════════════════════════════════════════
-# Navigation:  ← prev: 13-secrets-manager.py
+# Navigation:  ← prev: 13-secrets-manager.py  |  next: 15-dynamodb.py →
 
 # ╔══════════════════════════════════════════════════╗
 # ║           CLEANUP (AVOID CHARGES)                ║

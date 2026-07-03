@@ -18,6 +18,14 @@
 #   12-cloudfront-deep-dive.py  — CloudFront origins, behaviors, caching, WAF
 #   13-secrets-manager.py       — Secrets Manager, retrieval, rotation, vs SSM
 #   14-cleanup-and-summary.py   — Cleanup commands, build order, cost comparison
+#   15-dynamodb.py              — DynamoDB tables, keys, GSI/LSI, query vs scan
+#   16-sns.py                   — SNS topics, subscriptions, CloudWatch → email
+#   17-sqs.py                   — SQS queues, DLQ, FIFO, Lambda triggers
+#   18-waf.py                   — WAF web ACLs, managed rules, rate limiting
+#   19-codedeploy-pipeline.py   — CodeBuild + CodePipeline + CodeDeploy, CI/CD
+#   20-rds.py                   — RDS managed databases, Multi-AZ, Aurora
+#   21-cognito.py               — Cognito user pools, JWT, API GW integration
+#   22-ssm-parameter-store.py   — SSM Parameter Store, hierarchies, vs Secrets Mgr
 # ─────────────────────────────────────────────────────────────────
 
 # This file teaches every major AWS service by deploying ONE FastAPI app
