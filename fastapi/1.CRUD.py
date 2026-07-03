@@ -295,6 +295,91 @@ def delete_bulk(data: dict = Body()):
 #   Note: Body() is needed to tell FastAPI "read from body" explicitly.
 #         Without it, simple types (str, int) would be treated as query params.
 #
+#   BEGINNER EXAMPLE — Why Body() matters:
+#
+#     # ── CASE 1: WITHOUT Body() ─────────────────────────────────────
+#     @app.post("/test")
+#     def test(name: str, data: dict):
+#         ...
+#     # name: str   → simple type, no Body()  → FastAPI reads from QUERY string
+#     # data: dict  → complex type            → FastAPI reads from JSON BODY
+#     #
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/test?name=abc" \
+#     #        -H "Content-Type: application/json" \
+#     #        -d '{"key": "val"}'
+#     #
+#     #   URL:  /test?name=abc          ← name comes from here (query)
+#     #   Body: {"key": "val"}          ← data comes from here (entire body = data)
+#     #
+#     #   Inside function:
+#     #     name → "abc"                ← from query string
+#     #     data → {"key": "val"}       ← from JSON body
+#
+#     # ── CASE 2: WITH Body() on all params ──────────────────────────
+#     @app.post("/test")
+#     def test(name: str = Body(), data: dict = Body()):
+#         ...
+#     # name: str = Body()  → Body() overrides → reads from JSON BODY
+#     # data: dict = Body() → Body() explicit  → reads from JSON BODY
+#     #
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/test" \
+#     #        -H "Content-Type: application/json" \
+#     #        -d '{"name": "abc", "data": {"key": "val"}}'
+#     #
+#     #   URL:  /test                   ← no query params needed
+#     #   Body: {                       ← BOTH params come from body
+#     #           "name": "abc",            ← name comes from here
+#     #           "data": {"key": "val"}    ← data comes from here
+#     #         }
+#     #
+#     #   Inside function:
+#     #     name → "abc"                ← from body["name"]
+#     #     data → {"key": "val"}       ← from body["data"]
+#
+#     # ── CASE 3: Single Body param (no Body()) ──────────────────────
+#     @app.post("/shipment")
+#     def create(data: dict = Body()):
+#         ...
+#     # Only ONE body param → body IS the value directly (no wrapping)
+#     #
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/shipment" \
+#     #        -H "Content-Type: application/json" \
+#     #        -d '{"content": "Table", "weight": 10}'
+#     #
+#     #   Body: {"content": "Table", "weight": 10}   ← entire body = data
+#     #
+#     #   Inside function:
+#     #     data → {"content": "Table", "weight": 10}  ← body itself
+#
+#     # ── CASE 4: Single Body param WITH embed=True ──────────────────
+#     @app.post("/shipment")
+#     def create(data: dict = Body(embed=True)):
+#         ...
+#     # embed=True → wraps under param name, even for single param
+#     #
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/shipment" \
+#     #        -H "Content-Type: application/json" \
+#     #        -d '{"data": {"content": "Table", "weight": 10}}'
+#     #
+#     #   Body: {                                     ← wrapped under "data" key
+#     #           "data": {"content": "Table", "weight": 10}
+#     #         }
+#     #
+#     #   Inside function:
+#     #     data → {"content": "Table", "weight": 10}  ← extracted from body["data"]
+#
+#   RULES FastAPI uses (when you DON'T add Body/Query/Path/etc.):
+#     simple type (str, int, float, bool) → Query param   (?key=val)
+#     complex type (dict, list, Pydantic) → Body param    (JSON)
+#     name matches {name} in URL path    → Path param     (/items/{name})
+#
+#   Body() OVERRIDES the default → forces any type to be read from JSON body.
+#   Body(...) = required  |  Body() = optional  |  Body("default") = has default
+#
 # ── Query() — Reads from URL query string (?key=value) ───────────
 #   q: str = Query(...)                   → required, no default
 #   q: str = Query(..., min_length=1)     → required + string length validation
@@ -304,30 +389,167 @@ def delete_bulk(data: dict = Body()):
 #   ids: List[int] = Query(...)           → list param: ?ids=1&ids=2&ids=3
 #   Validators: ge (>=), le (<=), gt (>), lt (<), min_length, max_length
 #
+#   BEGINNER EXAMPLE — Query():
+#
+#     @app.get("/search")
+#     def search(q: str = Query(..., min_length=1), limit: int = Query(10, ge=1, le=100)):
+#         ...
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/search?q=table&limit=5"
+#     #
+#     #   URL:  /search?q=table&limit=5
+#     #                  │        │
+#     #                  ▼        ▼
+#     #   Inside function:
+#     #     q     → "table"     ← from ?q=table (required — omit → 422)
+#     #     limit → 5           ← from ?limit=5 (optional — omit → default 10)
+#     #
+#     #   curl "http://localhost:8000/search"            → 422! q is required (...)
+#     #   curl "http://localhost:8000/search?q=&limit=5" → 422! min_length=1 fails
+#     #   curl "http://localhost:8000/search?q=x&limit=200" → 422! le=100 fails
+#
+#     # List query param:
+#     @app.get("/filter")
+#     def filter_items(ids: List[int] = Query(...)):
+#         ...
+#     #   curl "http://localhost:8000/filter?ids=1&ids=2&ids=3"
+#     #     ids → [1, 2, 3]     ← repeated key = list
+#
 # ── Path() — Reads from URL path (/items/{id}) ───────────────────
 #   id: int = Path(gt=0, description="Must be > 0")
 #   Path params are always required (they're part of the URL).
 #   Use Path() to add validation (gt, ge, lt, le) and OpenAPI docs metadata.
+#
+#   BEGINNER EXAMPLE — Path():
+#
+#     @app.get("/shipment/{id}")
+#     def get_shipment(id: int = Path(gt=0, le=10000)):
+#         ...
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/shipment/42"
+#     #
+#     #   URL:  /shipment/42
+#     #                   │
+#     #                   ▼
+#     #   Inside function:
+#     #     id → 42              ← from URL path segment (always required)
+#     #
+#     #   curl "http://localhost:8000/shipment/0"     → 422! gt=0 fails (must be > 0)
+#     #   curl "http://localhost:8000/shipment/abc"   → 422! not a valid int
+#     #   curl "http://localhost:8000/shipment/"      → 404! path segment missing
 #
 # ── Header() — Reads from HTTP headers ───────────────────────────
 #   x_token: str = Header(...)              → required header
 #   x_request_id: Optional[str] = Header(None)  → optional header
 #   FastAPI auto-converts: x_token → "X-Token" (underscores → hyphens)
 #
+#   BEGINNER EXAMPLE — Header():
+#
+#     @app.get("/secure")
+#     def secure(x_token: str = Header(...), x_request_id: Optional[str] = Header(None)):
+#         ...
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/secure" \
+#     #        -H "X-Token: my-secret-123" \
+#     #        -H "X-Request-Id: req-456"
+#     #
+#     #   Headers:
+#     #     X-Token: my-secret-123       ← x_token reads this (underscore → hyphen)
+#     #     X-Request-Id: req-456        ← x_request_id reads this
+#     #            │                │
+#     #            ▼                ▼
+#     #   Inside function:
+#     #     x_token      → "my-secret-123"  ← required — omit → 422
+#     #     x_request_id → "req-456"        ← optional — omit → None
+#     #
+#     #   curl "http://localhost:8000/secure"  → 422! X-Token header missing
+#     #   NOTE: Python uses _ but HTTP headers use - (auto-converted by FastAPI)
+#
 # ── Cookie() — Reads from cookies ────────────────────────────────
 #   session_id: Optional[str] = Cookie(None)  → optional cookie
 #   Reads from the Cookie header, matches by parameter name.
+#
+#   BEGINNER EXAMPLE — Cookie():
+#
+#     @app.get("/profile")
+#     def profile(session_id: Optional[str] = Cookie(None)):
+#         ...
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/profile" -b "session_id=abc123"
+#     #
+#     #   Cookie header: session_id=abc123
+#     #                            │
+#     #                            ▼
+#     #   Inside function:
+#     #     session_id → "abc123"   ← from cookie (optional — no cookie → None)
+#     #
+#     #   curl "http://localhost:8000/profile"  → session_id = None (optional)
+#     #   -b flag = --cookie = send cookie header
 #
 # ── Form() — Reads from form-encoded body (application/x-www-form-urlencoded) ──
 #   content: str = Form(...)          → required form field
 #   status: str = Form("Pending")     → optional with default
 #   Used for HTML form submissions or curl -d. Cannot mix with Body().
 #
+#   BEGINNER EXAMPLE — Form():
+#
+#     @app.post("/login")
+#     def login(username: str = Form(...), password: str = Form(...)):
+#         ...
+#
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/login" \
+#     #        -d "username=john&password=secret123"
+#     #
+#     #   Form body: username=john&password=secret123
+#     #              │              │
+#     #              ▼              ▼
+#     #   Inside function:
+#     #     username → "john"         ← from form field
+#     #     password → "secret123"    ← from form field
+#     #
+#     #   Content-Type: application/x-www-form-urlencoded  (auto-set by curl -d)
+#     #   This is what HTML <form> sends by default
+#     #   CANNOT mix Form() with Body() in same endpoint!
+#
 # ── File() — Reads uploaded files (multipart/form-data) ──────────
 #   file: UploadFile = File(...)              → single file upload
 #   files: List[UploadFile] = File(...)       → multiple file upload
 #   UploadFile provides: .filename, .content_type, .read(), .size
 #   Can mix with Form() but NOT with Body().
+#
+#   BEGINNER EXAMPLE — File():
+#
+#     @app.post("/upload")
+#     def upload(file: UploadFile = File(...), description: str = Form("none")):
+#         ...
+#
+#     # How to call (single file):
+#     #   curl -X POST "http://localhost:8000/upload" \
+#     #        -F "file=@report.pdf" \
+#     #        -F "description=Q1 Report"
+#     #
+#     #   Multipart body:
+#     #     file=@report.pdf            ← file upload
+#     #     description=Q1 Report       ← form field alongside file
+#     #        │             │
+#     #        ▼             ▼
+#     #   Inside function:
+#     #     file.filename     → "report.pdf"
+#     #     file.content_type → "application/pdf"
+#     #     file.size         → 102400 (bytes)
+#     #     await file.read() → b"..." (file bytes)
+#     #     description       → "Q1 Report"
+#     #
+#     #   Multiple files:
+#     #   curl -X POST "/upload-multi" -F "files=@a.pdf" -F "files=@b.pdf"
+#     #     files → [UploadFile("a.pdf"), UploadFile("b.pdf")]
+#     #   -F flag = --form = multipart/form-data
+#     #   CAN mix File() + Form()  |  CANNOT mix File() + Body()
 #
 # ── Depends() — Dependency injection (see session.py) ────────────
 #   user: dict = Depends(get_current_user)    → runs function, injects result
@@ -336,16 +558,106 @@ def delete_bulk(data: dict = Body()):
 #   Can chain: dependencies can have their own Depends().
 #   Can also go on decorator: @app.get("/x", dependencies=[Depends(verify)])
 #
+#   BEGINNER EXAMPLE — Depends():
+#
+#     # Step 1: Define a dependency function
+#     def pagination_params(page: int = Query(1, ge=1), size: int = Query(10, ge=1, le=100)):
+#         return {"page": page, "size": size, "skip": (page - 1) * size}
+#
+#     # Step 2: Use it in a route
+#     @app.get("/items")
+#     def list_items(pagination: dict = Depends(pagination_params)):
+#         ...
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/items?page=2&size=20"
+#     #
+#     #   URL:  /items?page=2&size=20
+#     #                │        │
+#     #                ▼        ▼
+#     #   Depends() runs pagination_params(page=2, size=20) FIRST
+#     #     returns → {"page": 2, "size": 20, "skip": 20}
+#     #                              │
+#     #                              ▼
+#     #   Inside route function:
+#     #     pagination → {"page": 2, "size": 20, "skip": 20}  ← injected result
+#     #
+#     #   curl "http://localhost:8000/items"  → page=1, size=10 (defaults)
+#     #   The route itself has NO query params — Depends() handles them!
+#
+#     # Auth dependency (chain):
+#     #   @app.get("/profile")
+#     #   def profile(user: dict = Depends(get_current_user)):
+#     #
+#     #   curl "http://localhost:8000/profile" -H "Authorization: Bearer <token>"
+#     #     Depends(get_current_user) → extracts token → verifies → returns user dict
+#     #     If token invalid → raises HTTPException(401) → route NEVER runs
+#
 # ── ... (Ellipsis) vs None vs value ──────────────────────────────
 #   = Query(...)          → REQUIRED — request fails 422 without it
 #   = Query(None)         → OPTIONAL — defaults to None
 #   = Query("default")    → OPTIONAL — defaults to "default"
 #   = Query()             → OPTIONAL — same as Query(None) for most types
 #
+#   BEGINNER EXAMPLE — Ellipsis (...) vs None vs default:
+#
+#     @app.get("/demo")
+#     def demo(
+#         a: str = Query(...),           # required
+#         b: str = Query(None),          # optional, default None
+#         c: str = Query("hello"),       # optional, default "hello"
+#     ):
+#         ...
+#
+#     # curl "http://localhost:8000/demo?a=foo"
+#     #   a → "foo"     ← provided
+#     #   b → None      ← not provided → default None
+#     #   c → "hello"   ← not provided → default "hello"
+#     #
+#     # curl "http://localhost:8000/demo?a=foo&b=bar&c=world"
+#     #   a → "foo"     ← provided
+#     #   b → "bar"     ← provided (overrides None)
+#     #   c → "world"   ← provided (overrides "hello")
+#     #
+#     # curl "http://localhost:8000/demo"
+#     #   → 422 ERROR! "a" is required (...) and not provided
+#     #
+#     # COMPARISON:
+#     #   ...       → "MUST send this"    → 422 if missing
+#     #   None      → "send if you want"  → None if missing
+#     #   "default" → "send if you want"  → "default" if missing
+#     #   ()        → same as None        → None if missing
+#
 # ── Annotated[] style (modern, see routes.py) ────────────────────
 #   Old: id: int = Path(gt=0)
 #   New: id: Annotated[int, Path(gt=0)]
 #   Both are equivalent. Annotated separates type hint from FastAPI metadata,
 #   making it reusable and cleaner with type checkers. Recommended approach.
+#
+#   BEGINNER EXAMPLE — Annotated[] vs old style:
+#
+#     from typing import Annotated
+#
+#     # Old style (still works):
+#     @app.get("/old/{id}")
+#     def old_style(id: int = Path(gt=0), q: str = Query("default")):
+#         ...
+#
+#     # New style (recommended):
+#     @app.get("/new/{id}")
+#     def new_style(id: Annotated[int, Path(gt=0)], q: Annotated[str, Query()] = "default"):
+#         ...
+#
+#     # Both called EXACTLY the same way:
+#     #   curl "http://localhost:8000/old/42?q=test"
+#     #   curl "http://localhost:8000/new/42?q=test"
+#     #     id → 42, q → "test"
+#     #
+#     # Reusable type aliases:
+#     #   PositiveInt = Annotated[int, Path(gt=0)]
+#     #   @app.get("/a/{id}")
+#     #   def route_a(id: PositiveInt): ...    ← reuse same validation
+#     #   @app.get("/b/{id}")
+#     #   def route_b(id: PositiveInt): ...    ← no duplication
 #
 # ══════════════════════════════════════════════════════════════════

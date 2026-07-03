@@ -290,6 +290,37 @@ def patch_with_pydantic(
 #   Usage: def create(data: ShipmentCreate)  → FastAPI auto-reads from JSON body
 #   vs dict = Body(): BaseModel gives validation, dot access (data.content), Swagger schema
 #
+#   BEGINNER EXAMPLE — BaseModel:
+#
+#     class ShipmentCreate(BaseModel):
+#         content: str                     # required
+#         weight: float                    # required
+#         status: str = "Pending"          # optional, default "Pending"
+#
+#     @app.post("/shipment")
+#     def create(data: ShipmentCreate):
+#         ...
+#
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/shipment" \
+#     #        -H "Content-Type: application/json" \
+#     #        -d '{"content": "Table", "weight": 25.5}'
+#     #
+#     #   Body: {"content": "Table", "weight": 25.5}
+#     #          │                    │
+#     #          ▼                    ▼
+#     #   Inside function:
+#     #     data.content → "Table"       ← from body (required)
+#     #     data.weight  → 25.5          ← from body (required)
+#     #     data.status  → "Pending"     ← NOT sent → uses default
+#     #
+#     #   curl ... -d '{"content": "Table"}'           → 422! weight is required
+#     #   curl ... -d '{"content": "Table", "weight": "abc"}'  → 422! float expected
+#     #
+#     # vs dict = Body():
+#     #   BaseModel: data.content (dot access), auto-validation, Swagger schema
+#     #   dict:      data["content"] (bracket access), no validation, no schema
+#
 # ── Field() — Validation constraints for model fields ────────────
 #   content: str = Field(min_length=3, max_length=200)   → string length limits
 #   weight: float = Field(gt=0, le=10000)                → numeric range (gt/ge/lt/le)
@@ -297,16 +328,96 @@ def patch_with_pydantic(
 #   Field(description="...", examples=["..."])            → OpenAPI docs metadata
 #   Field() is to BaseModel what Query()/Path() is to route parameters
 #
+#   BEGINNER EXAMPLE — Field():
+#
+#     class Item(BaseModel):
+#         content: str = Field(min_length=3, max_length=200)
+#         weight: float = Field(gt=0, le=10000)
+#
+#     @app.post("/item")
+#     def create(data: Item):
+#         ...
+#
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/item" \
+#     #        -H "Content-Type: application/json" \
+#     #        -d '{"content": "Wooden Table", "weight": 25.0}'
+#     #
+#     #   Body: {"content": "Wooden Table", "weight": 25.0}
+#     #          │                           │
+#     #          ▼                           ▼
+#     #   Inside function:
+#     #     data.content → "Wooden Table"   ← valid (3-200 chars)
+#     #     data.weight  → 25.0             ← valid (0 < 25 <= 10000)
+#     #
+#     #   curl ... -d '{"content": "AB", "weight": 5}'   → 422! min_length=3 fails
+#     #   curl ... -d '{"content": "OK", "weight": -1}'  → 422! gt=0 fails
+#     #   curl ... -d '{"content": "OK", "weight": 99999}' → 422! le=10000 fails
+#
 # ── Optional fields — For PATCH/partial updates ──────────────────
 #   content: Optional[str] = None     → field can be missing from request body
 #   Check with: if data.content is not None → only update fields that were sent
 #   Use model_dump(exclude_unset=True) to get only fields explicitly provided
+#
+#   BEGINNER EXAMPLE — Optional fields (PATCH):
+#
+#     class ShipmentPatch(BaseModel):
+#         content: Optional[str] = None
+#         weight: Optional[float] = None
+#         status: Optional[str] = None
+#
+#     @app.patch("/shipment/{id}")
+#     def update(id: int, data: ShipmentPatch):
+#         ...
+#
+#     # How to call (send only what changed):
+#     #   curl -X PATCH "http://localhost:8000/shipment/1" \
+#     #        -H "Content-Type: application/json" \
+#     #        -d '{"status": "Delivered"}'
+#     #
+#     #   Body: {"status": "Delivered"}     ← only status sent
+#     #          │
+#     #          ▼
+#     #   Inside function:
+#     #     data.content → None          ← not sent → None (skip update)
+#     #     data.weight  → None          ← not sent → None (skip update)
+#     #     data.status  → "Delivered"   ← sent → update this field
+#     #
+#     #   curl ... -d '{}'    → all fields None → no changes (valid request)
+#     #   curl ... -d '{"weight": 50, "content": "New"}' → updates 2 fields
 #
 # ── Enum — Restrict to allowed values ────────────────────────────
 #   class Status(str, Enum):          → must inherit BOTH str and Enum
 #       PENDING = "Pending"
 #   Invalid value → 422: "Input should be 'Pending', 'In Transit', ..."
 #   Access: data.status.value → "Pending" (string), data.status → Status.PENDING (enum)
+#
+#   BEGINNER EXAMPLE — Enum validation:
+#
+#     class Status(str, Enum):
+#         PENDING = "Pending"
+#         TRANSIT = "In Transit"
+#         DELIVERED = "Delivered"
+#
+#     class Shipment(BaseModel):
+#         content: str
+#         status: Status = Status.PENDING
+#
+#     @app.post("/shipment")
+#     def create(data: Shipment):
+#         ...
+#
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/shipment" \
+#     #        -H "Content-Type: application/json" \
+#     #        -d '{"content": "Table", "status": "Delivered"}'
+#     #
+#     #   Inside function:
+#     #     data.status       → Status.DELIVERED   ← enum member
+#     #     data.status.value → "Delivered"         ← string value
+#     #
+#     #   curl ... -d '{"content": "Table", "status": "Lost"}'
+#     #     → 422! "Input should be 'Pending', 'In Transit' or 'Delivered'"
 #
 # ── @field_validator — Custom per-field logic ────────────────────
 #   @field_validator("content")
@@ -316,12 +427,51 @@ def patch_with_pydantic(
 #       return v.strip()              → can transform the value (trim, round, etc.)
 #   Runs after type validation. Raise ValueError for custom error messages.
 #
+#   BEGINNER EXAMPLE — @field_validator:
+#
+#     class Item(BaseModel):
+#         content: str
+#         weight: float
+#
+#         @field_validator("content")
+#         @classmethod
+#         def validate_content(cls, v):
+#             if not v.strip(): raise ValueError("Cannot be empty/whitespace")
+#             return v.strip().title()       # transforms: "  wooden table  " → "Wooden Table"
+#
+#     # How to call:
+#     #   curl ... -d '{"content": "  wooden table  ", "weight": 10}'
+#     #     data.content → "Wooden Table"    ← stripped + title-cased by validator
+#     #
+#     #   curl ... -d '{"content": "   ", "weight": 10}'
+#     #     → 422! "Cannot be empty/whitespace" (custom error message)
+#
 # ── @model_validator — Cross-field validation ────────────────────
 #   @model_validator(mode="after")    → runs after all field validators
 #   def check_fields(self):           → has access to all fields via self.field_name
 #       if self.weight > self.max_weight: raise ValueError(...)
 #       return self                   → must return self
 #   mode="before" runs on raw dict before field parsing
+#
+#   BEGINNER EXAMPLE — @model_validator:
+#
+#     class DateRange(BaseModel):
+#         start_date: str
+#         end_date: str
+#
+#         @model_validator(mode="after")
+#         def check_dates(self):
+#             if self.end_date < self.start_date:
+#                 raise ValueError("end_date must be after start_date")
+#             return self
+#
+#     # How to call:
+#     #   curl ... -d '{"start_date": "2024-01-01", "end_date": "2024-06-01"}'
+#     #     → valid (end > start)
+#     #
+#     #   curl ... -d '{"start_date": "2024-06-01", "end_date": "2024-01-01"}'
+#     #     → 422! "end_date must be after start_date"
+#     #     (cross-field check — needs BOTH fields, so model_validator not field_validator)
 #
 # ── Nested models — Deep structured validation ───────────────────
 #   class Address(BaseModel):
@@ -332,20 +482,143 @@ def patch_with_pydantic(
 #   Validates recursively: missing origin.city → 422 with path ["body","origin","city"]
 #   Convert to dict: data.origin.model_dump()
 #
+#   BEGINNER EXAMPLE — Nested models:
+#
+#     class Address(BaseModel):
+#         street: str
+#         city: str
+#         country: str = "US"
+#
+#     class Shipment(BaseModel):
+#         content: str
+#         origin: Address                  # required nested
+#         destination: Optional[Address] = None  # optional nested
+#
+#     @app.post("/shipment")
+#     def create(data: Shipment):
+#         ...
+#
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/shipment" \
+#     #        -H "Content-Type: application/json" \
+#     #        -d '{
+#     #              "content": "Electronics",
+#     #              "origin": {"street": "123 Main", "city": "NYC"},
+#     #              "destination": {"street": "456 Oak", "city": "London", "country": "UK"}
+#     #            }'
+#     #
+#     #   Body structure:
+#     #     {
+#     #       "content": "Electronics",      ← data.content
+#     #       "origin": {                    ← data.origin (Address model)
+#     #         "street": "123 Main",            ← data.origin.street
+#     #         "city": "NYC"                    ← data.origin.city
+#     #                                          ← data.origin.country → "US" (default)
+#     #       },
+#     #       "destination": {               ← data.destination (optional Address)
+#     #         "street": "456 Oak",
+#     #         "city": "London",
+#     #         "country": "UK"                  ← overrides default "US"
+#     #       }
+#     #     }
+#     #
+#     #   curl ... -d '{"content": "X", "origin": {"street": "A"}}'
+#     #     → 422! origin.city is required — error path: ["body","origin","city"]
+#
 # ── List[Model] — Batch operations ──────────────────────────────
 #   def create_batch(items: List[ShipmentItem]):
 #   Request body: [{"content":"A","weight":10}, {"content":"B","weight":20}]
 #   Each item validated individually. One bad item → entire batch fails 422.
+#
+#   BEGINNER EXAMPLE — List[Model]:
+#
+#     class Item(BaseModel):
+#         content: str
+#         weight: float = Field(gt=0)
+#
+#     @app.post("/batch")
+#     def create_batch(items: List[Item]):
+#         ...
+#
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/batch" \
+#     #        -H "Content-Type: application/json" \
+#     #        -d '[
+#     #              {"content": "Table", "weight": 25},
+#     #              {"content": "Chair", "weight": 10}
+#     #            ]'
+#     #
+#     #   Body: [ {...}, {...} ]       ← JSON array (NOT object!)
+#     #          │        │
+#     #          ▼        ▼
+#     #   Inside function:
+#     #     items[0].content → "Table"     ← first item
+#     #     items[0].weight  → 25
+#     #     items[1].content → "Chair"     ← second item
+#     #     items[1].weight  → 10
+#     #     len(items)       → 2
+#     #
+#     #   curl ... -d '[{"content": "A", "weight": 5}, {"content": "B", "weight": -1}]'
+#     #     → 422! items[1].weight must be > 0 — ONE bad item fails ENTIRE batch
 #
 # ── response_model — Control output shape ────────────────────────
 #   @app.get("/item/{id}", response_model=ItemResponse)
 #   Strips fields not in ItemResponse from the response (e.g., hides internal fields)
 #   Also generates response schema in Swagger docs
 #
+#   BEGINNER EXAMPLE — response_model:
+#
+#     class ShipmentResponse(BaseModel):
+#         id: int
+#         content: str
+#         status: str
+#         # NOTE: "weight" and "internal_notes" are NOT here — hidden from response
+#
+#     @app.get("/shipment/{id}", response_model=ShipmentResponse)
+#     def get_shipment(id: int):
+#         return {"id": 1, "content": "Table", "status": "Delivered",
+#                 "weight": 25, "internal_notes": "fragile"}
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/shipment/1"
+#     #
+#     #   What function returns (internal):
+#     #     {"id": 1, "content": "Table", "status": "Delivered",
+#     #      "weight": 25, "internal_notes": "fragile"}
+#     #
+#     #   What client receives (filtered by response_model):
+#     #     {"id": 1, "content": "Table", "status": "Delivered"}
+#     #      ↑         ↑                  ↑
+#     #      in model   in model           in model
+#     #                     weight → STRIPPED (not in ShipmentResponse)
+#     #                     internal_notes → STRIPPED (not in ShipmentResponse)
+#
 # ── model_dump() — Convert model to dict ─────────────────────────
 #   data.model_dump()                 → all fields as dict
 #   data.model_dump(exclude_unset=True)  → only fields explicitly set (for PATCH)
 #   data.model_dump(exclude={"password"}) → exclude specific fields
+#
+#   BEGINNER EXAMPLE — model_dump():
+#
+#     class Item(BaseModel):
+#         content: str
+#         weight: float
+#         status: str = "Pending"
+#
+#     data = Item(content="Table", weight=25)
+#
+#     # data.model_dump()
+#     #   → {"content": "Table", "weight": 25.0, "status": "Pending"}
+#     #      ← ALL fields including defaults
+#     #
+#     # data.model_dump(exclude_unset=True)
+#     #   → {"content": "Table", "weight": 25.0}
+#     #      ← only fields EXPLICITLY SET (status was default, so excluded)
+#     #      ← useful for PATCH: only update what user actually sent
+#     #
+#     # data.model_dump(exclude={"weight"})
+#     #   → {"content": "Table", "status": "Pending"}
+#     #      ← weight explicitly excluded
 #
 # ── Body() + Query() + Path() with Pydantic ─────────────────────
 #   def patch(id: int, dry_run: bool = Query(False), data: Model = Body()):
@@ -353,5 +626,33 @@ def patch_with_pydantic(
 #   dry_run → from query string (?dry_run=true)
 #   data → from JSON body (Pydantic model)
 #   FastAPI can combine all three in one endpoint
+#
+#   BEGINNER EXAMPLE — Path + Query + Body combined:
+#
+#     @app.patch("/shipment/{id}")
+#     def update(id: int, dry_run: bool = Query(False), data: ShipmentPatch = Body()):
+#         ...
+#
+#     # How to call:
+#     #   curl -X PATCH "http://localhost:8000/shipment/42?dry_run=true" \
+#     #        -H "Content-Type: application/json" \
+#     #        -d '{"status": "Delivered", "weight": 50}'
+#     #
+#     #   URL:  /shipment/42?dry_run=true
+#     #                   │         │
+#     #                   ▼         ▼
+#     #     id      → 42        ← from URL path (auto: matches {id})
+#     #     dry_run → True      ← from query string (?dry_run=true)
+#     #
+#     #   Body: {"status": "Delivered", "weight": 50}
+#     #          │                      │
+#     #          ▼                      ▼
+#     #     data.status → "Delivered"   ← from JSON body
+#     #     data.weight → 50            ← from JSON body
+#     #
+#     #   3 sources in 1 endpoint:
+#     #     Path  → /shipment/{id}          → id
+#     #     Query → ?dry_run=true           → dry_run
+#     #     Body  → {"status": "Delivered"} → data (Pydantic model)
 #
 # ══════════════════════════════════════════════════════════════════

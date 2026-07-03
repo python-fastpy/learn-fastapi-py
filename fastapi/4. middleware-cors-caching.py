@@ -258,15 +258,67 @@ def conditional_cache(id: int, request: Request):
 #   allow_headers=["*"]                       → which request headers are allowed
 #   Without CORS: browser blocks requests from different origins (same-origin policy)
 #
+#   BEGINNER EXAMPLE — CORSMiddleware:
+#
+#     from fastapi.middleware.cors import CORSMiddleware
+#     app.add_middleware(
+#         CORSMiddleware,
+#         allow_origins=["http://localhost:3000"],  # ← React dev server
+#         allow_credentials=True,
+#         allow_methods=["*"],
+#         allow_headers=["*"],
+#     )
+#
+#     # Problem CORS solves:
+#     #   React app at http://localhost:3000 calls API at http://localhost:8000
+#     #   Browser sees DIFFERENT origins (different ports) → blocks the request!
+#     #
+#     #   With CORSMiddleware:
+#     #   Browser → OPTIONS /api/items (preflight check)
+#     #         ← Access-Control-Allow-Origin: http://localhost:3000  ✓
+#     #   Browser → GET /api/items (actual request, now allowed)
+#     #         ← data + CORS headers
+#     #
+#     #   allow_origins=["*"]  → any website can call your API (ok for public APIs)
+#     #   allow_origins=["http://localhost:3000"] → only React app can call (safer)
+#
 # ── GZipMiddleware — Response compression ────────────────────────
 #   app.add_middleware(GZipMiddleware, minimum_size=500)
 #   Compresses responses > minimum_size bytes. 60-90% smaller for JSON.
 #   Client must send Accept-Encoding: gzip header.
 #
+#   BEGINNER EXAMPLE — GZipMiddleware:
+#
+#     from starlette.middleware.gzip import GZipMiddleware
+#     app.add_middleware(GZipMiddleware, minimum_size=500)
+#
+#     # curl -H "Accept-Encoding: gzip" "http://localhost:8000/big-data"
+#     #
+#     #   Without GZip:
+#     #     Server → 10,000 bytes JSON → Client
+#     #
+#     #   With GZip:
+#     #     Server → compress → 2,000 bytes → Client → decompress → 10,000 bytes
+#     #     (60-90% smaller, faster over slow networks)
+#     #
+#     #   minimum_size=500 → only compress responses > 500 bytes
+#     #   (small responses: compression overhead > savings)
+#
 # ── TrustedHostMiddleware — Host header protection ───────────────
 #   app.add_middleware(TrustedHostMiddleware, allowed_hosts=["myapp.com", "*.example.com"])
 #   Requests with non-matching Host header → 400 Bad Request.
 #   Prevents Host header injection attacks.
+#
+#   BEGINNER EXAMPLE — TrustedHostMiddleware:
+#
+#     from starlette.middleware.trustedhost import TrustedHostMiddleware
+#     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["myapp.com", "*.myapp.com"])
+#
+#     # curl -H "Host: myapp.com" "http://localhost:8000/"    → ✓ 200 OK
+#     # curl -H "Host: evil.com"  "http://localhost:8000/"    → ✗ 400 Bad Request
+#     #
+#     # Prevents: attacker sends fake Host header to trick server
+#     # into generating links/redirects to evil.com
 #
 # ── Custom middleware pattern ────────────────────────────────────
 #   @app.middleware("http")
@@ -278,9 +330,60 @@ def conditional_cache(id: int, request: Request):
 #   Must be async def. Can modify request before, response after.
 #   Can short-circuit: return JSONResponse(...) without calling call_next.
 #
+#   BEGINNER EXAMPLE — Custom middleware:
+#
+#     import time
+#
+#     @app.middleware("http")
+#     async def add_timing(request: Request, call_next):
+#         start = time.time()                    # BEFORE endpoint
+#         response = await call_next(request)    # run endpoint
+#         elapsed = time.time() - start          # AFTER endpoint
+#         response.headers["X-Process-Time"] = str(elapsed)
+#         return response
+#
+#     # curl -v "http://localhost:8000/any-route"
+#     #
+#     #   Request arrives
+#     #     │
+#     #     ▼ BEFORE: start = time.time()
+#     #     │
+#     #     ▼ call_next(request) → endpoint runs → returns response
+#     #     │
+#     #     ▼ AFTER: calculate elapsed, add header
+#     #     │
+#     #   Response sent with X-Process-Time: 0.0023
+#     #
+#     #   Short-circuit (skip endpoint):
+#     #     if "Authorization" not in request.headers:
+#     #         return JSONResponse({"error": "No auth"}, status_code=401)
+#
 # ── Middleware execution order ───────────────────────────────────
 #   Registered: A, B, C → Runs: C → B → A → endpoint → A → B → C
 #   Last added = outermost layer (runs first). Like an onion — wraps around.
+#
+#   BEGINNER EXAMPLE — Execution order:
+#
+#     # Register order:
+#     app.add_middleware(A)   # added first
+#     app.add_middleware(B)   # added second
+#     app.add_middleware(C)   # added last
+#
+#     # Execution order (REVERSED — like wrapping an onion):
+#     #   Request comes in:
+#     #     C (before) → B (before) → A (before) → ENDPOINT
+#     #   Response goes out:
+#     #     A (after)  → B (after)  → C (after)  → CLIENT
+#     #
+#     #   Visual:
+#     #     ┌─── C ────────────────────────────────┐
+#     #     │ ┌─── B ──────────────────────────┐   │
+#     #     │ │ ┌─── A ────────────────────┐   │   │
+#     #     │ │ │       ENDPOINT           │   │   │
+#     #     │ │ └──────────────────────────┘   │   │
+#     #     │ └────────────────────────────────┘   │
+#     #     └──────────────────────────────────────┘
+#     #   Last added (C) wraps outermost → runs FIRST on request, LAST on response
 #
 # ── request: Request — Available in middleware & routes ──────────
 #   request.url.path          → "/api/items"
@@ -290,11 +393,58 @@ def conditional_cache(id: int, request: Request):
 #   request.cookies           → all cookies
 #   request.query_params      → URL query parameters
 #
+#   BEGINNER EXAMPLE — Request object:
+#
+#     from fastapi import Request
+#
+#     @app.get("/debug")
+#     async def debug(request: Request):
+#         return {
+#             "path": request.url.path,            # → "/debug"
+#             "method": request.method,             # → "GET"
+#             "user_agent": request.headers.get("user-agent"),
+#             "client_ip": request.client.host,     # → "127.0.0.1"
+#             "cookies": dict(request.cookies),     # → {"session_id": "abc"}
+#             "query": dict(request.query_params),  # → {"page": "1"}
+#         }
+#
+#     # curl "http://localhost:8000/debug?page=1" -b "session_id=abc"
+#     #   → {"path":"/debug","method":"GET","client_ip":"127.0.0.1",
+#     #      "cookies":{"session_id":"abc"},"query":{"page":"1"}}
+#
 # ── In-memory cache (server-side) ────────────────────────────────
 #   cache_store[key] = {"data": result, "timestamp": time.time()}
 #   Check: if now - cached["timestamp"] < TTL → return cached (HIT)
 #   Invalidate: cache_store.pop(key, None) on PUT/DELETE (prevent stale data)
 #   Pros: fastest. Cons: lost on restart, per-process (not shared across workers).
+#
+#   BEGINNER EXAMPLE — In-memory cache:
+#
+#     import time
+#     cache = {}
+#     TTL = 60  # seconds
+#
+#     @app.get("/items")
+#     async def get_items():
+#         now = time.time()
+#         if "items" in cache and now - cache["items"]["ts"] < TTL:
+#             return {"data": cache["items"]["data"], "source": "cache"}  # HIT
+#         data = await fetch_items_from_db()          # MISS — query DB
+#         cache["items"] = {"data": data, "ts": now}  # store in cache
+#         return {"data": data, "source": "db"}
+#
+#     @app.delete("/items/{id}")
+#     async def delete_item(id: int):
+#         await db_delete(id)
+#         cache.pop("items", None)   # ← invalidate cache (prevent stale data)
+#         return {"deleted": id}
+#
+#     # Flow:
+#     #   curl GET /items      → MISS → query DB → cache result → return
+#     #   curl GET /items      → HIT  → return from cache (fast!)
+#     #   ... 60 seconds pass ...
+#     #   curl GET /items      → MISS → cache expired → query DB again
+#     #   curl DELETE /items/1 → delete + invalidate cache → next GET re-fetches
 #
 # ── Cache-Control header (client-side) ───────────────────────────
 #   "no-store"                           → never cache (real-time data, auth tokens)
@@ -303,6 +453,39 @@ def conditional_cache(id: int, request: Request):
 #   "public, max-age=31536000, immutable"→ never changes at this URL (versioned assets)
 #   Tells browser/CDN to store the response — server not contacted until expiry.
 #
+#   BEGINNER EXAMPLE — Cache-Control:
+#
+#     from fastapi.responses import JSONResponse
+#
+#     @app.get("/public-data")
+#     async def public():
+#         data = get_public_data()
+#         return JSONResponse(data, headers={"Cache-Control": "public, max-age=60"})
+#
+#     @app.get("/user-profile")
+#     async def profile():
+#         data = get_user_data()
+#         return JSONResponse(data, headers={"Cache-Control": "private, max-age=300"})
+#
+#     @app.get("/stock-price")
+#     async def stock():
+#         data = get_live_price()
+#         return JSONResponse(data, headers={"Cache-Control": "no-store"})
+#
+#     # curl -v "http://localhost:8000/public-data"
+#     #   ← Cache-Control: public, max-age=60
+#     #
+#     #   What happens:
+#     #     "no-store"         → browser NEVER caches (stock prices, auth tokens)
+#     #     "private, 300"     → browser caches 5min, CDN does NOT (user-specific)
+#     #     "public, 60"       → browser AND CDN cache 60s (shared public data)
+#     #     "immutable"        → never changes at this URL (app.abc123.js)
+#     #
+#     #   Flow with "public, max-age=60":
+#     #     Request 1: Browser → Server → 200 + data (stored in browser cache)
+#     #     Request 2 (within 60s): Browser → cache HIT → no server contact!
+#     #     Request 3 (after 60s): Browser → Server → fresh 200
+#
 # ── ETag + If-None-Match (conditional caching) ──────────────────
 #   Server: response with ETag: "abc123" (content fingerprint, usually MD5 hash)
 #   Client: next request with If-None-Match: "abc123"
@@ -310,10 +493,75 @@ def conditional_cache(id: int, request: Request):
 #   Server: data changed → 200 with new data + new ETag
 #   Combines with Cache-Control for optimal caching strategy.
 #
+#   BEGINNER EXAMPLE — ETag:
+#
+#     import hashlib, json
+#     from fastapi import Response
+#
+#     @app.get("/article/{id}")
+#     async def get_article(id: int, request: Request):
+#         article = get_article_from_db(id)
+#         etag = hashlib.md5(json.dumps(article).encode()).hexdigest()
+#
+#         if request.headers.get("if-none-match") == etag:
+#             return Response(status_code=304)       # not modified — no body
+#
+#         return JSONResponse(article, headers={"ETag": etag})
+#
+#     # Flow:
+#     #   1st request:
+#     #     curl "http://localhost:8000/article/1"
+#     #       ← 200 + {"title":"..."} + ETag: "abc123"
+#     #       (browser stores response + ETag)
+#     #
+#     #   2nd request (data UNCHANGED):
+#     #     curl -H "If-None-Match: abc123" "http://localhost:8000/article/1"
+#     #       ← 304 Not Modified (NO BODY — saves bandwidth!)
+#     #       (browser uses stored version)
+#     #
+#     #   3rd request (data CHANGED — article was edited):
+#     #     curl -H "If-None-Match: abc123" "http://localhost:8000/article/1"
+#     #       ← 200 + {"title":"new..."} + ETag: "xyz789"
+#     #       (browser replaces stored version)
+#
 # ── Rate limiting pattern ────────────────────────────────────────
 #   Track request timestamps per client IP in a dict.
 #   Prune timestamps older than RATE_WINDOW seconds.
 #   If count >= RATE_LIMIT → return 429 Too Many Requests.
 #   Add X-RateLimit-Remaining header for client awareness.
+#
+#   BEGINNER EXAMPLE — Rate limiting:
+#
+#     import time
+#     from collections import defaultdict
+#
+#     RATE_LIMIT = 5       # max requests
+#     RATE_WINDOW = 60     # per 60 seconds
+#     request_log = defaultdict(list)
+#
+#     @app.middleware("http")
+#     async def rate_limit(request: Request, call_next):
+#         ip = request.client.host
+#         now = time.time()
+#         request_log[ip] = [t for t in request_log[ip] if now - t < RATE_WINDOW]
+#
+#         if len(request_log[ip]) >= RATE_LIMIT:
+#             return JSONResponse(
+#                 {"error": "Too many requests"}, status_code=429,
+#                 headers={"X-RateLimit-Remaining": "0"}
+#             )
+#
+#         request_log[ip].append(now)
+#         remaining = RATE_LIMIT - len(request_log[ip])
+#         response = await call_next(request)
+#         response.headers["X-RateLimit-Remaining"] = str(remaining)
+#         return response
+#
+#     # curl "http://localhost:8000/anything"  → 200 (X-RateLimit-Remaining: 4)
+#     # curl "http://localhost:8000/anything"  → 200 (X-RateLimit-Remaining: 3)
+#     # ... 3 more ...
+#     # curl "http://localhost:8000/anything"  → 429 "Too many requests"
+#     #
+#     # After 60 seconds: old timestamps pruned → can make requests again
 #
 # ══════════════════════════════════════════════════════════════════

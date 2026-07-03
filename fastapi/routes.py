@@ -330,10 +330,47 @@ async def multi_method(request: Request):
 #   Benefits: reusable (UserId = Annotated[int, Path(ge=1)]), cleaner with type checkers
 #   Requires: from typing import Annotated
 #
+#   BEGINNER EXAMPLE — Annotated[]:
+#
+#     # Old style:
+#     @app.get("/old/{id}")
+#     def old(id: int = Path(gt=0), q: str = Query("default")):
+#         ...
+#     # New style (same behavior):
+#     @app.get("/new/{id}")
+#     def new(id: Annotated[int, Path(gt=0)], q: Annotated[str, Query()] = "default"):
+#         ...
+#
+#     # Both called the same way:
+#     #   curl "http://localhost:8000/new/42?q=test"
+#     #     id → 42, q → "test"
+#     #
+#     # Reusable alias:
+#     #   PositiveInt = Annotated[int, Path(gt=0)]
+#     #   def route_a(id: PositiveInt): ...   ← reuse across routes
+#
 # ── Path() with Annotated ────────────────────────────────────────
 #   product_id: Annotated[int, Path(title="Product ID", ge=1, le=10000)]
 #   title/description → shown in Swagger docs
 #   ge/le/gt/lt → numeric validation (ge=1 means >= 1)
+#
+#   BEGINNER EXAMPLE — Path() with Annotated:
+#
+#     @app.get("/product/{product_id}")
+#     def get_product(product_id: Annotated[int, Path(title="Product ID", ge=1, le=10000)]):
+#         ...
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/product/42"
+#     #
+#     #   URL:  /product/42
+#     #                  │
+#     #                  ▼
+#     #   Inside function:
+#     #     product_id → 42          ← from URL path, validated ge=1, le=10000
+#     #
+#     #   curl "http://localhost:8000/product/0"     → 422! ge=1 fails
+#     #   curl "http://localhost:8000/product/99999" → 422! le=10000 fails
 #
 # ── Query() with Annotated ───────────────────────────────────────
 #   start: Annotated[str, Query(description="Start date YYYY-MM-DD")]  → required
@@ -341,27 +378,157 @@ async def multi_method(request: Request):
 #   status: Annotated[list[str], Query()] = ["active"]                 → list query param
 #   alias="max-results" → accept hyphenated query param names (?max-results=5)
 #
+#   BEGINNER EXAMPLE — Query() with Annotated + alias:
+#
+#     @app.get("/search")
+#     def search(
+#         q: Annotated[str, Query(description="Search term")],
+#         max_results: Annotated[int, Query(alias="max-results", ge=1)] = 10,
+#         status: Annotated[list[str], Query()] = ["active"],
+#     ):
+#         ...
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/search?q=table&max-results=5&status=active&status=pending"
+#     #
+#     #   URL:  /search?q=table&max-results=5&status=active&status=pending
+#     #                 │        │               │             │
+#     #                 ▼        ▼               └──────┬──────┘
+#     #   Inside function:                              ▼
+#     #     q           → "table"          ← required
+#     #     max_results → 5                ← alias "max-results" → Python name max_results
+#     #     status      → ["active", "pending"]  ← repeated key = list
+#     #
+#     #   curl "http://localhost:8000/search?q=table"
+#     #     max_results → 10 (default)
+#     #     status → ["active"] (default list)
+#     #   NOTE: alias lets you use hyphens in URLs (?max-results) while Python uses underscores
+#
 # ── Body() with Annotated ────────────────────────────────────────
 #   address: Annotated[str, Body(embed=True)]
 #   priority: Annotated[bool, Body(embed=True)] = False
 #   embed=True → wraps each param under its name: {"address":"...", "priority":true}
 #   Without embed, multiple Body params auto-embed by default
 #
+#   BEGINNER EXAMPLE — Body() with Annotated + embed:
+#
+#     @app.post("/order")
+#     def create(
+#         address: Annotated[str, Body(embed=True)],
+#         priority: Annotated[bool, Body(embed=True)] = False,
+#     ):
+#         ...
+#
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/order" \
+#     #        -H "Content-Type: application/json" \
+#     #        -d '{"address": "123 Main St", "priority": true}'
+#     #
+#     #   Body: {"address": "123 Main St", "priority": true}
+#     #          │                          │
+#     #          ▼                          ▼
+#     #   Inside function:
+#     #     address  → "123 Main St"    ← from body["address"]
+#     #     priority → True             ← from body["priority"]
+#     #
+#     #   curl ... -d '{"address": "123 Main St"}'
+#     #     priority → False (default)
+#
 # ── Header() with Annotated ──────────────────────────────────────
 #   user_agent: Annotated[str, Header()]        → reads "User-Agent" header (auto-converts _ to -)
 #   x_request_id: Annotated[str | None, Header()] = None  → optional header
 #
+#   BEGINNER EXAMPLE — Header() with Annotated:
+#
+#     @app.get("/info")
+#     def info(
+#         user_agent: Annotated[str, Header()],
+#         x_request_id: Annotated[str | None, Header()] = None,
+#     ):
+#         ...
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/info" \
+#     #        -H "User-Agent: MyApp/1.0" \
+#     #        -H "X-Request-Id: req-789"
+#     #
+#     #   Headers:
+#     #     User-Agent: MyApp/1.0        ← user_agent (underscore → hyphen auto-convert)
+#     #     X-Request-Id: req-789        ← x_request_id
+#     #          │              │
+#     #          ▼              ▼
+#     #   Inside function:
+#     #     user_agent   → "MyApp/1.0"   ← from User-Agent header
+#     #     x_request_id → "req-789"     ← from X-Request-Id header (optional)
+#
 # ── Cookie() with Annotated ──────────────────────────────────────
 #   session_token: Annotated[str | None, Cookie()] = None  → optional cookie
+#
+#   BEGINNER EXAMPLE — Cookie() with Annotated:
+#
+#     @app.get("/dashboard")
+#     def dashboard(session_token: Annotated[str | None, Cookie()] = None):
+#         ...
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/dashboard" -b "session_token=tok_abc123"
+#     #
+#     #   Cookie: session_token=tok_abc123
+#     #                         │
+#     #                         ▼
+#     #   Inside function:
+#     #     session_token → "tok_abc123"   ← from cookie (optional — None if absent)
 #
 # ── Form() with Annotated ───────────────────────────────────────
 #   username: Annotated[str, Form()]    → reads from form-encoded body
 #   Used for HTML form submissions. Cannot mix with Body() in same endpoint.
 #
+#   BEGINNER EXAMPLE — Form() with Annotated:
+#
+#     @app.post("/login")
+#     def login(
+#         username: Annotated[str, Form()],
+#         password: Annotated[str, Form()],
+#     ):
+#         ...
+#
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/login" \
+#     #        -d "username=john&password=secret"
+#     #
+#     #   Form body: username=john&password=secret
+#     #              │             │
+#     #              ▼             ▼
+#     #   Inside function:
+#     #     username → "john"       ← from form field
+#     #     password → "secret"     ← from form field
+#     #   Content-Type: application/x-www-form-urlencoded (auto-set)
+#
 # ── File() / UploadFile ──────────────────────────────────────────
 #   file: UploadFile = File(...)        → single file upload (multipart/form-data)
 #   files: list[UploadFile] = File(...) → multiple files
 #   UploadFile attrs: .filename, .content_type, .size, .read(), .seek()
+#
+#   BEGINNER EXAMPLE — File() upload:
+#
+#     @app.post("/upload")
+#     def upload(file: UploadFile = File(...)):
+#         ...
+#
+#     # How to call:
+#     #   curl -X POST "http://localhost:8000/upload" -F "file=@photo.jpg"
+#     #
+#     #   Multipart: file=@photo.jpg
+#     #                    │
+#     #                    ▼
+#     #   Inside function:
+#     #     file.filename     → "photo.jpg"
+#     #     file.content_type → "image/jpeg"
+#     #     await file.read() → b"\xff\xd8..." (raw bytes)
+#     #
+#     #   Multiple files:
+#     #   curl -F "files=@a.jpg" -F "files=@b.png" "http://localhost:8000/upload-multi"
+#     #     files → [UploadFile("a.jpg"), UploadFile("b.png")]
 #
 # ── Depends() — Dependency injection ─────────────────────────────
 #   pagination: dict = Depends(pagination_params)     → function dependency (reusable params)
@@ -370,12 +537,66 @@ async def multi_method(request: Request):
 #   dependencies=[Depends(verify_api_key)]            → route-level deps (no return value needed)
 #   Yield deps: try: yield resource / finally: cleanup — runs cleanup after route finishes
 #
+#   BEGINNER EXAMPLE — Depends():
+#
+#     # Function dep (reusable params):
+#     def pagination(page: int = Query(1), size: int = Query(10)):
+#         return {"page": page, "size": size, "skip": (page-1)*size}
+#
+#     @app.get("/items")
+#     def list_items(p: dict = Depends(pagination)):
+#         ...
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/items?page=2&size=20"
+#     #
+#     #   Depends() runs pagination(page=2, size=20) FIRST
+#     #     → returns {"page": 2, "size": 20, "skip": 20}
+#     #                              │
+#     #                              ▼
+#     #     p → {"page": 2, "size": 20, "skip": 20}
+#
+#     # Yield dep (setup + cleanup):
+#     async def get_db():
+#         db = DBSession()
+#         try: yield db            # ← route uses db
+#         finally: db.close()      # ← cleanup AFTER route finishes
+#
+#     # Auth guard:
+#     #   curl "http://localhost:8000/admin" -H "X-Api-Key: secret-key-123"
+#     #     → Depends(verify_api_key) checks header → valid → route runs
+#     #   curl "http://localhost:8000/admin" -H "X-Api-Key: wrong"
+#     #     → Depends raises HTTPException(403) → route NEVER runs
+#
 # ── APIRouter — Organize routes into modules ─────────────────────
 #   router = APIRouter(prefix="/api/v1/users", tags=["Users"])
 #   @router.get("/") → becomes /api/v1/users/
 #   app.include_router(router)         → register with main app
 #   Like Flask blueprints. Use for: routers/users.py, routers/orders.py, etc.
 #   dependencies=[Depends(...)] on router → applies to ALL routes in that router
+#
+#   BEGINNER EXAMPLE — APIRouter:
+#
+#     customer_router = APIRouter(prefix="/api/v1/customers", tags=["Customers"])
+#
+#     @customer_router.get("/")
+#     def list_customers(): ...
+#
+#     @customer_router.get("/{id}")
+#     def get_customer(id: int): ...
+#
+#     app.include_router(customer_router)
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/api/v1/customers/"
+#     #     → hits list_customers()    (prefix + "/" = /api/v1/customers/)
+#     #
+#     #   curl "http://localhost:8000/api/v1/customers/42"
+#     #     → hits get_customer(id=42) (prefix + "/{id}" = /api/v1/customers/42)
+#     #
+#     #   Router with shared auth:
+#     #   protected = APIRouter(prefix="/admin", dependencies=[Depends(verify_api_key)])
+#     #     → EVERY route in this router requires API key — no need to add Depends per route
 #
 # ── Response types ───────────────────────────────────────────────
 #   return dict/model                  → auto-JSONResponse (default)
@@ -386,29 +607,134 @@ async def multi_method(request: Request):
 #   StreamingResponse(generator, media_type="text/plain") → streaming/SSE
 #   response.set_cookie(key, value, httponly=True) → set cookie via Response param
 #
+#   BEGINNER EXAMPLE — Response types:
+#
+#     # Default JSON:
+#     @app.get("/json")
+#     def get_json(): return {"msg": "hello"}
+#     #   curl "http://localhost:8000/json"
+#     #     → {"msg": "hello"}  (Content-Type: application/json — auto)
+#
+#     # Custom status:
+#     @app.post("/create")
+#     def create(): return JSONResponse(content={"id": 1}, status_code=201)
+#     #   curl -X POST "http://localhost:8000/create"
+#     #     → 201 Created, {"id": 1}
+#
+#     # HTML:
+#     @app.get("/page", response_class=HTMLResponse)
+#     def page(): return "<h1>Hello</h1>"
+#     #   curl "http://localhost:8000/page"
+#     #     → <h1>Hello</h1>  (Content-Type: text/html)
+#
+#     # Redirect:
+#     @app.get("/old")
+#     def old(): return RedirectResponse(url="/new", status_code=301)
+#     #   curl -L "http://localhost:8000/old"
+#     #     → follows redirect to /new
+#
 # ── Error handling ───────────────────────────────────────────────
 #   raise HTTPException(status_code=404, detail="Not found")  → standard error
 #   raise HTTPException(status_code=403, headers={"X-Error": "No"}) → with custom headers
 #   @app.exception_handler(CustomError)   → custom exception → custom JSON response
 #   Custom exception class + handler → clean API error format
 #
+#   BEGINNER EXAMPLE — Error handling:
+#
+#     # Standard HTTPException:
+#     @app.get("/item/{id}")
+#     def get_item(id: int):
+#         if id > 100: raise HTTPException(status_code=404, detail="Not found")
+#         return {"id": id}
+#
+#     #   curl "http://localhost:8000/item/1"    → {"id": 1}
+#     #   curl "http://localhost:8000/item/999"  → 404: {"detail": "Not found"}
+#
+#     # Custom exception + handler:
+#     class ItemNotFound(Exception):
+#         def __init__(self, item_id): self.item_id = item_id
+#
+#     @app.exception_handler(ItemNotFound)
+#     def handle(request, exc):
+#         return JSONResponse(status_code=404, content={"error": "item_not_found", "id": exc.item_id})
+#
+#     #   raise ItemNotFound(42) → {"error": "item_not_found", "id": 42}
+#
 # ── Enum path parameters ────────────────────────────────────────
 #   class ModelName(str, Enum):
 #       GPT4O = "gpt-4o"
 #   def route(model: ModelName):       → invalid value → 422 auto-error
 #
+#   BEGINNER EXAMPLE — Enum path:
+#
+#     class ModelName(str, Enum):
+#         GPT4O = "gpt-4o"
+#         CLAUDE = "claude-3.5"
+#
+#     @app.get("/models/{model}")
+#     def get_model(model: ModelName):
+#         ...
+#
+#     #   curl "http://localhost:8000/models/gpt-4o"     → model → ModelName.GPT4O
+#     #   curl "http://localhost:8000/models/invalid"    → 422! not a valid enum value
+#
 # ── Catch-all path ──────────────────────────────────────────────
 #   @app.get("/files/{file_path:path}")
 #   → captures slashes: /files/docs/reports/q1.pdf → file_path="docs/reports/q1.pdf"
 #
+#   BEGINNER EXAMPLE — Catch-all :path:
+#
+#     @app.get("/files/{file_path:path}")
+#     def get_file(file_path: str):
+#         ...
+#
+#     #   curl "http://localhost:8000/files/docs/reports/q1.pdf"
+#     #
+#     #   URL:  /files/docs/reports/q1.pdf
+#     #                │
+#     #                ▼
+#     #     file_path → "docs/reports/q1.pdf"  ← captures everything including slashes
+#     #   Normal {param} would stop at first / — :path captures the full nested path
+#
 # ── api_route — Multiple HTTP methods on same path ──────────────
 #   @app.api_route("/multi", methods=["GET", "POST"])
 #   → request.method to distinguish: "GET" vs "POST"
+#
+#   BEGINNER EXAMPLE — api_route:
+#
+#     @app.api_route("/resource", methods=["GET", "POST"])
+#     async def resource(request: Request):
+#         if request.method == "GET": return {"action": "reading"}
+#         else: return {"action": "creating"}
+#
+#     #   curl "http://localhost:8000/resource"            → {"action": "reading"}
+#     #   curl -X POST "http://localhost:8000/resource"    → {"action": "creating"}
+#     #   Same path, different behavior based on HTTP method
 #
 # ── Raw Request access ──────────────────────────────────────────
 #   request: Request                   → full access to method, url, headers, cookies, client IP
 #   dict(request.query_params)         → all query params as dict
 #   dict(request.headers)              → all headers as dict
 #   request.client.host                → client IP address
+#
+#   BEGINNER EXAMPLE — Raw Request:
+#
+#     @app.get("/debug")
+#     async def debug(request: Request):
+#         return {
+#             "method": request.method,
+#             "url": str(request.url),
+#             "headers": dict(request.headers),
+#             "client_ip": request.client.host,
+#         }
+#
+#     #   curl "http://localhost:8000/debug?foo=bar" -H "X-Custom: hello"
+#     #
+#     #   Inside function:
+#     #     request.method           → "GET"
+#     #     request.url              → "http://localhost:8000/debug?foo=bar"
+#     #     request.query_params     → {"foo": "bar"}
+#     #     request.headers["x-custom"] → "hello"
+#     #     request.client.host      → "127.0.0.1"
 #
 # ══════════════════════════════════════════════════════════════════

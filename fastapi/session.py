@@ -206,10 +206,54 @@ async def jwt_profile(user: dict = Depends(get_current_user)):
 #   FastAPI(lifespan=lifespan)         → attach to app
 #   Replaces old @app.on_event("startup") / @app.on_event("shutdown")
 #
+#   BEGINNER EXAMPLE — Lifespan:
+#
+#     @asynccontextmanager
+#     async def lifespan(app: FastAPI):
+#         # STARTUP — runs once before first request
+#         app.state.http_client = httpx.AsyncClient(timeout=30)
+#         app.state.db = await connect_db()
+#         print("Ready!")
+#         yield                              # ← server is live here
+#         # SHUTDOWN — runs when server stops (Ctrl+C)
+#         await app.state.http_client.aclose()
+#         await app.state.db.close()
+#
+#     app = FastAPI(lifespan=lifespan)       # ← attach to app
+#
+#     # Flow:
+#     #   uvicorn session:app --reload
+#     #     │
+#     #     ▼
+#     #   STARTUP: create http_client, connect DB
+#     #     │
+#     #     ▼
+#     #   yield → server handles requests (uses app.state.http_client, app.state.db)
+#     #     │
+#     #     ▼  (Ctrl+C or server stops)
+#     #   SHUTDOWN: close http_client, close DB
+#
 # ── app.state — Share resources across requests ──────────────────
 #   app.state.http_client = httpx.AsyncClient()   → set in lifespan startup
 #   Access in routes: app.state.X or request.app.state.X
 #   Persists for app's entire lifetime. Use for: DB pools, HTTP clients, caches.
+#
+#   BEGINNER EXAMPLE — app.state:
+#
+#     # Set in lifespan startup:
+#     app.state.shipments = {1: {"id": 1, "content": "Table"}}
+#
+#     # Access in any route:
+#     @app.get("/shipments")
+#     async def list_shipments():
+#         return list(app.state.shipments.values())
+#
+#     # How to call:
+#     #   curl "http://localhost:8000/shipments"
+#     #     → [{"id": 1, "content": "Table"}]
+#     #
+#     #   app.state is shared across ALL requests for the app's lifetime
+#     #   Set once in startup → use everywhere → cleanup in shutdown
 #
 # ── SessionMiddleware — Cookie-based sessions ────────────────────
 #   app.add_middleware(SessionMiddleware, secret_key="...")
@@ -218,6 +262,38 @@ async def jwt_profile(user: dict = Depends(get_current_user)):
 #   request.session.clear()            → DESTROY — removes all session data
 #   Data limit: ~4KB (cookie size limit). Signed but NOT encrypted.
 #
+#   BEGINNER EXAMPLE — Cookie sessions:
+#
+#     app.add_middleware(SessionMiddleware, secret_key="my-secret")
+#
+#     @app.get("/cookie/login")
+#     async def login(request: Request):
+#         request.session["user"] = "john@reuters.com"
+#         return {"message": "Logged in"}
+#
+#     @app.get("/cookie/profile")
+#     async def profile(request: Request):
+#         user = request.session.get("user")
+#         return {"user": user}   # None if not logged in
+#
+#     # How to call:
+#     #   Step 1 — Login (sets cookie):
+#     #   curl -c cookies.txt "http://localhost:8000/cookie/login"
+#     #     → response sets Set-Cookie header with signed session data
+#     #     → cookies.txt stores: session=eyJhb...  (signed, base64-encoded)
+#     #
+#     #   Step 2 — Access profile (sends cookie back):
+#     #   curl -b cookies.txt "http://localhost:8000/cookie/profile"
+#     #     → browser/curl sends cookie → FastAPI decodes → request.session populated
+#     #     → {"user": "john@reuters.com"}
+#     #
+#     #   Without cookie:
+#     #   curl "http://localhost:8000/cookie/profile"
+#     #     → {"user": null}   (no session cookie = empty session)
+#     #
+#     #   -c cookies.txt = save cookies to file
+#     #   -b cookies.txt = send cookies from file
+#
 # ── Redis sessions — Server-side storage ─────────────────────────
 #   Session ID in cookie, actual data in Redis (server-controlled).
 #   redis.setex(key, ttl, data)        → store with expiry (auto-delete after TTL)
@@ -225,11 +301,85 @@ async def jwt_profile(user: dict = Depends(get_current_user)):
 #   redis.delete(key)                  → explicit removal (logout)
 #   response.set_cookie(httponly=True)  → httponly prevents JS access (XSS protection)
 #
+#   BEGINNER EXAMPLE — Redis sessions:
+#
+#     @app.get("/redis/login")
+#     async def login(request: Request, response: Response):
+#         session_id = str(uuid.uuid4())        # generate unique ID
+#         data = {"user": "john@reuters.com"}
+#         await redis.setex(f"session:{session_id}", 3600, json.dumps(data))
+#         response.set_cookie(key="session_id", value=session_id, httponly=True)
+#         return {"message": "Logged in"}
+#
+#     @app.get("/redis/profile")
+#     async def profile(request: Request):
+#         session_id = request.cookies.get("session_id")
+#         data = await redis.get(f"session:{session_id}")
+#         return json.loads(data) if data else {"message": "Not logged in"}
+#
+#     # How to call:
+#     #   Step 1 — Login:
+#     #   curl -c cookies.txt "http://localhost:8000/redis/login"
+#     #     → generates session_id (e.g., "a1b2c3d4-...")
+#     #     → stores {"user": "john"} in Redis with key "session:a1b2c3d4-..."
+#     #     → sets cookie: session_id=a1b2c3d4-... (httponly — JS can't read it)
+#     #
+#     #   Step 2 — Profile:
+#     #   curl -b cookies.txt "http://localhost:8000/redis/profile"
+#     #     Cookie: session_id=a1b2c3d4-...
+#     #                        │
+#     #                        ▼
+#     #     Redis lookup: GET "session:a1b2c3d4-..."
+#     #                        │
+#     #                        ▼
+#     #     → {"user": "john@reuters.com"}
+#     #
+#     #   vs Cookie session:
+#     #     Cookie: data IN the cookie (client-side, ~4KB limit)
+#     #     Redis:  only session_id in cookie, data in Redis (unlimited, server-controlled)
+#
 # ── JWT — Stateless token-based auth ─────────────────────────────
 #   jwt.encode(payload, secret, algorithm="HS256")  → create token (includes "exp" for expiry)
 #   jwt.decode(token, secret, algorithms=["HS256"]) → verify signature + decode payload
 #   Raises: jwt.ExpiredSignatureError (token too old), jwt.InvalidTokenError (tampered/invalid)
 #   Stateless: no server storage needed. Client sends in Authorization: Bearer <token> header.
+#
+#   BEGINNER EXAMPLE — JWT auth:
+#
+#     @app.post("/jwt/login")
+#     async def login():
+#         payload = {"user": "john", "role": "editor",
+#                    "exp": datetime.now(timezone.utc) + timedelta(hours=1)}
+#         token = jwt.encode(payload, "secret", algorithm="HS256")
+#         return {"token": token}
+#
+#     @app.get("/jwt/profile")
+#     async def profile(user: dict = Depends(get_current_user)):
+#         return {"user": user["user"]}
+#
+#     # How to call:
+#     #   Step 1 — Login (get token):
+#     #   curl -X POST "http://localhost:8000/jwt/login"
+#     #     → {"token": "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiam9obi..."}
+#     #
+#     #   Step 2 — Access protected route (send token):
+#     #   curl "http://localhost:8000/jwt/profile" \
+#     #        -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9..."
+#     #
+#     #   Header: Authorization: Bearer eyJhbGci...
+#     #                                 │
+#     #                                 ▼
+#     #   Depends(get_current_user):
+#     #     HTTPBearer() extracts token from header
+#     #       → jwt.decode(token, secret) → {"user": "john", "role": "editor"}
+#     #                                       │
+#     #                                       ▼
+#     #     user → {"user": "john", "role": "editor"}
+#     #
+#     #   Bad token:  curl ... -H "Authorization: Bearer invalid"
+#     #     → 401! jwt.InvalidTokenError
+#     #   Expired:    → 401! jwt.ExpiredSignatureError
+#     #   No header:  → 403! HTTPBearer finds no Authorization header
 #
 # ── Depends() — Dependency injection for auth ────────────────────
 #   security = HTTPBearer()
@@ -243,6 +393,38 @@ async def jwt_profile(user: dict = Depends(get_current_user)):
 #       → If it raises HTTPException, route is skipped (401/403 returned)
 #       → Chaining: route depends on get_current_user, which depends on HTTPBearer()
 #
+#   BEGINNER EXAMPLE — Depends() chain for auth:
+#
+#     security = HTTPBearer()
+#
+#     # Dependency 1: extract token from header
+#     # Dependency 2: decode and verify token
+#     async def get_current_user(cred: HTTPAuthorizationCredentials = Depends(security)):
+#         return jwt.decode(cred.credentials, "secret", algorithms=["HS256"])
+#
+#     @app.get("/profile")
+#     async def profile(user: dict = Depends(get_current_user)):
+#         return user
+#
+#     # How the chain works:
+#     #   curl "http://localhost:8000/profile" -H "Authorization: Bearer <token>"
+#     #
+#     #   Request arrives
+#     #     │
+#     #     ▼
+#     #   Depends(get_current_user) runs FIRST
+#     #     │
+#     #     ├── Depends(security) runs FIRST (inside get_current_user)
+#     #     │     → HTTPBearer() extracts "Bearer <token>" from header
+#     #     │     → cred.credentials = "<token>" (raw token string)
+#     #     │
+#     #     ├── jwt.decode(token) → {"user": "john", "role": "editor"}
+#     #     │
+#     #     ▼
+#     #   profile() runs with user = {"user": "john", "role": "editor"}
+#     #
+#     #   If ANY dependency fails → HTTPException → route NEVER runs
+#
 # ── Request & Response objects ───────────────────────────────────
 #   request: Request                   → access to headers, cookies, session, URL, client IP
 #   request.cookies.get("session_id")  → read a specific cookie
@@ -250,5 +432,34 @@ async def jwt_profile(user: dict = Depends(get_current_user)):
 #   response: Response                 → set cookies, headers on outgoing response
 #   response.set_cookie(key, value, httponly=True, max_age=3600)
 #   response.delete_cookie("session_id") → remove a cookie
+#
+#   BEGINNER EXAMPLE — Request & Response:
+#
+#     @app.get("/demo")
+#     async def demo(request: Request, response: Response):
+#         # READ from request:
+#         session = request.cookies.get("session_id")     # read cookie
+#         auth = request.headers.get("Authorization")     # read header
+#         ip = request.client.host                        # client IP
+#
+#         # WRITE to response:
+#         response.set_cookie("visited", "true", max_age=3600)   # set cookie
+#         response.headers["X-Custom"] = "hello"                 # set header
+#         return {"session": session, "ip": ip}
+#
+#     # How to call:
+#     #   curl -v "http://localhost:8000/demo" \
+#     #        -b "session_id=abc" \
+#     #        -H "Authorization: Bearer tok123"
+#     #
+#     #   Request (what server reads):
+#     #     Cookie: session_id=abc          → request.cookies.get("session_id") → "abc"
+#     #     Authorization: Bearer tok123    → request.headers.get("Authorization")
+#     #     Client IP: 127.0.0.1           → request.client.host
+#     #
+#     #   Response (what client receives):
+#     #     Set-Cookie: visited=true; Max-Age=3600  ← response.set_cookie()
+#     #     X-Custom: hello                         ← response.headers[]
+#     #     Body: {"session": "abc", "ip": "127.0.0.1"}
 #
 # ══════════════════════════════════════════════════════════════════
