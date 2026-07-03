@@ -325,31 +325,107 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
 
+    const KEYWORDS = new Set(['async','await','def','class','import','from','return','if','elif',
+      'else','for','while','try','except','finally','raise','with','as','yield','pass','break',
+      'continue','in','not','and','or','is','None','True','False','lambda','global','nonlocal',
+      'assert','del']);
+    const BUILTINS = new Set(['print','len','range','type','int','str','float','list','dict','set',
+      'tuple','bool','isinstance','enumerate','zip','map','filter','sorted','reversed','any','all',
+      'min','max','sum','abs','round','open','super','property','staticmethod','classmethod',
+      'Exception','ValueError','TypeError','KeyError','HTTPException','IndexError','AttributeError',
+      'RuntimeError','StopIteration','NotImplementedError','OSError','IOError','FileNotFoundError']);
+
     const lines = code.split('\n');
     return lines.map(line => {
+      // Section headers (═══ lines)
       if (/^#\s*[═╔╚╗╝│─┌┐└┘├┤┬┴┼]{4,}/.test(line)) {
-        return `<span class="py-section-header">${line}</span>`;
+        return '<span class="py-section-header">' + line + '</span>';
       }
+      // Section headers (── titles ──)
       if (/^#\s+.*──\s*$/.test(line) || /^#\s+.*───/.test(line)) {
-        return `<span class="py-section-header">${line}</span>`;
+        return '<span class="py-section-header">' + line + '</span>';
       }
+      // Full-line comments
       if (/^\s*#/.test(line)) {
-        let highlighted = line
+        let h = line
           .replace(/(→|←|▼|▲|│|─|┌|┐|└|┘|├|┤|►|◄|▶|◀)/g, '<span class="py-arrow">$1</span>')
           .replace(/(curl\s+[^\n]*)/g, '<span class="py-curl">$1</span>');
-        return `<span class="py-comment">${highlighted}</span>`;
+        return '<span class="py-comment">' + h + '</span>';
       }
-      line = line.replace(/("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|f"(?:[^"\\]|\\.)*"|f'(?:[^'\\]|\\.)*')/g,
-        '<span class="py-string">$1</span>');
-      line = line.replace(/^(\s*@\w[\w.]*)/gm, '<span class="py-decorator">$1</span>');
-      const keywords = /\b(async|await|def|class|import|from|return|if|elif|else|for|while|try|except|finally|raise|with|as|yield|pass|break|continue|in|not|and|or|is|None|True|False|lambda|global|nonlocal|assert|del)\b/g;
-      line = line.replace(keywords, '<span class="py-keyword">$1</span>');
-      const builtins = /\b(print|len|range|type|int|str|float|list|dict|set|tuple|bool|isinstance|enumerate|zip|map|filter|sorted|reversed|any|all|min|max|sum|abs|round|open|super|property|staticmethod|classmethod|Exception|ValueError|TypeError|KeyError|HTTPException)\b/g;
-      line = line.replace(builtins, '<span class="py-builtin">$1</span>');
-      line = line.replace(/\b(\d+\.?\d*)\b/g, '<span class="py-number">$1</span>');
-      line = line.replace(/\b(def|async\s+def)\s+(\w+)/g,
-        '<span class="py-keyword">$1</span> <span class="py-function">$2</span>');
-      return line;
+
+      // Tokenize the line to avoid corrupting spans with later passes
+      const tokens = [];
+      let i = 0;
+      while (i < line.length) {
+        // Strings: triple-quoted, f-strings, single/double
+        let strMatch = line.slice(i).match(/^(f?"""[\s\S]*?"""|f?'''[\s\S]*?'''|f?"(?:[^"\\]|\\.)*"|f?'(?:[^'\\]|\\.)*')/);
+        if (strMatch) {
+          tokens.push('<span class="py-string">' + strMatch[0] + '</span>');
+          i += strMatch[0].length;
+          continue;
+        }
+        // Decorator
+        if (i === line.search(/\S/) && line[i] === '@') {
+          let decMatch = line.slice(i).match(/^@\w[\w.]*/);
+          if (decMatch) {
+            tokens.push('<span class="py-decorator">' + decMatch[0] + '</span>');
+            i += decMatch[0].length;
+            continue;
+          }
+        }
+        // Inline comment
+        if (line[i] === '#') {
+          let rest = line.slice(i)
+            .replace(/(→|←|▼|▲|│|─|┌|┐|└|┘|├|┤|►|◄|▶|◀)/g, '<span class="py-arrow">$1</span>');
+          tokens.push('<span class="py-comment">' + rest + '</span>');
+          break;
+        }
+        // Word (identifier, keyword, builtin)
+        let wordMatch = line.slice(i).match(/^\w+/);
+        if (wordMatch) {
+          const w = wordMatch[0];
+          if (KEYWORDS.has(w)) {
+            // Check for "def name" pattern
+            if ((w === 'def') || (w === 'async' && line.slice(i).match(/^async\s+def\s/))) {
+              if (w === 'async') {
+                let fnMatch = line.slice(i).match(/^async\s+def\s+(\w+)/);
+                if (fnMatch) {
+                  tokens.push('<span class="py-keyword">async def</span> <span class="py-function">' + fnMatch[1] + '</span>');
+                  i += fnMatch[0].length;
+                  continue;
+                }
+              } else {
+                let fnMatch = line.slice(i).match(/^def\s+(\w+)/);
+                if (fnMatch) {
+                  tokens.push('<span class="py-keyword">def</span> <span class="py-function">' + fnMatch[1] + '</span>');
+                  i += fnMatch[0].length;
+                  continue;
+                }
+              }
+            }
+            tokens.push('<span class="py-keyword">' + w + '</span>');
+          } else if (BUILTINS.has(w)) {
+            tokens.push('<span class="py-builtin">' + w + '</span>');
+          } else if (/^\d+\.?\d*$/.test(w)) {
+            tokens.push('<span class="py-number">' + w + '</span>');
+          } else {
+            tokens.push(w);
+          }
+          i += w.length;
+          continue;
+        }
+        // Numbers (standalone, e.g. after operators)
+        let numMatch = line.slice(i).match(/^\d+\.?\d*/);
+        if (numMatch) {
+          tokens.push('<span class="py-number">' + numMatch[0] + '</span>');
+          i += numMatch[0].length;
+          continue;
+        }
+        // Any other character
+        tokens.push(line[i]);
+        i++;
+      }
+      return tokens.join('');
     }).join('\n');
   }
 
