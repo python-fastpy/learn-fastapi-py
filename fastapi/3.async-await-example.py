@@ -339,3 +339,103 @@ async def fan_out_fan_in(id: int):
 #  Semaphore vs Lock    │ Semaphore(N): N concurrent  │ Lock: exactly 1 at a time
 #  Sequential vs ||     │ await a; await b — sum time │ gather(a,b) — max time
 # ══════════════════════════════════════════════════════════════════
+#
+# ══════════════════════════════════════════════════════════════════
+#  ASYNC/AWAIT — DETAILED REFERENCE
+# ══════════════════════════════════════════════════════════════════
+#
+# ── async def vs def — When to use which ─────────────────────────
+#   async def route():     → runs on event loop, use for I/O (HTTP, DB, files)
+#   def route():           → runs in thread pool, use for CPU work (calculations)
+#   KEY RULE: inside async def, you MUST "await" any async operation
+#   NEVER use time.sleep() or requests.get() in async def — they BLOCK the event loop
+#
+# ── await — Pause and yield control ──────────────────────────────
+#   result = await some_async_function()
+#   Pauses THIS function, lets event loop handle other requests.
+#   Only works inside async def. The awaited function must be a coroutine.
+#
+# ── asyncio.gather() — Run tasks in parallel ─────────────────────
+#   r1, r2, r3 = await asyncio.gather(coro1(), coro2(), coro3())
+#   All run concurrently. Results returned IN INPUT ORDER.
+#   Total time = max(individual times), not sum.
+#   return_exceptions=True → failed tasks return Exception object instead of crashing all.
+#   Dynamic: await asyncio.gather(*[fetch(id) for id in ids])
+#
+# ── asyncio.create_task() — Fire and forget ──────────────────────
+#   asyncio.create_task(send_email(user))
+#   Starts background work. Endpoint returns immediately.
+#   Task runs in background. WARNING: lost on server shutdown.
+#   Use for: logging, notifications, non-critical side effects.
+#
+# ── asyncio.wait_for() — Timeout ────────────────────────────────
+#   result = await asyncio.wait_for(slow_query(), timeout=2.0)
+#   Raises asyncio.TimeoutError if not done in time. Cancels the task.
+#
+# ── asyncio.Semaphore(N) — Limit concurrency ────────────────────
+#   sem = asyncio.Semaphore(3)        → max 3 concurrent
+#   async with sem:                   → acquire slot (blocks if all N taken)
+#       await do_work()               → work runs with slot held
+#   Use for: rate-limiting API calls, DB connection limits.
+#
+# ── asyncio.Lock() — Mutual exclusion ───────────────────────────
+#   lock = asyncio.Lock()
+#   async with lock:                  → only ONE task at a time
+#       counter += 1                  → safe from race conditions
+#   Semaphore(1) == Lock(). Use Lock when exactly-one is the intent.
+#
+# ── asyncio.Event() — Signal between tasks ──────────────────────
+#   event = asyncio.Event()
+#   await event.wait()                → blocks until event.set() is called
+#   event.set()                       → unblocks all waiters
+#   event.clear()                     → reset to unset state
+#   Use for: "wait until database is ready", "wait until config loaded"
+#
+# ── asyncio.Queue() — Producer/consumer ─────────────────────────
+#   q = asyncio.Queue()
+#   await q.put(item)                 → producer adds work
+#   item = await q.get()              → consumer takes work (blocks if empty)
+#   q.task_done()                     → mark item as processed
+#   Use for: job processing, work distribution, buffering.
+#
+# ── asyncio.shield() — Protect from cancellation ────────────────
+#   await asyncio.shield(critical_save(data))
+#   Even if outer task is cancelled, shielded task keeps running.
+#   Use for: payments, database commits, anything that MUST finish.
+#
+# ── asyncio.to_thread() — Run sync code in async context ────────
+#   result = await asyncio.to_thread(heavy_cpu_function, arg1, arg2)
+#   Runs sync function in thread pool, doesn't block event loop.
+#   Use for: CPU-heavy work, libraries that don't support async.
+#
+# ── asyncio.as_completed() — Process fastest first ──────────────
+#   for done in asyncio.as_completed(tasks):
+#       result = await done            → get result in FINISH ORDER (not input order)
+#   vs gather: returns in input order. as_completed: returns as each finishes.
+#
+# ── async for — Async iteration ─────────────────────────────────
+#   async def fetch_pages():
+#       yield page                     → async generator (yields data over time)
+#   async for page in fetch_pages():
+#       process(page)                  → processes each page as it arrives
+#   Use for: paginated APIs, streaming data, chunked file reads.
+#
+# ── async with — Async context manager ──────────────────────────
+#   async with httpx.AsyncClient() as client:
+#       response = await client.get(url)
+#   __aenter__ = async setup, __aexit__ = async cleanup
+#   Use for: connections, sessions, resources needing async open/close.
+#
+# ── Retry pattern ───────────────────────────────────────────────
+#   for i in range(retries):
+#       try: return await func()
+#       except: await asyncio.sleep(delay * i)  → exponential backoff
+#   Use for: unreliable external APIs, transient network errors.
+#
+# ── httpx.AsyncClient — Async HTTP client ───────────────────────
+#   async with httpx.AsyncClient() as client:
+#       resp = await client.get(url)
+#   NEVER use requests.get() in async def — it blocks the event loop.
+#   httpx is the async-native replacement for requests.
+#
+# ══════════════════════════════════════════════════════════════════

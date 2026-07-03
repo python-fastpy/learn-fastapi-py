@@ -318,3 +318,97 @@ async def multi_method(request: Request):
 # Streaming   | StreamingResponse(gen)  | async def = I/O (await), event loop
 # Plain text  | response_class=Plain... | def = CPU-bound, auto-threadpool
 # ══════════════════════════════════════════════════════════════════
+#
+# ══════════════════════════════════════════════════════════════════
+#  ROUTES & ANNOTATED STYLE — DETAILED REFERENCE
+# ══════════════════════════════════════════════════════════════════
+#
+# ── Annotated[] — Modern parameter declaration style ─────────────
+#   Old style:  id: int = Path(gt=0)
+#   New style:  id: Annotated[int, Path(gt=0)]
+#   Both are equivalent. Annotated separates type hint from metadata.
+#   Benefits: reusable (UserId = Annotated[int, Path(ge=1)]), cleaner with type checkers
+#   Requires: from typing import Annotated
+#
+# ── Path() with Annotated ────────────────────────────────────────
+#   product_id: Annotated[int, Path(title="Product ID", ge=1, le=10000)]
+#   title/description → shown in Swagger docs
+#   ge/le/gt/lt → numeric validation (ge=1 means >= 1)
+#
+# ── Query() with Annotated ───────────────────────────────────────
+#   start: Annotated[str, Query(description="Start date YYYY-MM-DD")]  → required
+#   max_results: Annotated[int, Query(alias="max-results", ge=1)] = 10 → optional + alias
+#   status: Annotated[list[str], Query()] = ["active"]                 → list query param
+#   alias="max-results" → accept hyphenated query param names (?max-results=5)
+#
+# ── Body() with Annotated ────────────────────────────────────────
+#   address: Annotated[str, Body(embed=True)]
+#   priority: Annotated[bool, Body(embed=True)] = False
+#   embed=True → wraps each param under its name: {"address":"...", "priority":true}
+#   Without embed, multiple Body params auto-embed by default
+#
+# ── Header() with Annotated ──────────────────────────────────────
+#   user_agent: Annotated[str, Header()]        → reads "User-Agent" header (auto-converts _ to -)
+#   x_request_id: Annotated[str | None, Header()] = None  → optional header
+#
+# ── Cookie() with Annotated ──────────────────────────────────────
+#   session_token: Annotated[str | None, Cookie()] = None  → optional cookie
+#
+# ── Form() with Annotated ───────────────────────────────────────
+#   username: Annotated[str, Form()]    → reads from form-encoded body
+#   Used for HTML form submissions. Cannot mix with Body() in same endpoint.
+#
+# ── File() / UploadFile ──────────────────────────────────────────
+#   file: UploadFile = File(...)        → single file upload (multipart/form-data)
+#   files: list[UploadFile] = File(...) → multiple files
+#   UploadFile attrs: .filename, .content_type, .size, .read(), .seek()
+#
+# ── Depends() — Dependency injection ─────────────────────────────
+#   pagination: dict = Depends(pagination_params)     → function dependency (reusable params)
+#   api_key: str = Depends(verify_api_key)            → auth guard (raises 403 if invalid)
+#   db: DBSession = Depends(get_db)                   → yield dependency (setup + cleanup)
+#   dependencies=[Depends(verify_api_key)]            → route-level deps (no return value needed)
+#   Yield deps: try: yield resource / finally: cleanup — runs cleanup after route finishes
+#
+# ── APIRouter — Organize routes into modules ─────────────────────
+#   router = APIRouter(prefix="/api/v1/users", tags=["Users"])
+#   @router.get("/") → becomes /api/v1/users/
+#   app.include_router(router)         → register with main app
+#   Like Flask blueprints. Use for: routers/users.py, routers/orders.py, etc.
+#   dependencies=[Depends(...)] on router → applies to ALL routes in that router
+#
+# ── Response types ───────────────────────────────────────────────
+#   return dict/model                  → auto-JSONResponse (default)
+#   JSONResponse(content={}, status_code=201)  → custom status/headers
+#   HTMLResponse("<h1>Hi</h1>")        → HTML content
+#   PlainTextResponse("text")          → plain text
+#   RedirectResponse(url="/other", status_code=302) → redirect
+#   StreamingResponse(generator, media_type="text/plain") → streaming/SSE
+#   response.set_cookie(key, value, httponly=True) → set cookie via Response param
+#
+# ── Error handling ───────────────────────────────────────────────
+#   raise HTTPException(status_code=404, detail="Not found")  → standard error
+#   raise HTTPException(status_code=403, headers={"X-Error": "No"}) → with custom headers
+#   @app.exception_handler(CustomError)   → custom exception → custom JSON response
+#   Custom exception class + handler → clean API error format
+#
+# ── Enum path parameters ────────────────────────────────────────
+#   class ModelName(str, Enum):
+#       GPT4O = "gpt-4o"
+#   def route(model: ModelName):       → invalid value → 422 auto-error
+#
+# ── Catch-all path ──────────────────────────────────────────────
+#   @app.get("/files/{file_path:path}")
+#   → captures slashes: /files/docs/reports/q1.pdf → file_path="docs/reports/q1.pdf"
+#
+# ── api_route — Multiple HTTP methods on same path ──────────────
+#   @app.api_route("/multi", methods=["GET", "POST"])
+#   → request.method to distinguish: "GET" vs "POST"
+#
+# ── Raw Request access ──────────────────────────────────────────
+#   request: Request                   → full access to method, url, headers, cookies, client IP
+#   dict(request.query_params)         → all query params as dict
+#   dict(request.headers)              → all headers as dict
+#   request.client.host                → client IP address
+#
+# ══════════════════════════════════════════════════════════════════

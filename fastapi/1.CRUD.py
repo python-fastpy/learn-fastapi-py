@@ -282,3 +282,70 @@ def delete_bulk(data: dict = Body()):
 # File          | file: UploadFile = File(...)    | -F "file=@f.pdf"
 # Custom resp   | return JSONResponse(...)       | set cookies/headers
 # ══════════════════════════════════════════════════════════════════
+#
+# ══════════════════════════════════════════════════════════════════
+#  PARAMETER DECLARATIONS — DETAILED REFERENCE
+# ══════════════════════════════════════════════════════════════════
+#
+# ── Body() — Reads from JSON request body ────────────────────────
+#   data: dict = Body()             → optional, reads entire JSON body as dict
+#   data: dict = Body(...)          → required (... = Ellipsis = no default allowed)
+#   data: dict = Body(embed=True)   → expects {"data": {...}} — wraps value under param name
+#   a: dict = Body(), b: dict = Body()  → multiple body params: {"a":{...},"b":{...}}
+#   Note: Body() is needed to tell FastAPI "read from body" explicitly.
+#         Without it, simple types (str, int) would be treated as query params.
+#
+# ── Query() — Reads from URL query string (?key=value) ───────────
+#   q: str = Query(...)                   → required, no default
+#   q: str = Query(..., min_length=1)     → required + string length validation
+#   status: str = Query("Pending")        → optional, defaults to "Pending"
+#   status: Optional[str] = Query(None)   → optional, defaults to None
+#   limit: int = Query(10, ge=1, le=100)  → default 10, must be between 1-100
+#   ids: List[int] = Query(...)           → list param: ?ids=1&ids=2&ids=3
+#   Validators: ge (>=), le (<=), gt (>), lt (<), min_length, max_length
+#
+# ── Path() — Reads from URL path (/items/{id}) ───────────────────
+#   id: int = Path(gt=0, description="Must be > 0")
+#   Path params are always required (they're part of the URL).
+#   Use Path() to add validation (gt, ge, lt, le) and OpenAPI docs metadata.
+#
+# ── Header() — Reads from HTTP headers ───────────────────────────
+#   x_token: str = Header(...)              → required header
+#   x_request_id: Optional[str] = Header(None)  → optional header
+#   FastAPI auto-converts: x_token → "X-Token" (underscores → hyphens)
+#
+# ── Cookie() — Reads from cookies ────────────────────────────────
+#   session_id: Optional[str] = Cookie(None)  → optional cookie
+#   Reads from the Cookie header, matches by parameter name.
+#
+# ── Form() — Reads from form-encoded body (application/x-www-form-urlencoded) ──
+#   content: str = Form(...)          → required form field
+#   status: str = Form("Pending")     → optional with default
+#   Used for HTML form submissions or curl -d. Cannot mix with Body().
+#
+# ── File() — Reads uploaded files (multipart/form-data) ──────────
+#   file: UploadFile = File(...)              → single file upload
+#   files: List[UploadFile] = File(...)       → multiple file upload
+#   UploadFile provides: .filename, .content_type, .read(), .size
+#   Can mix with Form() but NOT with Body().
+#
+# ── Depends() — Dependency injection (see session.py) ────────────
+#   user: dict = Depends(get_current_user)    → runs function, injects result
+#   db: Session = Depends(get_db)             → DB session injection
+#   Runs BEFORE the route handler. If dependency raises, route is skipped.
+#   Can chain: dependencies can have their own Depends().
+#   Can also go on decorator: @app.get("/x", dependencies=[Depends(verify)])
+#
+# ── ... (Ellipsis) vs None vs value ──────────────────────────────
+#   = Query(...)          → REQUIRED — request fails 422 without it
+#   = Query(None)         → OPTIONAL — defaults to None
+#   = Query("default")    → OPTIONAL — defaults to "default"
+#   = Query()             → OPTIONAL — same as Query(None) for most types
+#
+# ── Annotated[] style (modern, see routes.py) ────────────────────
+#   Old: id: int = Path(gt=0)
+#   New: id: Annotated[int, Path(gt=0)]
+#   Both are equivalent. Annotated separates type hint from FastAPI metadata,
+#   making it reusable and cleaner with type checkers. Recommended approach.
+#
+# ══════════════════════════════════════════════════════════════════

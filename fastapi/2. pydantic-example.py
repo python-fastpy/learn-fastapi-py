@@ -277,3 +277,81 @@ def patch_with_pydantic(
 # response_model       | @app.get(..., response_model=M)        | Filter output fields
 # model_dump()         | data.model_dump()                      | Model -> dict
 # ══════════════════════════════════════════════════════════════════
+#
+# ══════════════════════════════════════════════════════════════════
+#  PYDANTIC & FASTAPI DECLARATIONS — DETAILED REFERENCE
+# ══════════════════════════════════════════════════════════════════
+#
+# ── BaseModel — The core Pydantic model ──────────────────────────
+#   class ShipmentCreate(BaseModel):
+#       content: str                   → required, no default — request fails 422 without it
+#       weight: float                  → required, auto-validates type (string "abc" → 422)
+#       status: str = "Pending"        → optional, uses default if omitted
+#   Usage: def create(data: ShipmentCreate)  → FastAPI auto-reads from JSON body
+#   vs dict = Body(): BaseModel gives validation, dot access (data.content), Swagger schema
+#
+# ── Field() — Validation constraints for model fields ────────────
+#   content: str = Field(min_length=3, max_length=200)   → string length limits
+#   weight: float = Field(gt=0, le=10000)                → numeric range (gt/ge/lt/le)
+#   status: str = Field(default="Pending")               → default value
+#   Field(description="...", examples=["..."])            → OpenAPI docs metadata
+#   Field() is to BaseModel what Query()/Path() is to route parameters
+#
+# ── Optional fields — For PATCH/partial updates ──────────────────
+#   content: Optional[str] = None     → field can be missing from request body
+#   Check with: if data.content is not None → only update fields that were sent
+#   Use model_dump(exclude_unset=True) to get only fields explicitly provided
+#
+# ── Enum — Restrict to allowed values ────────────────────────────
+#   class Status(str, Enum):          → must inherit BOTH str and Enum
+#       PENDING = "Pending"
+#   Invalid value → 422: "Input should be 'Pending', 'In Transit', ..."
+#   Access: data.status.value → "Pending" (string), data.status → Status.PENDING (enum)
+#
+# ── @field_validator — Custom per-field logic ────────────────────
+#   @field_validator("content")
+#   @classmethod
+#   def validate_content(cls, v: str) -> str:
+#       if not v.strip(): raise ValueError("Cannot be empty")
+#       return v.strip()              → can transform the value (trim, round, etc.)
+#   Runs after type validation. Raise ValueError for custom error messages.
+#
+# ── @model_validator — Cross-field validation ────────────────────
+#   @model_validator(mode="after")    → runs after all field validators
+#   def check_fields(self):           → has access to all fields via self.field_name
+#       if self.weight > self.max_weight: raise ValueError(...)
+#       return self                   → must return self
+#   mode="before" runs on raw dict before field parsing
+#
+# ── Nested models — Deep structured validation ───────────────────
+#   class Address(BaseModel):
+#       street: str; city: str
+#   class Shipment(BaseModel):
+#       origin: Address               → required nested object
+#       dims: Optional[Dims] = None   → optional nested object
+#   Validates recursively: missing origin.city → 422 with path ["body","origin","city"]
+#   Convert to dict: data.origin.model_dump()
+#
+# ── List[Model] — Batch operations ──────────────────────────────
+#   def create_batch(items: List[ShipmentItem]):
+#   Request body: [{"content":"A","weight":10}, {"content":"B","weight":20}]
+#   Each item validated individually. One bad item → entire batch fails 422.
+#
+# ── response_model — Control output shape ────────────────────────
+#   @app.get("/item/{id}", response_model=ItemResponse)
+#   Strips fields not in ItemResponse from the response (e.g., hides internal fields)
+#   Also generates response schema in Swagger docs
+#
+# ── model_dump() — Convert model to dict ─────────────────────────
+#   data.model_dump()                 → all fields as dict
+#   data.model_dump(exclude_unset=True)  → only fields explicitly set (for PATCH)
+#   data.model_dump(exclude={"password"}) → exclude specific fields
+#
+# ── Body() + Query() + Path() with Pydantic ─────────────────────
+#   def patch(id: int, dry_run: bool = Query(False), data: Model = Body()):
+#   id → from URL path (auto-detected)
+#   dry_run → from query string (?dry_run=true)
+#   data → from JSON body (Pydantic model)
+#   FastAPI can combine all three in one endpoint
+#
+# ══════════════════════════════════════════════════════════════════

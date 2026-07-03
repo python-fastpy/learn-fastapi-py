@@ -192,3 +192,63 @@ async def jwt_profile(user: dict = Depends(get_current_user)):
 #   jwt.decode(token, secret, algs)     verify + decode
 #   Depends(HTTPBearer())               extract from header
 #   "exp" claim                         auto-expiry
+#
+# ══════════════════════════════════════════════════════════════════
+#  SESSIONS & AUTH DECLARATIONS — DETAILED REFERENCE
+# ══════════════════════════════════════════════════════════════════
+#
+# ── Lifespan — App startup/shutdown lifecycle ────────────────────
+#   @asynccontextmanager
+#   async def lifespan(app: FastAPI):
+#       app.state.db = connect()       → before yield = STARTUP (create resources)
+#       yield                          → server is live, handling requests
+#       app.state.db.close()           → after yield = SHUTDOWN (cleanup)
+#   FastAPI(lifespan=lifespan)         → attach to app
+#   Replaces old @app.on_event("startup") / @app.on_event("shutdown")
+#
+# ── app.state — Share resources across requests ──────────────────
+#   app.state.http_client = httpx.AsyncClient()   → set in lifespan startup
+#   Access in routes: app.state.X or request.app.state.X
+#   Persists for app's entire lifetime. Use for: DB pools, HTTP clients, caches.
+#
+# ── SessionMiddleware — Cookie-based sessions ────────────────────
+#   app.add_middleware(SessionMiddleware, secret_key="...")
+#   request.session["user"] = "john"   → WRITE — stored in signed cookie (client-side)
+#   request.session.get("user")        → READ — auto-parsed from cookie
+#   request.session.clear()            → DESTROY — removes all session data
+#   Data limit: ~4KB (cookie size limit). Signed but NOT encrypted.
+#
+# ── Redis sessions — Server-side storage ─────────────────────────
+#   Session ID in cookie, actual data in Redis (server-controlled).
+#   redis.setex(key, ttl, data)        → store with expiry (auto-delete after TTL)
+#   redis.get(key)                     → retrieve (returns None if expired)
+#   redis.delete(key)                  → explicit removal (logout)
+#   response.set_cookie(httponly=True)  → httponly prevents JS access (XSS protection)
+#
+# ── JWT — Stateless token-based auth ─────────────────────────────
+#   jwt.encode(payload, secret, algorithm="HS256")  → create token (includes "exp" for expiry)
+#   jwt.decode(token, secret, algorithms=["HS256"]) → verify signature + decode payload
+#   Raises: jwt.ExpiredSignatureError (token too old), jwt.InvalidTokenError (tampered/invalid)
+#   Stateless: no server storage needed. Client sends in Authorization: Bearer <token> header.
+#
+# ── Depends() — Dependency injection for auth ────────────────────
+#   security = HTTPBearer()
+#   async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+#       → HTTPBearer() extracts token from "Authorization: Bearer <token>" header
+#       → credentials.credentials = the raw token string
+#       → Depends(security) runs HTTPBearer BEFORE your function
+#   @app.get("/protected")
+#   async def route(user: dict = Depends(get_current_user)):
+#       → Depends(get_current_user) runs auth check BEFORE route
+#       → If it raises HTTPException, route is skipped (401/403 returned)
+#       → Chaining: route depends on get_current_user, which depends on HTTPBearer()
+#
+# ── Request & Response objects ───────────────────────────────────
+#   request: Request                   → access to headers, cookies, session, URL, client IP
+#   request.cookies.get("session_id")  → read a specific cookie
+#   request.headers.get("Authorization") → read a header
+#   response: Response                 → set cookies, headers on outgoing response
+#   response.set_cookie(key, value, httponly=True, max_age=3600)
+#   response.delete_cookie("session_id") → remove a cookie
+#
+# ══════════════════════════════════════════════════════════════════

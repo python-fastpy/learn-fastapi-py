@@ -243,3 +243,77 @@ def conditional_cache(id: int, request: Request):
 #
 # RATE LIMITING:             Track timestamps per IP, prune old, reject if >= limit
 # EXCEPTION MIDDLEWARE:      try/except around call_next -> clean JSON 500
+#
+# ══════════════════════════════════════════════════════════════════
+#  MIDDLEWARE, CORS & CACHING — DETAILED REFERENCE
+# ══════════════════════════════════════════════════════════════════
+#
+# ── CORSMiddleware — Cross-Origin Resource Sharing ───────────────
+#   app.add_middleware(CORSMiddleware, allow_origins=[...], ...)
+#   allow_origins=["http://localhost:3000"]   → specific origins (RECOMMENDED for prod)
+#   allow_origins=["*"]                       → any site (dev/public APIs only)
+#   allow_origin_regex=r"https://.*\.example\.com"  → regex pattern
+#   allow_credentials=True                    → allow cookies/JWT in cross-origin requests
+#   allow_methods=["GET","POST",...]          → which HTTP verbs are allowed
+#   allow_headers=["*"]                       → which request headers are allowed
+#   Without CORS: browser blocks requests from different origins (same-origin policy)
+#
+# ── GZipMiddleware — Response compression ────────────────────────
+#   app.add_middleware(GZipMiddleware, minimum_size=500)
+#   Compresses responses > minimum_size bytes. 60-90% smaller for JSON.
+#   Client must send Accept-Encoding: gzip header.
+#
+# ── TrustedHostMiddleware — Host header protection ───────────────
+#   app.add_middleware(TrustedHostMiddleware, allowed_hosts=["myapp.com", "*.example.com"])
+#   Requests with non-matching Host header → 400 Bad Request.
+#   Prevents Host header injection attacks.
+#
+# ── Custom middleware pattern ────────────────────────────────────
+#   @app.middleware("http")
+#   async def my_middleware(request: Request, call_next):
+#       # BEFORE: runs before endpoint
+#       response = await call_next(request)  → calls next middleware/endpoint
+#       # AFTER: runs after endpoint
+#       return response
+#   Must be async def. Can modify request before, response after.
+#   Can short-circuit: return JSONResponse(...) without calling call_next.
+#
+# ── Middleware execution order ───────────────────────────────────
+#   Registered: A, B, C → Runs: C → B → A → endpoint → A → B → C
+#   Last added = outermost layer (runs first). Like an onion — wraps around.
+#
+# ── request: Request — Available in middleware & routes ──────────
+#   request.url.path          → "/api/items"
+#   request.method            → "GET", "POST", etc.
+#   request.headers           → all HTTP headers
+#   request.client.host       → client IP address
+#   request.cookies           → all cookies
+#   request.query_params      → URL query parameters
+#
+# ── In-memory cache (server-side) ────────────────────────────────
+#   cache_store[key] = {"data": result, "timestamp": time.time()}
+#   Check: if now - cached["timestamp"] < TTL → return cached (HIT)
+#   Invalidate: cache_store.pop(key, None) on PUT/DELETE (prevent stale data)
+#   Pros: fastest. Cons: lost on restart, per-process (not shared across workers).
+#
+# ── Cache-Control header (client-side) ───────────────────────────
+#   "no-store"                           → never cache (real-time data, auth tokens)
+#   "private, max-age=300"               → browser only, NOT CDN (user-specific data)
+#   "public, max-age=60"                 → browser + CDN can cache (public data)
+#   "public, max-age=31536000, immutable"→ never changes at this URL (versioned assets)
+#   Tells browser/CDN to store the response — server not contacted until expiry.
+#
+# ── ETag + If-None-Match (conditional caching) ──────────────────
+#   Server: response with ETag: "abc123" (content fingerprint, usually MD5 hash)
+#   Client: next request with If-None-Match: "abc123"
+#   Server: data unchanged → 304 Not Modified (no body, saves bandwidth)
+#   Server: data changed → 200 with new data + new ETag
+#   Combines with Cache-Control for optimal caching strategy.
+#
+# ── Rate limiting pattern ────────────────────────────────────────
+#   Track request timestamps per client IP in a dict.
+#   Prune timestamps older than RATE_WINDOW seconds.
+#   If count >= RATE_LIMIT → return 429 Too Many Requests.
+#   Add X-RateLimit-Remaining header for client awareness.
+#
+# ══════════════════════════════════════════════════════════════════
