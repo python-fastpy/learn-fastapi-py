@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Python &amp; FastAPI Learning Reference</title>
+<style>
+  :root {
+    --bg-main: #1e1e2e;
+    --bg-sidebar: #181825;
+    --bg-code: #11111b;
+    --bg-header: #313244;
+    --text: #cdd6f4;
+    --text-dim: #6c7086;
+    --text-heading: #cba6f7;
+    --accent: #89b4fa;
+    --accent-hover: #b4befe;
+    --green: #a6e3a1;
+    --peach: #fab387;
+    --red: #f38ba8;
+    --yellow: #f9e2af;
+    --border: #313244;
+    --active-bg: #45475a;
+    --scrollbar: #45475a;
+    --scrollbar-hover: #585b70;
+    --divider: #585b70;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', 'SF Pro', -apple-system, sans-serif;
+    background: var(--bg-main);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Top bar ──────────────────────────────────────────────── */
+  .top-bar {
+    background: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  .top-bar h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-heading);
+    letter-spacing: 0.5px;
+  }
+  .top-bar .file-badge {
+    font-size: 12px;
+    color: var(--text-dim);
+    background: var(--bg-header);
+    padding: 3px 10px;
+    border-radius: 12px;
+  }
+  .search-box {
+    margin-left: auto;
+    background: var(--bg-code);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: var(--text);
+    font-size: 15px;
+    width: 240px;
+    outline: none;
+  }
+  .search-box:focus { border-color: var(--accent); }
+  .search-box::placeholder { color: var(--text-dim); }
+
+  /* ── Main layout ──────────────────────────────────────────── */
+  .main-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ──────────────────────────────────────────────── */
+  .sidebar {
+    width: 220px;
+    min-width: 120px;
+    background: var(--bg-sidebar);
+    border-right: none;
+    overflow-y: auto;
+    padding: 8px 0;
+    flex-shrink: 0;
+  }
+  .folder-label {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--text-dim);
+    padding: 12px 16px 4px;
+  }
+  .file-item {
+    padding: 7px 16px 7px 28px;
+    font-size: 15px;
+    cursor: pointer;
+    color: var(--text);
+    border-left: 3px solid transparent;
+    transition: all 0.15s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .file-item:hover {
+    background: var(--bg-header);
+    color: var(--accent-hover);
+  }
+  .file-item.active {
+    background: var(--active-bg);
+    border-left-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .file-item .file-icon { margin-right: 6px; font-size: 12px; }
+
+  /* ── Two-column split ─────────────────────────────────────── */
+  .split-container {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  .split-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .split-panel + .split-panel {
+    border-left: 2px solid var(--divider);
+  }
+
+  .panel-header {
+    background: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .panel-header .panel-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.3px;
+  }
+  .panel-header .line-count {
+    font-size: 10px;
+    color: var(--text-dim);
+    background: var(--bg-header);
+    padding: 1px 6px;
+    border-radius: 8px;
+  }
+
+  .panel-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+  }
+
+  .panel-body pre {
+    background: var(--bg-code);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 15px;
+    line-height: 1.6;
+    overflow-x: auto;
+    white-space: pre;
+    tab-size: 4;
+    color: var(--text);
+  }
+
+  /* ── Right panel: Cheat Sheet + Reference stacked ─────────── */
+  .ref-section {
+    margin-bottom: 4px;
+  }
+  .ref-section-header {
+    font-size: 14px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--yellow);
+    padding: 10px 0 6px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .ref-section-header .ref-icon { font-size: 14px; }
+  .ref-section-header .ref-count {
+    font-size: 10px;
+    color: var(--text-dim);
+    background: var(--bg-header);
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-weight: 400;
+  }
+
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 0;
+    color: var(--text-dim);
+    font-size: 15px;
+    gap: 6px;
+  }
+  .empty-state .icon { font-size: 36px; opacity: 0.3; }
+
+  /* ── Resize handle ────────────────────────────────────────── */
+  .resize-handle {
+    width: 6px;
+    cursor: col-resize;
+    background: transparent;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 10;
+  }
+  .resize-handle:hover, .resize-handle.dragging {
+    background: var(--accent);
+    opacity: 0.4;
+  }
+
+  /* ── Syntax highlighting ──────────────────────────────────── */
+  .py-comment { color: #6c7086; font-style: italic; }
+  .py-keyword { color: #cba6f7; }
+  .py-string { color: #a6e3a1; }
+  .py-decorator { color: #f9e2af; }
+  .py-function { color: #89b4fa; }
+  .py-number { color: #fab387; }
+  .py-builtin { color: #f38ba8; }
+  .py-operator { color: #89dceb; }
+  .py-section-header { color: #f9e2af; font-weight: bold; }
+  .py-arrow { color: #89dceb; }
+  .py-curl { color: #a6e3a1; }
+
+  /* ── Scrollbar ────────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
+
+  /* ── Responsive ───────────────────────────────────────────── */
+  @media (max-width: 900px) {
+    .split-container { flex-direction: column; }
+    .split-panel + .split-panel { border-left: none; border-top: 2px solid var(--divider); }
+    .resize-handle { display: none; }
+  }
+  @media (max-width: 600px) {
+    .sidebar { display: none; }
+    .top-bar { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <h1>Python &amp; FastAPI Reference</h1>
+  <span class="file-badge" id="fileBadge">Select a file</span>
+  <input type="text" class="search-box" id="searchBox" placeholder="Search files... ( / )">
+</div>
+
+<div class="main-layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <div class="resize-handle" id="sidebarResizeHandle"></div>
+
+  <div class="split-container">
+    <!-- LEFT: Content -->
+    <div class="split-panel" id="leftPanel">
+      <div class="panel-header">
+        <span class="panel-title">Content</span>
+        <span class="line-count" id="contentCount">0 lines</span>
+      </div>
+      <div class="panel-body" id="panel-content">
+        <div class="empty-state">
+          <div class="icon">&#128214;</div>
+          <div>Select a file from the sidebar</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Resize handle -->
+    <div class="resize-handle" id="resizeHandle"></div>
+
+    <!-- RIGHT: Cheat Sheet + Reference -->
+    <div class="split-panel" id="rightPanel">
+      <div class="panel-header">
+        <span class="panel-title">Cheat Sheet &amp; Reference</span>
+        <span class="line-count" id="rightCount">0 lines</span>
+      </div>
+      <div class="panel-body" id="panel-right">
+        <div class="empty-state">
+          <div class="icon">&#128214;</div>
+          <div>Select a file from the sidebar</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script>
+  let currentFolder = null;
+  let currentFile = null;
+
+  function highlightPython(code) {
+    code = code
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    const lines = code.split('\n');
+    return lines.map(line => {
+      if (/^#\s*[═╔╚╗╝│─┌┐└┘├┤┬┴┼]{4,}/.test(line)) {
+        return `<span class="py-section-header">${line}</span>`;
+      }
+      if (/^#\s+.*──\s*$/.test(line) || /^#\s+.*───/.test(line)) {
+        return `<span class="py-section-header">${line}</span>`;
+      }
+      if (/^\s*#/.test(line)) {
+        let highlighted = line
+          .replace(/(→|←|▼|▲|│|─|┌|┐|└|┘|├|┤|►|◄|▶|◀)/g, '<span class="py-arrow">$1</span>')
+          .replace(/(curl\s+[^\n]*)/g, '<span class="py-curl">$1</span>');
+        return `<span class="py-comment">${highlighted}</span>`;
+      }
+      line = line.replace(/("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|f"(?:[^"\\]|\\.)*"|f'(?:[^'\\]|\\.)*')/g,
+        '<span class="py-string">$1</span>');
+      line = line.replace(/^(\s*@\w[\w.]*)/gm, '<span class="py-decorator">$1</span>');
+      const keywords = /\b(async|await|def|class|import|from|return|if|elif|else|for|while|try|except|finally|raise|with|as|yield|pass|break|continue|in|not|and|or|is|None|True|False|lambda|global|nonlocal|assert|del)\b/g;
+      line = line.replace(keywords, '<span class="py-keyword">$1</span>');
+      const builtins = /\b(print|len|range|type|int|str|float|list|dict|set|tuple|bool|isinstance|enumerate|zip|map|filter|sorted|reversed|any|all|min|max|sum|abs|round|open|super|property|staticmethod|classmethod|Exception|ValueError|TypeError|KeyError|HTTPException)\b/g;
+      line = line.replace(builtins, '<span class="py-builtin">$1</span>');
+      line = line.replace(/\b(\d+\.?\d*)\b/g, '<span class="py-number">$1</span>');
+      line = line.replace(/\b(def|async\s+def)\s+(\w+)/g,
+        '<span class="py-keyword">$1</span> <span class="py-function">$2</span>');
+      return line;
+    }).join('\n');
+  }
+
+  function countLines(text) {
+    if (!text || !text.trim()) return 0;
+    return text.trim().split('\n').length;
+  }
+
+  function renderSidebar(filter = '') {
+    const sidebar = document.getElementById('sidebar');
+    let html = '';
+    const lowerFilter = filter.toLowerCase();
+
+    for (const [folder, files] of Object.entries(FILES)) {
+      const fileEntries = Object.keys(files).filter(
+        f => !filter || f.toLowerCase().includes(lowerFilter)
+      );
+      if (fileEntries.length === 0) continue;
+
+      html += `<div class="folder-label">${folder}/</div>`;
+      for (const filename of fileEntries) {
+        const isActive = currentFolder === folder && currentFile === filename;
+        const displayName = filename.replace('.py', '');
+        html += `<div class="file-item ${isActive ? 'active' : ''}"
+                      onclick="selectFile('${folder}', '${filename}')"
+                      title="${folder}/${filename}">
+                   <span class="file-icon">&#128220;</span>${displayName}
+                 </div>`;
+      }
+    }
+    sidebar.innerHTML = html;
+  }
+
+  function selectFile(folder, filename) {
+    currentFolder = folder;
+    currentFile = filename;
+
+    const file = FILES[folder][filename];
+
+    document.getElementById('fileBadge').textContent = `${folder}/${filename}`;
+
+    // LEFT panel: Content
+    const contentPanel = document.getElementById('panel-content');
+    const contentText = file.content || '';
+    if (contentText.trim()) {
+      contentPanel.innerHTML = `<pre><code>${highlightPython(contentText)}</code></pre>`;
+    } else {
+      contentPanel.innerHTML = `<div class="empty-state"><div class="icon">&#128196;</div><div>No content in this file</div></div>`;
+    }
+    document.getElementById('contentCount').textContent = `${countLines(contentText)} lines`;
+
+    // RIGHT panel: Cheat Sheet + Reference combined
+    const rightPanel = document.getElementById('panel-right');
+    const cheatText = file.cheatSheet || '';
+    const refText = file.reference || '';
+    let rightHtml = '';
+    let rightLines = 0;
+
+    if (cheatText.trim()) {
+      rightLines += countLines(cheatText);
+      rightHtml += `<div class="ref-section">
+        <div class="ref-section-header">
+          <span class="ref-icon">&#9889;</span> Cheat Sheet
+          <span class="ref-count">${countLines(cheatText)} lines</span>
+        </div>
+        <pre><code>${highlightPython(cheatText)}</code></pre>
+      </div>`;
+    }
+
+    if (refText.trim()) {
+      rightLines += countLines(refText);
+      rightHtml += `<div class="ref-section">
+        <div class="ref-section-header">
+          <span class="ref-icon">&#128218;</span> Detailed Reference
+          <span class="ref-count">${countLines(refText)} lines</span>
+        </div>
+        <pre><code>${highlightPython(refText)}</code></pre>
+      </div>`;
+    }
+
+    if (!rightHtml) {
+      rightHtml = `<div class="empty-state"><div class="icon">&#128196;</div><div>No cheat sheet or reference in this file</div></div>`;
+    }
+
+    rightPanel.innerHTML = rightHtml;
+    document.getElementById('rightCount').textContent = `${rightLines} lines`;
+
+    renderSidebar(document.getElementById('searchBox').value);
+    contentPanel.scrollTop = 0;
+    rightPanel.scrollTop = 0;
+  }
+
+  // Generic resize handler
+  function makeResizable(handleId, getLeft, getRight, getContainer, minPct, maxPct, isPixelMode) {
+    const handle = document.getElementById(handleId);
+    let dragging = false;
+
+    handle.addEventListener('mousedown', e => {
+      dragging = true;
+      handle.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      const container = getContainer();
+      const rect = container.getBoundingClientRect();
+      const offset = e.clientX - rect.left;
+
+      if (isPixelMode) {
+        const clamped = Math.max(120, Math.min(400, offset));
+        getLeft().style.width = clamped + 'px';
+      } else {
+        const pct = (offset / rect.width) * 100;
+        const clamped = Math.max(minPct, Math.min(maxPct, pct));
+        getLeft().style.flex = `0 0 ${clamped}%`;
+        getRight().style.flex = `0 0 ${100 - clamped}%`;
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    });
+  }
+
+  // Sidebar resize (pixel-based)
+  makeResizable(
+    'sidebarResizeHandle',
+    () => document.getElementById('sidebar'),
+    () => null,
+    () => document.querySelector('.main-layout'),
+    0, 0, true
+  );
+
+  // Content / Reference split resize (percentage-based)
+  makeResizable(
+    'resizeHandle',
+    () => document.getElementById('leftPanel'),
+    () => document.getElementById('rightPanel'),
+    () => document.querySelector('.split-container'),
+    20, 80, false
+  );
+
+  // Search filtering
+  document.getElementById('searchBox').addEventListener('input', e => {
+    renderSidebar(e.target.value);
+  });
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', e => {
+    if (e.key === '/' && document.activeElement.tagName !== 'INPUT') {
+      e.preventDefault();
+      document.getElementById('searchBox').focus();
+    }
+    if (e.key === 'Escape') {
+      document.getElementById('searchBox').value = '';
+      document.getElementById('searchBox').blur();
+      renderSidebar();
+    }
+  });
+
+  // Initialize
+  renderSidebar();
+  const firstFolder = Object.keys(FILES)[0];
+  if (firstFolder) {
+    const firstFile = Object.keys(FILES[firstFolder])[0];
+    if (firstFile) selectFile(firstFolder, firstFile);
+  }
+</script>
+
+</body>
+</html>
