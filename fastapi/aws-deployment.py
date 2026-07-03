@@ -98,14 +98,20 @@ def delete_book(book_id: str):
     return {"message": "Book deleted"}
 
 
-# ── 0c. requirements.txt ────────────────────────────────────────
-#   fastapi==0.115.0
-#   uvicorn==0.30.0
-#   mangum==0.19.0
+# ── 0c. pyproject.toml ──────────────────────────────────────────
+#   [project]
+#   name = "book-store-api"
+#   version = "1.0.0"
+#   requires-python = ">=3.11"
+#   dependencies = [
+#       "fastapi==0.115.0",
+#       "uvicorn==0.30.0",
+#       "mangum==0.19.0",
+#   ]
 
 # ── 0d. Test locally first ──────────────────────────────────────
-#   pip install -r requirements.txt
-#   uvicorn main:app --reload --port 8000
+#   uv sync
+#   uv run uvicorn main:app --reload --port 8000
 #   Open http://localhost:8000/docs  ← Swagger UI
 #
 #   curl http://localhost:8000/health
@@ -375,15 +381,16 @@ def delete_book(book_id: str):
 #   ssh -i book-store-key.pem ec2-user@<public-ip>
 #
 #   # On the EC2 instance:
-#   sudo dnf install python3.11 python3.11-pip -y
+#   sudo dnf install python3.11 -y
+#   curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv
+#   source $HOME/.local/bin/env                        # add uv to PATH
 #   mkdir app && cd app
 #
-#   # Create main.py (paste the FastAPI code above)
-#   # Create requirements.txt
-#   pip3.11 install -r requirements.txt
+#   # Create main.py and pyproject.toml (paste from Step 0 above)
+#   uv sync
 #
 #   # Run the app
-#   uvicorn main:app --host 0.0.0.0 --port 8000
+#   uv run uvicorn main:app --host 0.0.0.0 --port 8000
 #
 #   # Test from your local machine:
 #   curl http://<public-ip>:8000/health
@@ -453,7 +460,7 @@ def delete_book(book_id: str):
 #
 #   # Create deployment package with all dependencies
 #   mkdir package
-#   pip install -r requirements.txt -t package/
+#   uv pip install -r pyproject.toml --target package/
 #   cp main.py lambda_handler.py package/
 #   cd package && zip -r ../deployment.zip . && cd ..
 #
@@ -752,12 +759,13 @@ def delete_book(book_id: str):
 #   Create Dockerfile in your book-store-api/ folder:
 #
 #     FROM python:3.11-slim
+#     COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 #     WORKDIR /app
-#     COPY requirements.txt .
-#     RUN pip install --no-cache-dir -r requirements.txt
+#     COPY pyproject.toml uv.lock ./
+#     RUN uv sync --frozen --no-dev
 #     COPY main.py .
 #     EXPOSE 8000
-#     CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+#     CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 #
 # ── 6b. Test Docker locally ─────────────────────────────────
 #
