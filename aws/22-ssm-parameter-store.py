@@ -1,7 +1,7 @@
 # ══════════════════════════════════════════════════════════════════
 # AWS Deployment — SSM Parameter Store (Step 19)
 # ══════════════════════════════════════════════════════════════════
-# Navigation:  ← prev: 21-cognito.py
+# Navigation:  ← prev: 21-cognito.py  |  next: 23-iam.py →
 
 # ╔══════════════════════════════════════════════════╗
 # ║  STEP 19: SSM PARAMETER STORE                    ║

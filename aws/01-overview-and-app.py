@@ -26,6 +26,7 @@
 #   20-rds.py                   — RDS managed databases, Multi-AZ, Aurora
 #   21-cognito.py               — Cognito user pools, JWT, API GW integration
 #   22-ssm-parameter-store.py   — SSM Parameter Store, hierarchies, vs Secrets Mgr
+#   23-iam.py                   — IAM users, groups, roles, policies, least privilege
 # ─────────────────────────────────────────────────────────────────
 
 # This file teaches every major AWS service by deploying ONE FastAPI app
