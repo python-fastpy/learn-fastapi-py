@@ -1,0 +1,663 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — IAM (Step 23)
+# ══════════════════════════════════════════════════════════════════
+# Companion to: 23-iam.py
+# Navigation:  ← prev: 22c-ssm-parameter-store.yaml  |  next: 24c-cloudformation-advanced.yaml →
+#
+# WHAT THIS TEMPLATE CREATES:
+#   IAM resources for the book-store application:
+#     - Custom managed policy (S3, DynamoDB, Secrets Manager)
+#     - ECS task execution role (with custom + AWS policies)
+#     - Lambda execution role (with inline policy)
+#     - IAM user + group (for CI/CD service account)
+#     - Instance profile (for EC2)
+#
+# ── The 4 IAM Building Blocks ──────────────────────────────────
+#
+#   ┌──────────────────────────────────────────────────────────┐
+#   │  USER              GROUP             ROLE                │
+#   │  (person)          (team)            (service/app)       │
+#   │                                                          │
+#   │  ┌──────────┐     ┌──────────┐     ┌──────────┐        │
+#   │  │ Alice    │     │ Devs     │     │ ECS Task │        │
+#   │  │ Bob      │     │ Ops      │     │ Lambda   │        │
+#   │  │ CI/CD    │     │ Admins   │     │ EC2      │        │
+#   │  └──────────┘     └──────────┘     └──────────┘        │
+#   │       │                │                │                │
+#   │       └────────────────┼────────────────┘                │
+#   │                        ▼                                 │
+#   │               ┌──────────────┐                           │
+#   │               │   POLICY     │                           │
+#   │               │ (permissions)│                           │
+#   │               └──────────────┘                           │
+#   └──────────────────────────────────────────────────────────┘
+#
+#   USER:   Identity with long-term credentials (password + keys).
+#           Avoid for services — use roles instead.
+#           OK for: human console access, CI/CD service accounts.
+#
+#   GROUP:  Collection of users. Attach policies to the group,
+#           all members inherit. Easier than per-user policies.
+#
+#   ROLE:   Identity assumed by AWS SERVICES. Temporary credentials
+#           that auto-rotate (no passwords or keys to manage).
+#           Use for: ECS tasks, Lambda, EC2, cross-account access.
+#
+#   POLICY: JSON document defining permissions (Allow/Deny).
+#           Attached to users, groups, or roles.
+#
+# ── Users vs Roles: When to Use Each ───────────────────────────
+#
+#   ┌──────────────────────┬──────────────────────────────────────┐
+#   │ Use a USER when      │ Use a ROLE when                      │
+#   ├──────────────────────┼──────────────────────────────────────┤
+#   │ Human needs console  │ AWS service needs permissions        │
+#   │ access               │ (ECS, Lambda, EC2, CodeBuild)        │
+#   ├──────────────────────┼──────────────────────────────────────┤
+#   │ External CI/CD needs │ Cross-account access                 │
+#   │ programmatic access  │ ("Account B assumes role in A")      │
+#   ├──────────────────────┼──────────────────────────────────────┤
+#   │ Third-party tool     │ Federated users (SSO, SAML)          │
+#   │ needs API keys       │                                      │
+#   └──────────────────────┴──────────────────────────────────────┘
+#
+#   Best practice: minimize IAM users. Use SSO/federation for humans,
+#   roles for services, and roles for cross-account access.
+#
+# ── Managed vs Inline Policies ──────────────────────────────────
+#
+#   Managed Policy (recommended):
+#     - Standalone resource with its own ARN
+#     - Can be attached to multiple users/groups/roles
+#     - Versioned (up to 5 versions)
+#     - Reusable across the account
+#     - Two types: AWS-managed (maintained by AWS) and
+#       customer-managed (you create and maintain)
+#
+#   Inline Policy:
+#     - Embedded directly in a user/group/role
+#     - Deleted when the parent is deleted
+#     - Cannot be reused
+#     - Use for: one-off permissions tightly coupled to a role
+#
+#   Rule of thumb: Use managed policies for reusable permissions,
+#   inline policies for single-use, tightly-scoped permissions.
+#
+# ── Trust Policies (AssumeRolePolicyDocument) ───────────────────
+#
+#   Every role has a trust policy that defines WHO can assume it.
+#   Think of it as the bouncer at the door:
+#
+#   "Only ecs-tasks.amazonaws.com can assume this role"
+#   "Only lambda.amazonaws.com can assume this role"
+#   "Only account 123456789012 can assume this role"
+#
+#   Without a trust policy, nobody can use the role's permissions.
+#   The trust policy is separate from the permissions policy:
+#     Trust policy:       WHO can assume the role
+#     Permissions policy:  WHAT the role can do
+#
+# ── Least Privilege Principle ──────────────────────────────────
+#
+#   Grant ONLY the permissions needed, nothing more:
+#     - Specific actions (s3:GetObject, not s3:*)
+#     - Specific resources (arn:aws:s3:::my-bucket/*, not *)
+#     - Conditions when possible (time, IP, MFA, tags)
+#
+#   Start with no permissions and add as needed, not the other way.
+#   Use IAM Access Analyzer to identify unused permissions.
+#
+# ── Permission Boundaries ───────────────────────────────────────
+#
+#   A permission boundary limits the MAXIMUM permissions a role
+#   or user can have. Even if a policy grants s3:*, the boundary
+#   can restrict it to specific buckets.
+#
+#   Use case: allow developers to create IAM roles, but ensure
+#   those roles can never exceed certain permissions.
+#
+#   Effective permissions = intersection of:
+#     Identity policy AND Permission boundary AND SCP
+#
+# ── Service Control Policies (SCPs) ────────────────────────────
+#
+#   SCPs are organization-level policies (AWS Organizations).
+#   They set the maximum permissions for an entire AWS account.
+#
+#   Example: "No account in this OU can launch instances outside
+#   eu-west-1" — even if an admin attaches AdministratorAccess.
+#
+#   SCPs don't grant permissions. They restrict what IAM policies
+#   can grant. Think of them as guardrails.
+#
+# ── The Assume Role Pattern ────────────────────────────────────
+#
+#   How services use roles:
+#
+#   1. Service (e.g., ECS) calls sts:AssumeRole with the role ARN
+#   2. STS checks the role's trust policy
+#   3. If allowed, STS returns temporary credentials:
+#      - AccessKeyId (temporary)
+#      - SecretAccessKey (temporary)
+#      - SessionToken (required for temp creds)
+#      - Expiration (typically 1 hour)
+#   4. Service uses these credentials for API calls
+#   5. Credentials auto-expire — no rotation needed
+#
+#   For cross-account access:
+#     Account A creates a role with trust policy allowing Account B.
+#     Account B's user/role calls sts:AssumeRole on Account A's role.
+#     Account B gets temporary credentials to act in Account A.
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  IAM roles, policies, users, and groups for the book-store API.
+  Demonstrates managed policies, inline policies, trust policies,
+  and the assume role pattern. See 23-iam.py for concepts.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+    Description: Deployment environment.
+
+  S3BucketName:
+    Type: String
+    Default: book-store-covers
+    Description: >-
+      Name of the S3 bucket for book cover images.
+      The custom policy grants read/write access to this bucket.
+
+  DynamoDBTableName:
+    Type: String
+    Default: book-store-books
+    Description: >-
+      Name of the DynamoDB table for book data.
+      The custom policy grants CRUD access to this table.
+
+  AllowedCidrBlock:
+    Type: String
+    Default: '10.0.0.0/16'
+    Description: >-
+      CIDR block for IP-based access restriction.
+      Requests from outside this range are denied.
+      Use your VPC CIDR or office IP range.
+
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ────────────────────────────────────────────────────────────────
+  # CUSTOM MANAGED POLICY
+  # ────────────────────────────────────────────────────────────────
+  # A reusable policy that grants the book-store application
+  # access to its specific AWS resources. Attached to the ECS
+  # task role (and any other role that needs these permissions).
+  #
+  # Managed policies are standalone IAM resources with their own ARN.
+  # They can be attached to multiple roles/users/groups.
+
+  BookStoreAppPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'book-store-app-policy-${Environment}'
+      Description: >-
+        Custom policy for the book-store application.
+        Grants S3, DynamoDB, and Secrets Manager access to
+        specific resources only (least privilege).
+
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+
+          # ── S3: Read/Write book cover images ─────────────────
+          - Sid: S3ReadWriteCovers
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:ListBucket
+            Resource:
+              - !Sub 'arn:aws:s3:::${S3BucketName}-${AWS::AccountId}-${Environment}'
+              - !Sub 'arn:aws:s3:::${S3BucketName}-${AWS::AccountId}-${Environment}/*'
+            # Two resources: the bucket itself (for ListBucket) and
+            # objects within it (for Get/Put/Delete). These are
+            # different ARN patterns — a common source of "Access Denied".
+            #
+            # Bucket ARN:  arn:aws:s3:::bucket-name     (no /*)
+            # Object ARN:  arn:aws:s3:::bucket-name/*   (with /*)
+
+          # ── DynamoDB: CRUD on books table ────────────────────
+          - Sid: DynamoDBCRUD
+            Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:Query
+              - dynamodb:Scan
+              - dynamodb:BatchGetItem
+              - dynamodb:BatchWriteItem
+            Resource:
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}-${Environment}'
+              - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}-${Environment}/index/*'
+            # Two resources: the table and its indexes (GSIs/LSIs).
+            # Without the index resource, queries on GSIs fail.
+
+          # ── Secrets Manager: Read secrets ────────────────────
+          - Sid: SecretsManagerRead
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+            Resource:
+              - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:book-store/${Environment}/*'
+            # Scoped to secrets under the book-store/{env}/ prefix.
+            # The app can read database passwords, API keys, etc.
+            # but NOT secrets from other applications.
+
+          # ── Deny: Outside allowed IP range ───────────────────
+          - Sid: DenyOutsideNetwork
+            Effect: Deny
+            Action: '*'
+            Resource: '*'
+            Condition:
+              NotIpAddress:
+                aws:SourceIp: !Ref AllowedCidrBlock
+              # Denies ALL actions if the request comes from outside
+              # the allowed CIDR block. This is a safety net — even
+              # if credentials are leaked, they can't be used from
+              # unauthorized networks.
+              #
+              # IMPORTANT: This condition only works for API calls
+              # made directly (not through VPC endpoints or other
+              # AWS services). For ECS tasks, the source IP is the
+              # NAT gateway or VPC endpoint, not the task itself.
+              # You may need to adjust or remove this for ECS.
+              #
+              # More conditions you can use:
+              #   aws:MultiFactorAuthPresent: true  (require MFA)
+              #   aws:RequestedRegion: [eu-west-1]  (region lock)
+              #   aws:PrincipalTag/Department: news  (tag-based)
+
+
+  # ────────────────────────────────────────────────────────────────
+  # ECS TASK ROLE
+  # ────────────────────────────────────────────────────────────────
+  # This role is assumed by ECS tasks (your running containers).
+  # It defines what your application code can do in AWS.
+  #
+  # NOTE: This is different from the ECS Task EXECUTION Role:
+  #
+  #   Task Role:           What your APPLICATION code can do.
+  #                        (S3 access, DynamoDB, Secrets Manager)
+  #
+  #   Task Execution Role: What ECS ITSELF can do to launch your task.
+  #                        (Pull images from ECR, read secrets for
+  #                         env vars, write logs)
+  #
+  # Both are needed. This template creates the Task Role.
+  # The Execution Role is typically created in the ECS template (08c).
+
+  EcsTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'book-store-ecs-task-role-${Environment}'
+
+      # ── Trust Policy ─────────────────────────────────────────
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            # Only the ECS Tasks service can assume this role.
+            # Your container inherits these permissions automatically.
+            # No access keys needed in your application code.
+
+      # ── Managed Policies ─────────────────────────────────────
+      ManagedPolicyArns:
+        - !Ref BookStoreAppPolicy
+        # Our custom policy defined above (S3, DynamoDB, Secrets Manager).
+
+        # Do NOT attach AmazonECSTaskExecutionRolePolicy here.
+        # That's for the Execution Role (different role).
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ────────────────────────────────────────────────────────────────
+  # ECS TASK EXECUTION ROLE
+  # ────────────────────────────────────────────────────────────────
+  # What ECS itself needs to launch and manage your tasks.
+  # This is NOT what your app code uses — it's what ECS uses.
+  #
+  # Permissions include:
+  #   - Pull Docker images from ECR
+  #   - Read secrets for environment variable injection
+  #   - Write container logs to CloudWatch
+
+  EcsTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'book-store-ecs-exec-role-${Environment}'
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        # AWS-managed policy that includes:
+        #   ecr:GetAuthorizationToken
+        #   ecr:BatchCheckLayerAvailability
+        #   ecr:GetDownloadUrlForLayer
+        #   ecr:BatchGetImage
+        #   logs:CreateLogStream
+        #   logs:PutLogEvents
+        #
+        # These are the minimum permissions ECS needs to run tasks.
+
+      # ── Inline Policy: Secrets Access ────────────────────────
+      # The managed policy doesn't include Secrets Manager access.
+      # If your task definition injects secrets as env vars, ECS
+      # needs permission to read them. This is a good use of inline
+      # policy — tightly coupled to this specific role.
+      Policies:
+        - PolicyName: SecretsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:book-store/${Environment}/*'
+
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/book-store/${Environment}/*'
+                # ECS can also inject SSM parameters as env vars.
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ────────────────────────────────────────────────────────────────
+  # LAMBDA EXECUTION ROLE
+  # ────────────────────────────────────────────────────────────────
+  # Role for Lambda functions in the book-store application.
+  # Every Lambda function needs a role — it's how Lambda gets
+  # permissions to interact with other AWS services.
+  #
+  # This role includes:
+  #   - CloudWatch Logs (mandatory for Lambda)
+  #   - VPC access (if Lambda runs inside VPC)
+  #   - S3 read access (for processing book cover uploads)
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'book-store-lambda-role-${Environment}'
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+            # Trust policy: only Lambda can assume this role.
+
+      # ── Inline Policy ────────────────────────────────────────
+      # Inline because these permissions are specific to this role
+      # and won't be reused elsewhere.
+      Policies:
+        - PolicyName: LambdaPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+
+              # CloudWatch Logs — Lambda auto-creates log groups.
+              # Every Lambda invocation writes logs here.
+              # WITHOUT this, your Lambda runs but you can't see logs.
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/book-store-*:*'
+
+              # VPC Access — if Lambda runs inside your VPC (to access
+              # RDS or other VPC resources), it needs ENI management.
+              - Sid: VPCAccess
+                Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Resource: '*'
+                # ec2 network interface actions don't support
+                # resource-level restrictions — must be '*'.
+
+              # S3 Read — process uploaded book covers.
+              - Sid: S3ReadCovers
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub 'arn:aws:s3:::${S3BucketName}-${AWS::AccountId}-${Environment}/*'
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ────────────────────────────────────────────────────────────────
+  # IAM GROUP — CI/CD Team
+  # ────────────────────────────────────────────────────────────────
+  # Groups organize users and apply permissions collectively.
+  # Much easier than attaching policies to individual users.
+  #
+  # Example: add all CI/CD service accounts to this group.
+  # They all get the same permissions automatically.
+
+  CICDGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: !Sub 'book-store-cicd-${Environment}'
+      ManagedPolicyArns:
+        - !Ref BookStoreAppPolicy
+        # CI/CD needs the same app permissions to run tests
+        # and deployments.
+
+      # You can also attach AWS-managed policies:
+      # - arn:aws:iam::aws:policy/AmazonECR_FullAccess
+      # - arn:aws:iam::aws:policy/AmazonECS_FullAccess
+      # But prefer custom policies scoped to your specific resources.
+
+
+  # ────────────────────────────────────────────────────────────────
+  # IAM USER — CI/CD Service Account
+  # ────────────────────────────────────────────────────────────────
+  # A programmatic user for external CI/CD systems (e.g., GitHub
+  # Actions, Jenkins) that need long-term AWS credentials.
+  #
+  # NOTE: For AWS-native CI/CD (CodeBuild, CodePipeline), use
+  # roles instead of users. Users with access keys are only needed
+  # when the CI/CD system runs OUTSIDE of AWS.
+  #
+  # Consider alternatives first:
+  #   GitHub Actions → OIDC federation (no long-term credentials!)
+  #   Jenkins on EC2 → EC2 instance profile (role-based)
+  #   External CI → IAM user (this template) — last resort
+
+  CICDUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub 'book-store-cicd-user-${Environment}'
+      Groups:
+        - !Ref CICDGroup
+        # User inherits all policies attached to the CI/CD group.
+        # No need to attach policies directly to the user.
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: CI/CD service account
+
+
+  # ────────────────────────────────────────────────────────────────
+  # IAM ACCESS KEY — For the CI/CD User
+  # ────────────────────────────────────────────────────────────────
+  # Creates an access key ID + secret access key pair.
+  # The CI/CD system uses these to authenticate API calls.
+  #
+  # SECURITY WARNINGS:
+  #   - Access keys are long-term credentials. Rotate regularly.
+  #   - The secret access key is only available in CloudFormation
+  #     outputs — it CANNOT be retrieved later.
+  #   - Store the secret key in a secure location immediately.
+  #   - Never commit access keys to source control.
+
+  CICDAccessKey:
+    Type: AWS::IAM::AccessKey
+    DeletionPolicy: Retain
+    # Retain = keep the access key when the stack is deleted.
+    # This prevents breaking CI/CD pipelines during stack updates.
+    # You'll need to manually delete it when no longer needed.
+    Properties:
+      UserName: !Ref CICDUser
+      Serial: 1
+      # Increment Serial to rotate the key: change from 1 to 2
+      # and update the stack. CloudFormation creates a new key
+      # and deletes the old one.
+
+
+  # ────────────────────────────────────────────────────────────────
+  # IAM INSTANCE PROFILE — For EC2 Instances
+  # ────────────────────────────────────────────────────────────────
+  # An instance profile is a container for an IAM role that you
+  # attach to EC2 instances. EC2 instances can't use roles directly —
+  # they need the instance profile wrapper.
+  #
+  # The instance profile allows EC2 instances to assume the role
+  # and use its permissions without embedded access keys.
+  #
+  # NOTE: ECS on Fargate doesn't use instance profiles (no EC2).
+  # This is included for the EC2 lesson tie-in (04-ec2.py).
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub 'book-store-ec2-profile-${Environment}'
+      Roles:
+        - !Ref EcsTaskRole
+        # Reusing the ECS task role so EC2 gets the same permissions.
+        # In practice, you'd create a separate role for EC2 with
+        # permissions specific to what EC2 instances need.
+
+      # Usage in an EC2 instance or launch template:
+      #   IamInstanceProfile:
+      #     Arn: !GetAtt EC2InstanceProfile.Arn
+      #
+      # The EC2 instance can then call AWS APIs without access keys:
+      #   import boto3
+      #   s3 = boto3.client('s3')  # uses instance profile automatically
+      #   s3.get_object(Bucket='...', Key='...')
+
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  BookStoreAppPolicyArn:
+    Description: ARN of the custom managed policy for the book-store app
+    Value: !Ref BookStoreAppPolicy
+    # !Ref on a ManagedPolicy returns its ARN.
+    Export:
+      Name: !Sub '${Environment}-BookStoreAppPolicyArn'
+
+  EcsTaskRoleArn:
+    Description: >-
+      ARN of the ECS task role. Use in ECS task definitions:
+        TaskRoleArn: !ImportValue dev-EcsTaskRoleArn
+    Value: !GetAtt EcsTaskRole.Arn
+    Export:
+      Name: !Sub '${Environment}-EcsTaskRoleArn'
+
+  EcsTaskExecutionRoleArn:
+    Description: >-
+      ARN of the ECS task execution role. Use in ECS task definitions:
+        ExecutionRoleArn: !ImportValue dev-EcsTaskExecutionRoleArn
+    Value: !GetAtt EcsTaskExecutionRole.Arn
+    Export:
+      Name: !Sub '${Environment}-EcsTaskExecutionRoleArn'
+
+  LambdaExecutionRoleArn:
+    Description: >-
+      ARN of the Lambda execution role. Use in Lambda function definitions:
+        Role: !ImportValue dev-LambdaExecutionRoleArn
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${Environment}-LambdaExecutionRoleArn'
+
+  CICDAccessKeyId:
+    Description: >-
+      Access Key ID for the CI/CD service account.
+      Use this as AWS_ACCESS_KEY_ID in your CI/CD system.
+    Value: !Ref CICDAccessKey
+    # !Ref on an AccessKey returns the AccessKeyId.
+
+  CICDSecretAccessKey:
+    Description: >-
+      Secret Access Key for the CI/CD service account.
+      IMPORTANT: This is only available here — save it immediately!
+      Cannot be retrieved again. Store securely in your CI/CD system.
+    Value: !GetAtt CICDAccessKey.SecretAccessKey
+    # GetAtt SecretAccessKey is only available at creation time.
+    # If you lose it, you must create a new access key.
+
+  EC2InstanceProfileArn:
+    Description: >-
+      ARN of the EC2 instance profile. Use in launch templates:
+        IamInstanceProfile: { Arn: !ImportValue dev-EC2InstanceProfileArn }
+    Value: !GetAtt EC2InstanceProfile.Arn
+    Export:
+      Name: !Sub '${Environment}-EC2InstanceProfileArn'

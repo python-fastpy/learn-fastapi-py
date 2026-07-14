@@ -1,0 +1,707 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — Advanced CloudFormation (Step 24)
+# ══════════════════════════════════════════════════════════════════
+# Companion to: 24-cloudformation.py
+# Navigation:  ← prev: 23c-iam.yaml
+#
+# WHAT THIS TEMPLATE DEMONSTRATES:
+#   Advanced CloudFormation features — the "meta" template:
+#     - Nested stacks (compose templates from other templates)
+#     - Cross-stack references (Fn::ImportValue)
+#     - Custom resources (Lambda-backed)
+#     - Mappings (region/env → values lookup tables)
+#     - Conditions (if/else for prod vs dev)
+#     - Transform: AWS::Include (shared snippets)
+#     - Stack policy (protect critical resources)
+#     - Outputs with Export (cross-stack sharing)
+#
+# ── Nested Stacks vs Cross-Stack References ─────────────────────
+#
+#   Two ways to compose multiple CloudFormation templates:
+#
+#   ┌──────────────────────┬──────────────────────────────────────┐
+#   │ Nested Stacks        │ Cross-Stack References               │
+#   ├──────────────────────┼──────────────────────────────────────┤
+#   │ Parent creates child │ Independent stacks that share values │
+#   │ stacks as resources  │ via Export/ImportValue                │
+#   ├──────────────────────┼──────────────────────────────────────┤
+#   │ Lifecycle tied to    │ Independent lifecycle — update/delete │
+#   │ parent (delete parent│ separately                           │
+#   │ = delete children)   │                                      │
+#   ├──────────────────────┼──────────────────────────────────────┤
+#   │ Pass params via      │ Import values via Fn::ImportValue    │
+#   │ template parameters  │                                      │
+#   ├──────────────────────┼──────────────────────────────────────┤
+#   │ Best for: tightly    │ Best for: loosely coupled components  │
+#   │ coupled components   │ managed by different teams           │
+#   │ deployed together    │                                      │
+#   └──────────────────────┴──────────────────────────────────────┘
+#
+#   Example: VPC + S3 + ECS = nested (always deployed together)
+#            Shared logging stack used by 10 services = cross-stack
+#
+# ── Change Sets ─────────────────────────────────────────────────
+#
+#   Before updating a stack, create a Change Set to preview what
+#   will happen. Like a "dry run" for infrastructure changes.
+#
+#   aws cloudformation create-change-set \
+#     --stack-name book-store \
+#     --template-body file://template.yaml \
+#     --change-set-name my-changes
+#
+#   Review the changes:
+#   aws cloudformation describe-change-set \
+#     --change-set-name my-changes \
+#     --stack-name book-store
+#
+#   Shows: Add, Modify, Remove, Replace (replacement = downtime risk)
+#
+#   If it looks good:
+#   aws cloudformation execute-change-set \
+#     --change-set-name my-changes \
+#     --stack-name book-store
+#
+# ── Drift Detection ────────────────────────────────────────────
+#
+#   Drift = someone changed a resource outside CloudFormation
+#   (e.g., manually modified a security group rule in the console).
+#
+#   Detect drift:
+#   aws cloudformation detect-stack-drift --stack-name book-store
+#   aws cloudformation describe-stack-drift-detection-status \
+#     --stack-drift-detection-id <id>
+#
+#   Drift status:
+#     IN_SYNC  = resource matches template (good)
+#     MODIFIED = resource was changed outside CF (investigate!)
+#     DELETED  = resource was deleted outside CF (recreate!)
+#
+#   Best practice: run drift detection regularly, especially
+#   before stack updates. Manual changes can cause update failures.
+#
+# ── Stack Sets (Multi-Account Deployment) ──────────────────────
+#
+#   Deploy the same template across multiple AWS accounts and
+#   regions from a single management account.
+#
+#   Use case: deploy guardrail IAM policies, CloudTrail logging,
+#   or Config rules to all accounts in an AWS Organization.
+#
+#   aws cloudformation create-stack-set \
+#     --stack-set-name security-baseline \
+#     --template-body file://security.yaml \
+#     --permission-model SERVICE_MANAGED \
+#     --auto-deployment Enabled=true
+#
+#   SERVICE_MANAGED = automatically deploys to new accounts.
+#
+# ── Rollback Triggers ──────────────────────────────────────────
+#
+#   Monitor CloudWatch alarms during stack creation/update.
+#   If an alarm triggers within the monitoring period, the stack
+#   automatically rolls back.
+#
+#   Use case: deploy new ECS task definition, monitor error rate
+#   alarm for 10 minutes. If errors spike, auto-rollback.
+#
+# ── Macros & Transforms ────────────────────────────────────────
+#
+#   Transforms modify the template before CloudFormation processes it.
+#
+#   AWS::Include:     Include a YAML/JSON snippet from S3.
+#   AWS::Serverless:  SAM transform — shorthand for Lambda + API GW.
+#   Custom macros:    Lambda functions that transform templates.
+#
+#   Example: AWS::Serverless-2016-10-31 transform lets you write:
+#     Type: AWS::Serverless::Function
+#   instead of the verbose Lambda + IAM + API Gateway resources.
+#
+# ── Resource Import ─────────────────────────────────────────────
+#
+#   Import existing AWS resources into a CloudFormation stack.
+#   Useful when you created resources manually and want to manage
+#   them as code going forward.
+#
+#   1. Add the resource to your template (with DeletionPolicy: Retain)
+#   2. Create a change set with --change-set-type IMPORT
+#   3. Provide the resource identifier (e.g., bucket name)
+#   4. Execute the change set — resource is now managed by CF
+#
+#   The resource is NOT recreated — CF just starts tracking it.
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+# ── Transform ──────────────────────────────────────────────────
+# Transforms modify the template before CloudFormation processes it.
+# AWS::Include lets you pull in YAML snippets from S3.
+# If you're using SAM, you'd add AWS::Serverless-2016-10-31 here.
+#
+# Transform: AWS::Include is used later in the Resources section
+# for the shared snippet. We declare it at the top level:
+# Transform: 'AWS::Include'
+#
+# NOTE: Commented out because the S3 snippet URL doesn't exist.
+# In a real project, upload your shared snippets to S3 first.
+
+Description: >-
+  Advanced CloudFormation meta-template for the book-store.
+  Demonstrates nested stacks, custom resources, mappings,
+  conditions, cross-stack references, and stack policies.
+  See 24-cloudformation.py for all concepts.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+    Description: Deployment environment.
+
+  # ── S3 URLs for Nested Stack Templates ───────────────────────
+  # Nested stacks reference templates stored in S3. You upload
+  # your child templates first, then pass their URLs here.
+  #
+  # Upload command:
+  #   aws s3 cp cloudformation/ s3://my-cf-templates/book-store/ --recursive
+  #
+  # Or use `aws cloudformation package` to auto-upload:
+  #   aws cloudformation package \
+  #     --template-file parent.yaml \
+  #     --s3-bucket my-cf-templates \
+  #     --output-template-file packaged.yaml
+
+  VpcTemplateUrl:
+    Type: String
+    Default: 'https://s3.eu-west-1.amazonaws.com/book-store-cf-templates/02c-vpc.yaml'
+    Description: >-
+      S3 URL of the VPC template (02c-vpc.yaml).
+      Upload the template to S3 first, then paste the URL here.
+
+  S3TemplateUrl:
+    Type: String
+    Default: 'https://s3.eu-west-1.amazonaws.com/book-store-cf-templates/03c-s3.yaml'
+    Description: S3 URL of the S3 bucket template (03c-s3.yaml).
+
+  EcsTemplateUrl:
+    Type: String
+    Default: 'https://s3.eu-west-1.amazonaws.com/book-store-cf-templates/08c-ecs-fargate.yaml'
+    Description: S3 URL of the ECS Fargate template (08c-ecs-fargate.yaml).
+
+  LatestAmiLambdaArn:
+    Type: String
+    Default: ''
+    Description: >-
+      ARN of a Lambda function that fetches the latest AMI ID.
+      Used by the Custom Resource. Leave empty to skip the
+      custom resource (the AMI output will be empty).
+
+
+# ══════════════════════════════════════════════════════════════════
+# MAPPINGS
+# ══════════════════════════════════════════════════════════════════
+# Mappings are static lookup tables. Like Python dicts, they map
+# a key to a value. Useful for region-specific or env-specific
+# values that don't need to be parameters.
+#
+# Access with: !FindInMap [MapName, FirstKey, SecondKey]
+
+Mappings:
+
+  # ── Region → AMI Mapping ─────────────────────────────────────
+  # Different regions have different AMI IDs for the same image.
+  # This mapping stores the Amazon Linux 2023 AMI ID per region.
+  #
+  # NOTE: AMI IDs change frequently. In practice, use the Custom
+  # Resource below (or SSM public parameters) to look up the
+  # latest AMI dynamically instead of hardcoding them.
+  RegionAMI:
+    eu-west-1:
+      AmazonLinux2023: ami-0abcdef1234567890
+      # Replace with actual AMI ID for eu-west-1
+    us-east-1:
+      AmazonLinux2023: ami-0fedcba0987654321
+      # Replace with actual AMI ID for us-east-1
+    us-west-2:
+      AmazonLinux2023: ami-0123456789abcdef0
+
+  # ── Environment → Instance Type Mapping ──────────────────────
+  # Different environments use different instance sizes.
+  # Keeps instance sizing decisions in one place.
+  EnvironmentConfig:
+    dev:
+      InstanceType: t3.micro
+      DesiredCount: 1
+      # Dev: smallest instance, single task. Cheap.
+    qa:
+      InstanceType: t3.small
+      DesiredCount: 1
+    uat:
+      InstanceType: t3.medium
+      DesiredCount: 2
+      # UAT: medium instance, 2 tasks for basic HA testing.
+    prod:
+      InstanceType: t3.large
+      DesiredCount: 3
+      # Prod: larger instance, 3 tasks across AZs.
+
+  # Usage in Resources:
+  #   InstanceType: !FindInMap [EnvironmentConfig, !Ref Environment, InstanceType]
+  #   DesiredCount: !FindInMap [EnvironmentConfig, !Ref Environment, DesiredCount]
+
+
+# ══════════════════════════════════════════════════════════════════
+# CONDITIONS
+# ══════════════════════════════════════════════════════════════════
+# Conditions control whether resources are created or how properties
+# are set. Defined here, used in Resources with !If or Condition:.
+#
+# Think of them like Python if/else for infrastructure.
+
+Conditions:
+
+  IsProd: !Equals [!Ref Environment, prod]
+  # True only when Environment = "prod".
+  # Used to: enable Multi-AZ, create NAT in both AZs, enable
+  # deletion protection, increase backup retention, etc.
+
+  IsNotDev: !Not [!Equals [!Ref Environment, dev]]
+  # True for qa, uat, prod. False for dev.
+  # Used to: skip expensive resources in dev.
+
+  HasCustomResourceLambda: !Not [!Equals [!Ref LatestAmiLambdaArn, '']]
+  # True if a Lambda ARN was provided for the custom resource.
+
+  # More condition functions:
+  #   !And [condition1, condition2]     — both must be true
+  #   !Or  [condition1, condition2]     — either must be true
+  #   !Not [condition]                  — inverse
+  #   !Equals [value1, value2]          — equality check
+
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ────────────────────────────────────────────────────────────────
+  # NESTED STACK: VPC (from 02c-vpc.yaml)
+  # ────────────────────────────────────────────────────────────────
+  # A nested stack is a stack-within-a-stack. The parent template
+  # creates a child stack as a resource. When the parent is deleted,
+  # all child stacks are deleted too.
+  #
+  # Type: AWS::CloudFormation::Stack
+  # TemplateURL: must be an S3 URL (not local file path)
+  # Parameters: pass values to the child template's Parameters section
+  #
+  # Benefits:
+  #   - Break large templates into manageable pieces
+  #   - Reuse templates across projects
+  #   - Each nested stack can be up to 500 resources (vs 500 for
+  #     the root stack — effectively multiplying your resource limit)
+
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Ref VpcTemplateUrl
+      # S3 URL of the VPC template. Upload first:
+      #   aws s3 cp 02c-vpc.yaml s3://my-cf-templates/
+
+      Parameters:
+        Environment: !Ref Environment
+        # Pass the environment parameter to the child stack.
+        # The child template must have a matching Parameter.
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: NestedStack
+          Value: network
+
+      # TimeoutInMinutes: 30
+      # Optional: max time to wait for the nested stack to complete.
+      # Default is no timeout (waits indefinitely).
+
+      # NotificationARNs:
+      #   - !Ref StackEventsTopic
+      # Optional: SNS topic to receive stack events (CREATE_COMPLETE,
+      # UPDATE_FAILED, etc.). Useful for monitoring deployments.
+
+
+  # ────────────────────────────────────────────────────────────────
+  # NESTED STACK: S3 (from 03c-s3.yaml)
+  # ────────────────────────────────────────────────────────────────
+  # The S3 bucket stack. Independent of VPC — can be created
+  # in parallel with the NetworkStack.
+
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Ref S3TemplateUrl
+      Parameters:
+        Environment: !Ref Environment
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: NestedStack
+          Value: storage
+
+
+  # ────────────────────────────────────────────────────────────────
+  # NESTED STACK: ECS Fargate (from 08c-ecs-fargate.yaml)
+  # ────────────────────────────────────────────────────────────────
+  # The ECS stack depends on the VPC stack (needs subnet IDs).
+  # DependsOn ensures the VPC is created first.
+  #
+  # Use !GetAtt NestedStack.Outputs.OutputName to get values
+  # from the nested stack's Outputs section.
+
+  ComputeStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: NetworkStack
+    # DependsOn = create NetworkStack first, then ComputeStack.
+    # CloudFormation creates resources in parallel by default.
+    # DependsOn forces sequential creation when there's a
+    # dependency that CloudFormation can't infer automatically.
+    Properties:
+      TemplateURL: !Ref EcsTemplateUrl
+      Parameters:
+        Environment: !Ref Environment
+
+        # Pass VPC outputs to the ECS template.
+        # !GetAtt on a nested stack returns its Outputs.
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        # This assumes the VPC template has:
+        #   Outputs:
+        #     VpcId:
+        #       Value: !Ref VPC
+
+        # PrivateSubnetIds: !GetAtt NetworkStack.Outputs.PrivateSubnetIds
+        # Uncomment if the ECS template needs subnet IDs.
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: NestedStack
+          Value: compute
+
+
+  # ────────────────────────────────────────────────────────────────
+  # CROSS-STACK REFERENCE EXAMPLE
+  # ────────────────────────────────────────────────────────────────
+  # Fn::ImportValue reads an Output exported by ANOTHER stack.
+  # The other stack must have an Output with an Export name.
+  #
+  # Example: if stack "book-store-rds-dev" exports:
+  #   Outputs:
+  #     DBEndpointAddress:
+  #       Value: !GetAtt BookStoreDB.Endpoint.Address
+  #       Export:
+  #         Name: dev-DBEndpointAddress
+  #
+  # Then THIS stack can read it:
+  #   !ImportValue dev-DBEndpointAddress
+  #
+  # This SSM parameter stores the DB endpoint from a separate stack.
+  # It demonstrates cross-stack references without nesting.
+
+  ImportedDBEndpointParam:
+    Type: AWS::SSM::Parameter
+    Condition: IsNotDev
+    # Only create in qa/uat/prod (dev might not have an RDS stack).
+    Properties:
+      Name: !Sub '/book-store/${Environment}/imported/db-endpoint'
+      Type: String
+      Value: !ImportValue
+        Fn::Sub: '${Environment}-DBEndpointAddress'
+      # Fn::ImportValue reads the exported value from the RDS stack.
+      # The export name is: {Environment}-DBEndpointAddress
+      # (defined in the 20c-rds.yaml Outputs section).
+      #
+      # IMPORTANT: You cannot delete a stack that has exports being
+      # imported by other stacks. Remove the import first, then delete.
+      Description: !Sub 'DB endpoint imported from RDS stack (${Environment})'
+
+
+  # ────────────────────────────────────────────────────────────────
+  # CUSTOM RESOURCE (Lambda-Backed)
+  # ────────────────────────────────────────────────────────────────
+  # Custom resources let you run Lambda functions during stack
+  # operations (create, update, delete). The Lambda function can
+  # do ANYTHING — call APIs, look up values, create resources
+  # that CloudFormation doesn't natively support.
+  #
+  # Common use cases:
+  #   - Fetch the latest AMI ID
+  #   - Create DNS records in external providers
+  #   - Wait for an external service to be ready
+  #   - Clean up S3 buckets before stack deletion
+  #   - Seed a database with initial data
+  #
+  # How it works:
+  #   1. CloudFormation sends a request to the Lambda (Create/Update/Delete)
+  #   2. Lambda processes the request
+  #   3. Lambda sends a response back to CloudFormation (via pre-signed URL)
+  #   4. CloudFormation uses the response data in the template
+  #
+  # The Lambda function receives an event like:
+  #   {
+  #     "RequestType": "Create",      // or "Update" or "Delete"
+  #     "ResponseURL": "https://...", // pre-signed S3 URL for response
+  #     "ResourceProperties": {       // your custom properties
+  #       "Architecture": "x86_64"
+  #     }
+  #   }
+  #
+  # And must respond with:
+  #   {
+  #     "Status": "SUCCESS",
+  #     "PhysicalResourceId": "ami-123456",
+  #     "Data": {
+  #       "AmiId": "ami-123456"       // available via !GetAtt
+  #     }
+  #   }
+
+  LatestAmiLookup:
+    Type: AWS::CloudFormation::CustomResource
+    Condition: HasCustomResourceLambda
+    Properties:
+      ServiceToken: !Ref LatestAmiLambdaArn
+      # ServiceToken = ARN of the Lambda function to invoke.
+      # This is the only required property for custom resources.
+
+      # Custom properties — passed to the Lambda as ResourceProperties.
+      Architecture: x86_64
+      OperatingSystem: AmazonLinux2023
+      # The Lambda function uses these to look up the correct AMI.
+
+    # After creation, access the Lambda's return data:
+    #   !GetAtt LatestAmiLookup.AmiId
+    # (where "AmiId" is a key in the Lambda's response Data object)
+
+
+  # ────────────────────────────────────────────────────────────────
+  # EXAMPLE: Using Mappings and Conditions Together
+  # ────────────────────────────────────────────────────────────────
+  # This security group demonstrates both Mappings (for SSH CIDR)
+  # and Conditions (create only in non-prod environments).
+
+  DevBastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: IsNotDev
+    # Only created in qa/uat/prod (not dev, where you'd use
+    # CloudShell or Session Manager instead).
+    Properties:
+      GroupDescription: !Sub 'Bastion host access (${Environment})'
+      VpcId: !GetAtt NetworkStack.Outputs.VpcId
+
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '10.0.0.0/16'
+          # In production, restrict to specific IPs or use
+          # Session Manager instead of SSH.
+          Description: SSH from VPC
+
+      Tags:
+        - Key: Name
+          Value: !Sub 'book-store-bastion-sg-${Environment}'
+        - Key: InstanceType
+          Value: !FindInMap [EnvironmentConfig, !Ref Environment, InstanceType]
+          # Demonstrating !FindInMap — looks up the instance type
+          # for the current environment from the Mappings section.
+
+
+  # ────────────────────────────────────────────────────────────────
+  # TRANSFORM: AWS::Include (Shared Snippet)
+  # ────────────────────────────────────────────────────────────────
+  # AWS::Include pulls in a YAML/JSON snippet from S3 at deploy time.
+  # Use for shared resource definitions across multiple templates.
+  #
+  # Example: common tags, standard security group rules, or
+  # shared parameter definitions used by many templates.
+  #
+  # The snippet file on S3 (common-tags.yaml):
+  #   Tags:
+  #     - Key: ManagedBy
+  #       Value: CloudFormation
+  #     - Key: CostCenter
+  #       Value: engineering
+  #     - Key: Owner
+  #       Value: platform-team
+  #
+  # Usage in a resource:
+  #   Tags:
+  #     Fn::Transform:
+  #       Name: 'AWS::Include'
+  #       Parameters:
+  #         Location: s3://my-cf-templates/common-tags.yaml
+  #
+  # NOTE: The S3 file must exist before deploying the template.
+  # Commented out because the S3 URL doesn't exist in this demo.
+
+  # Example of how you'd use AWS::Include in a real template:
+  #
+  # SharedTagsExample:
+  #   Type: AWS::SSM::Parameter
+  #   Properties:
+  #     Name: !Sub '/book-store/${Environment}/transform-demo'
+  #     Type: String
+  #     Value: 'Demonstrates AWS::Include transform'
+  #     Fn::Transform:
+  #       Name: 'AWS::Include'
+  #       Parameters:
+  #         Location: !Sub 's3://book-store-cf-templates-${AWS::AccountId}/common-tags.yaml'
+
+  # Placeholder parameter to ensure Resources section is not empty
+  # when conditional resources are skipped.
+  TransformDemoParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/book-store/${Environment}/cf-advanced-demo'
+      Type: String
+      Value: !Sub 'Advanced CF template deployed for ${Environment}'
+      Description: Placeholder parameter for the advanced CF template demo
+
+
+# ══════════════════════════════════════════════════════════════════
+# STACK POLICY
+# ══════════════════════════════════════════════════════════════════
+# Stack policies prevent accidental updates or replacements of
+# critical resources. Applied via the CLI, not in the template:
+#
+# aws cloudformation set-stack-policy \
+#   --stack-name book-store-prod \
+#   --stack-policy-body '{
+#     "Statement": [
+#       {
+#         "Effect": "Allow",
+#         "Action": "Update:*",
+#         "Principal": "*",
+#         "Resource": "*"
+#       },
+#       {
+#         "Effect": "Deny",
+#         "Action": "Update:Replace",
+#         "Principal": "*",
+#         "Resource": "LogicalResourceId/BookStoreDB",
+#         "Condition": {
+#           "StringEquals": {
+#             "ResourceType": ["AWS::RDS::DBInstance"]
+#           }
+#         }
+#       }
+#     ]
+#   }'
+#
+# This policy:
+#   - Allows all updates to all resources (first statement)
+#   - DENIES replacing the RDS database (second statement)
+#
+# If you try to update a property that requires replacement
+# (e.g., changing the DB engine), CloudFormation will refuse.
+# You must explicitly override the policy for that update.
+#
+# Override for a single update:
+# aws cloudformation update-stack \
+#   --stack-name book-store-prod \
+#   --template-body file://template.yaml \
+#   --stack-policy-during-update-body '{
+#     "Statement": [{ "Effect": "Allow", "Action": "Update:*",
+#       "Principal": "*", "Resource": "*" }]
+#   }'
+#
+# Stack policies are IMPORTANT for production databases, stateful
+# services, and anything that would cause data loss if replaced.
+
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+# Outputs from this template can be:
+#   1. Displayed in the console/CLI after stack creation
+#   2. Exported for use by other stacks (Fn::ImportValue)
+#   3. Read from nested stacks (!GetAtt NestedStack.Outputs.Key)
+
+Outputs:
+
+  # ── Nested Stack Outputs ─────────────────────────────────────
+  NetworkStackId:
+    Description: Stack ID of the nested VPC stack
+    Value: !Ref NetworkStack
+    # !Ref on a nested stack returns the stack ID.
+
+  NetworkStackVpcId:
+    Description: VPC ID from the nested network stack
+    Value: !GetAtt NetworkStack.Outputs.VpcId
+    # Reading an output from a nested stack.
+    # The VPC template must have this in its Outputs.
+    Export:
+      Name: !Sub '${Environment}-VpcId'
+      # Export makes this available to any stack in the account/region.
+      # Other stacks can use:
+      #   !ImportValue dev-VpcId
+      #
+      # CAUTION: You cannot delete a stack that has active exports
+      # being imported by other stacks. Plan your export dependencies.
+
+  StorageStackId:
+    Description: Stack ID of the nested S3 stack
+    Value: !Ref StorageStack
+
+  ComputeStackId:
+    Description: Stack ID of the nested ECS stack
+    Value: !Ref ComputeStack
+
+  # ── Mapping Lookup Results ───────────────────────────────────
+  InstanceTypeForEnv:
+    Description: Instance type selected for this environment (from Mappings)
+    Value: !FindInMap [EnvironmentConfig, !Ref Environment, InstanceType]
+    # Shows which instance type the Mappings selected.
+    # dev=t3.micro, qa=t3.small, uat=t3.medium, prod=t3.large
+
+  DesiredCountForEnv:
+    Description: Desired task count for this environment (from Mappings)
+    Value: !FindInMap [EnvironmentConfig, !Ref Environment, DesiredCount]
+
+  # ── Custom Resource Output ──────────────────────────────────
+  LatestAmiId:
+    Condition: HasCustomResourceLambda
+    Description: >-
+      Latest AMI ID fetched by the custom resource Lambda.
+      Use this in EC2 instance or launch template definitions.
+    Value: !GetAtt LatestAmiLookup.AmiId
+    # The key "AmiId" must match what the Lambda returns in its
+    # response Data object. If the Lambda returns
+    # {"Data": {"AmiId": "ami-abc123"}}, then !GetAtt returns "ami-abc123".
+
+  RegionAmiFromMapping:
+    Description: >-
+      AMI ID from the static Mappings table (may be outdated).
+      Prefer the custom resource output for the latest AMI.
+    Value: !FindInMap [RegionAMI, !Ref 'AWS::Region', AmazonLinux2023]
+
+  # ── Condition Result ─────────────────────────────────────────
+  IsProductionEnvironment:
+    Description: Whether this stack is deployed to production
+    Value: !If [IsProd, 'YES - Production', 'No - Non-production']
+    # !If evaluates the condition and returns one of two values.
+    # Useful for displaying environment-specific info in outputs.
+
+  # ── Summary ──────────────────────────────────────────────────
+  StackSummary:
+    Description: Summary of what this meta-template deployed
+    Value: !Sub >-
+      Deployed book-store infrastructure for ${Environment}:
+      Network (VPC + subnets), Storage (S3), Compute (ECS Fargate).
+      Instance type: ${!FindInMap [EnvironmentConfig, ${Environment}, InstanceType]} is looked up from Mappings.
+      Region: ${AWS::Region}, Account: ${AWS::AccountId}.

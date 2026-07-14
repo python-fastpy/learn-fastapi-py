@@ -1,0 +1,594 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — RDS (Step 20)
+# ══════════════════════════════════════════════════════════════════
+# Companion to: 20-rds.py
+# Navigation:  ← prev: 19c-codedeploy-pipeline.yaml  |  next: 21c-cognito.yaml →
+#
+# WHAT THIS TEMPLATE CREATES:
+#   A production-ready PostgreSQL database on RDS:
+#     - DB subnet group (private subnets only)
+#     - Security group (only ECS tasks can connect)
+#     - RDS PostgreSQL instance with encryption + backups
+#     - (Optional) Aurora Serverless v2 cluster (commented out)
+#
+# ── RDS vs Aurora ───────────────────────────────────────────────
+#
+#   ┌──────────────────┬─────────────────────────────────────────┐
+#   │ Feature          │ Standard RDS         │ Aurora            │
+#   ├──────────────────┼──────────────────────┼───────────────────┤
+#   │ Engine           │ Stock PostgreSQL/     │ AWS-rewritten     │
+#   │                  │ MySQL                │ engine            │
+#   ├──────────────────┼──────────────────────┼───────────────────┤
+#   │ Storage          │ You choose size      │ Auto-scales       │
+#   │                  │ (20 GB - 64 TB)      │ (10 GB - 128 TB) │
+#   ├──────────────────┼──────────────────────┼───────────────────┤
+#   │ Replication      │ 1 standby (Multi-AZ) │ Up to 15 read    │
+#   │                  │ 5 read replicas      │ replicas          │
+#   ├──────────────────┼──────────────────────┼───────────────────┤
+#   │ Failover         │ 60-120 seconds       │ ~30 seconds       │
+#   ├──────────────────┼──────────────────────┼───────────────────┤
+#   │ Serverless       │ No                   │ Yes (v2)          │
+#   ├──────────────────┼──────────────────────┼───────────────────┤
+#   │ Cost             │ Lower baseline       │ ~2x standard RDS  │
+#   ├──────────────────┼──────────────────────┼───────────────────┤
+#   │ Best for         │ Dev/test, small-     │ Production,       │
+#   │                  │ medium workloads     │ high availability │
+#   └──────────────────┴──────────────────────┴───────────────────┘
+#
+#   Use standard RDS for: dev/test, cost-sensitive workloads,
+#   simple single-writer patterns.
+#
+#   Use Aurora for: production with high availability needs,
+#   read-heavy workloads (15 replicas), serverless/variable load.
+#
+# ── Storage Types ───────────────────────────────────────────────
+#
+#   ┌──────────┬────────────────────────────────────────────────┐
+#   │ Type     │ Notes                                          │
+#   ├──────────┼────────────────────────────────────────────────┤
+#   │ gp3      │ General Purpose SSD. Best default. 3000 IOPS  │
+#   │          │ baseline (free). Scale IOPS independently.     │
+#   ├──────────┼────────────────────────────────────────────────┤
+#   │ gp2      │ Older General Purpose. IOPS tied to storage   │
+#   │          │ size (3 IOPS/GB). Prefer gp3 for new DBs.     │
+#   ├──────────┼────────────────────────────────────────────────┤
+#   │ io1/io2  │ Provisioned IOPS. For sustained heavy I/O.    │
+#   │          │ Up to 256,000 IOPS. Expensive.                │
+#   ├──────────┼────────────────────────────────────────────────┤
+#   │ magnetic │ Previous gen. Don't use for new databases.    │
+#   └──────────┴────────────────────────────────────────────────┘
+#
+# ── Multi-AZ vs Read Replicas ──────────────────────────────────
+#
+#   Multi-AZ (high availability):
+#     - Synchronous replication to standby in different AZ
+#     - Automatic failover if primary fails (60-120 sec)
+#     - Standby is NOT readable — it just waits
+#     - Same endpoint, automatic DNS switchover
+#     - Cost: 2x (you're paying for the standby instance)
+#
+#   Read Replicas (read scaling):
+#     - Asynchronous replication (slight lag)
+#     - Readable — offload SELECT queries
+#     - Different endpoint (your app must route reads)
+#     - Can be in different regions (cross-region replication)
+#     - Can be promoted to standalone DB
+#     - Up to 5 for standard RDS, 15 for Aurora
+#
+#   For the book-store:
+#     Dev:  Single-AZ, no replicas (save money)
+#     Prod: Multi-AZ + 1 read replica (availability + read scaling)
+#
+# ── Point-in-Time Recovery (PITR) ──────────────────────────────
+#
+#   RDS continuously backs up your database to S3 (transaction logs).
+#   You can restore to any second within the retention period.
+#
+#   BackupRetentionPeriod: 7 means you can restore to any point
+#   in the last 7 days. Max is 35 days. Set to 0 to disable
+#   (NOT recommended — you lose PITR completely).
+#
+#   How it works:
+#     1. RDS takes daily automated snapshots
+#     2. Transaction logs are backed up every 5 minutes
+#     3. "Restore to point in time" creates a NEW DB instance
+#        from the snapshot + replayed transaction logs
+#     4. Original DB is unaffected
+#
+# ── Parameter Groups ───────────────────────────────────────────
+#
+#   RDS parameter groups let you tune database engine settings.
+#   Think of them as postgresql.conf managed by AWS.
+#
+#   Examples:
+#     shared_buffers:  Memory for caching (default: ~25% of RAM)
+#     max_connections:  Max simultaneous connections (default: varies)
+#     log_statement:    SQL logging ('none', 'ddl', 'mod', 'all')
+#
+#   Two types:
+#     DB Parameter Group:      Instance-level settings
+#     DB Cluster Parameter Group: Aurora cluster-level settings
+#
+#   You rarely need a custom parameter group for dev. Production
+#   might tune max_connections or enable pgaudit.
+#
+# ── Failover Process ───────────────────────────────────────────
+#
+#   When Multi-AZ failover occurs:
+#     1. Primary instance becomes unhealthy
+#     2. RDS promotes the standby to primary
+#     3. DNS endpoint (book-store-db.xxx.rds.amazonaws.com) is
+#        updated to point to the new primary
+#     4. Old primary is replaced
+#     5. Your app reconnects automatically (same endpoint)
+#     Total time: 60-120 seconds for standard RDS, ~30s for Aurora
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  RDS PostgreSQL database for the book-store API.
+  Includes subnet group, security group, encrypted instance with
+  automated backups. See 20-rds.py for console walkthrough.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+    Description: Deployment environment. Controls Multi-AZ and instance size.
+
+  # ── Network (from VPC stack) ─────────────────────────────────
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: >-
+      VPC ID where the database will live.
+      From the 02c-vpc template output.
+
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >-
+      Comma-separated list of private subnet IDs (at least 2, in
+      different AZs). RDS requires subnets in at least 2 AZs for
+      the subnet group, even if Multi-AZ is disabled.
+
+  EcsTasksSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: >-
+      Security group ID of ECS tasks that need to connect to the DB.
+      The DB security group will allow inbound from this SG.
+
+  # ── Database Config ──────────────────────────────────────────
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.t3.micro      # 2 vCPU, 1 GB  — Free tier eligible
+      - db.t3.small      # 2 vCPU, 2 GB  — Dev/test
+      - db.t3.medium     # 2 vCPU, 4 GB  — Small production
+      - db.r6g.large     # 2 vCPU, 16 GB — Production
+      - db.r6g.xlarge    # 4 vCPU, 32 GB — High-performance
+    Description: >-
+      Instance type. t3.micro for dev (free tier), r6g.large+ for prod.
+      "t" = burstable (good for variable load).
+      "r" = memory-optimized (good for databases).
+      "g" suffix = Graviton (ARM) — 20% cheaper, same performance.
+
+  AllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 65536
+    Description: >-
+      Storage size in GB. Minimum 20 GB for gp3. Can auto-scale with
+      MaxAllocatedStorage. gp3 includes 3000 IOPS baseline for free.
+
+  MultiAZ:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Enable Multi-AZ for high availability. Creates a synchronous
+      standby replica in a different AZ. Doubles the cost.
+      Set to true for production, false for dev.
+
+  # ── Credentials ──────────────────────────────────────────────
+
+  DBMasterUsername:
+    Type: String
+    Default: bookadmin
+    Description: >-
+      Master username for the database. Avoid "admin" or "postgres"
+      (common targets for attackers).
+    MinLength: 1
+    MaxLength: 63
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: Must start with a letter, alphanumeric only.
+
+  DBMasterPasswordSecretArn:
+    Type: String
+    Description: >-
+      ARN of the Secrets Manager secret containing the master password.
+      Create the secret first (see 13c-secrets-manager template), then
+      pass its ARN here.
+
+      CloudFormation uses dynamic references to resolve the secret:
+        {{resolve:secretsmanager:SECRET_ARN:SecretString:password}}
+
+      This means the actual password never appears in the template
+      or in CloudFormation state. It's resolved at deploy time.
+
+
+# ══════════════════════════════════════════════════════════════════
+# CONDITIONS
+# ══════════════════════════════════════════════════════════════════
+# Conditions let you create resources or set values based on
+# parameter inputs. Think of them like if/else in Python.
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, prod]
+  # Used below to set deletion protection and backup retention.
+
+  EnableMultiAZ: !Equals [!Ref MultiAZ, 'true']
+  # Controls whether the standby replica is created.
+
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ────────────────────────────────────────────────────────────────
+  # DB SUBNET GROUP
+  # ────────────────────────────────────────────────────────────────
+  # Tells RDS which subnets it can place instances in. Must include
+  # subnets in at least 2 Availability Zones (AWS requirement).
+  #
+  # IMPORTANT: Use PRIVATE subnets. Your database should never be
+  # in a public subnet. Even with no public IP, public subnets have
+  # a route to the internet — private subnets don't.
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub 'book-store-db-subnets-${Environment}'
+      DBSubnetGroupDescription: !Sub 'Private subnets for book-store DB (${Environment})'
+      SubnetIds: !Ref PrivateSubnetIds
+      # Passes the list of private subnet IDs from the parameter.
+      # RDS will place the primary in one AZ and the standby
+      # (if Multi-AZ) in another.
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ────────────────────────────────────────────────────────────────
+  # SECURITY GROUP
+  # ────────────────────────────────────────────────────────────────
+  # Controls network access to the database. Only allow connections
+  # from your application (ECS tasks), not from the internet.
+  #
+  # Security group rules are stateful: if inbound traffic is allowed,
+  # the response is automatically allowed (no outbound rule needed).
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'book-store-db-sg-${Environment}'
+      GroupDescription: !Sub 'Allow PostgreSQL access from ECS tasks (${Environment})'
+      VpcId: !Ref VpcId
+
+      SecurityGroupIngress:
+        # Allow inbound PostgreSQL (port 5432) from ECS tasks only.
+        # SourceSecurityGroupId = "allow traffic from any instance
+        # that has THIS security group attached."
+        # This is much better than allowing an IP range — if ECS
+        # tasks scale up/down or get new IPs, the rule still works.
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref EcsTasksSecurityGroupId
+          Description: PostgreSQL from ECS tasks
+
+      # No SecurityGroupEgress = uses VPC default (allow all outbound).
+      # RDS doesn't initiate outbound connections, so this is fine.
+
+      Tags:
+        - Key: Name
+          Value: !Sub 'book-store-db-sg-${Environment}'
+        - Key: Project
+          Value: book-store
+
+
+  # ────────────────────────────────────────────────────────────────
+  # RDS POSTGRESQL INSTANCE
+  # ────────────────────────────────────────────────────────────────
+  # The database itself. Key design decisions:
+  #
+  # DeletionPolicy: Snapshot
+  #   When you DELETE this CloudFormation stack, RDS will create a
+  #   final snapshot before deleting the instance. This is your
+  #   safety net — you can restore from the snapshot later.
+  #   Options: Delete (no snapshot), Retain (keep instance), Snapshot.
+  #
+  # UpdateReplacePolicy: Snapshot
+  #   If CloudFormation needs to REPLACE the instance (e.g., you
+  #   change the engine version), it takes a snapshot of the old
+  #   one before creating the new one.
+
+  BookStoreDB:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub 'book-store-db-${Environment}'
+      # The name you see in the RDS console. Must be unique per region.
+
+      # ── Engine ───────────────────────────────────────────────
+      Engine: postgres
+      EngineVersion: '16.4'
+      # PostgreSQL 16 is the latest major version (as of 2024).
+      # Minor versions (16.1, 16.2, etc.) include security patches.
+      # AWS auto-applies minor version upgrades during maintenance
+      # windows when AutoMinorVersionUpgrade is true.
+
+      AutoMinorVersionUpgrade: true
+      # Automatically apply minor version patches (e.g., 16.3 → 16.4)
+      # during the maintenance window. Recommended for security fixes.
+      # Major version upgrades (15 → 16) are always manual.
+
+      # ── Instance Size ────────────────────────────────────────
+      DBInstanceClass: !Ref DBInstanceClass
+
+      # ── Storage ──────────────────────────────────────────────
+      AllocatedStorage: !Ref AllocatedStorage
+      StorageType: gp3
+      # gp3 = General Purpose SSD v3. Includes 3000 IOPS and
+      # 125 MB/s throughput for free (regardless of storage size).
+      # gp2 ties IOPS to storage size (3 IOPS/GB), so you'd need
+      # 1000 GB to get 3000 IOPS. gp3 gives them for free at 20 GB.
+
+      MaxAllocatedStorage: 100
+      # Enable storage auto-scaling. If the database fills up,
+      # RDS automatically increases storage up to this limit.
+      # Scaling happens in 10% increments, no downtime.
+      # Set this to avoid "disk full" emergencies.
+
+      # ── Network ──────────────────────────────────────────────
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !GetAtt DBSecurityGroup.GroupId
+      PubliclyAccessible: false
+      # CRITICAL: false = no public IP, only reachable from within
+      # the VPC. Your ECS tasks connect via the private endpoint.
+      # NEVER set this to true in production.
+
+      # ── High Availability ────────────────────────────────────
+      MultiAZ: !If [EnableMultiAZ, true, false]
+      # !If is a CloudFormation conditional. It evaluates the
+      # EnableMultiAZ condition defined above.
+      # true = create a synchronous standby in another AZ.
+      # false = single instance (cheaper, but no auto-failover).
+
+      # ── Credentials ─────────────────────────────────────────
+      MasterUsername: !Ref DBMasterUsername
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBMasterPasswordSecretArn}:SecretString:password}}'
+      # Dynamic reference to Secrets Manager. CloudFormation resolves
+      # this at deploy time — the password never appears in the
+      # template, stack events, or state file.
+      #
+      # Format: {{resolve:secretsmanager:SECRET_ARN:SecretString:JSON_KEY}}
+      # The secret should be a JSON object like:
+      #   {"password": "MyStr0ngP@ssw0rd!"}
+      #
+      # Alternative: use ManageMasterUserPassword: true to let RDS
+      # create and manage the secret automatically (new in 2023).
+
+      # ── Database ─────────────────────────────────────────────
+      DBName: bookstore
+      # Name of the default database created on the instance.
+      # Your app connects to this database. You can create more
+      # databases later via SQL (CREATE DATABASE).
+      Port: 5432
+      # Default PostgreSQL port. Change only if you have a reason.
+
+      # ── Backups ──────────────────────────────────────────────
+      BackupRetentionPeriod: !If [IsProduction, 14, 7]
+      # Number of days to keep automated backups.
+      # 7 = can restore to any second in the last 7 days (PITR).
+      # Production: 14-35 days. Dev: 7 is fine.
+      # Set to 0 to disable backups (NOT recommended).
+
+      PreferredBackupWindow: '03:00-04:00'
+      # UTC time window for daily automated snapshots.
+      # Choose a low-traffic period. 30-minute minimum window.
+
+      PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
+      # UTC time window for maintenance (patching, minor upgrades).
+      # Must not overlap with backup window.
+
+      CopyTagsToSnapshot: true
+      # Tags from the DB instance are copied to snapshots.
+      # Useful for identifying which environment a snapshot came from.
+
+      # ── Encryption ───────────────────────────────────────────
+      StorageEncrypted: true
+      # Encrypt data at rest using AES-256.
+      # Uses the default aws/rds KMS key unless you specify KmsKeyId.
+      # CANNOT be enabled after creation — must be set at creation time.
+      # No performance impact (encryption is handled by the storage layer).
+
+      # KmsKeyId: !Ref MyKmsKey
+      # Optional: use a customer-managed KMS key instead of the
+      # default aws/rds key. Needed for cross-account snapshot sharing.
+
+      # ── Deletion Protection ──────────────────────────────────
+      DeletionProtection: !If [IsProduction, true, false]
+      # Prevents accidental deletion via console or API.
+      # Must be explicitly disabled before deleting the instance.
+      # Enable for production, disable for dev (easier cleanup).
+
+      # ── Monitoring ───────────────────────────────────────────
+      EnablePerformanceInsights: true
+      # Performance Insights helps you identify SQL queries that are
+      # causing high CPU, I/O, or lock waits. Free for 7 days retention.
+      PerformanceInsightsRetentionPeriod: 7
+      # 7 = free tier. 731 (2 years) = paid ($2.50/vCPU/month).
+
+      # EnableCloudwatchLogsExports:
+      #   - postgresql
+      #   - upgrade
+      # Uncomment to send PostgreSQL logs to CloudWatch.
+      # Useful for auditing queries and debugging connection issues.
+
+      Tags:
+        - Key: Name
+          Value: !Sub 'book-store-db-${Environment}'
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ────────────────────────────────────────────────────────────────
+  # AURORA SERVERLESS v2 (COMMENTED OUT)
+  # ────────────────────────────────────────────────────────────────
+  # Aurora Serverless v2 is the recommended production choice:
+  #   - Auto-scales compute (0.5 to 128 ACUs)
+  #   - Storage auto-scales (10 GB to 128 TB)
+  #   - Up to 15 read replicas
+  #   - Faster failover (~30 seconds)
+  #   - ~2x cost of standard RDS at steady state
+  #
+  # ACU (Aurora Capacity Unit) = ~2 GB RAM + proportional CPU.
+  # 0.5 ACU minimum = 1 GB RAM (enough for dev).
+  # Scale to 128 ACU for heavy production workloads.
+  #
+  # The Aurora architecture:
+  #   - Shared storage layer (6 copies across 3 AZs)
+  #   - Writer instance (handles writes + reads)
+  #   - Reader instances (read-only, auto-scale)
+  #   - Single cluster endpoint for writes
+  #   - Reader endpoint for read-only queries (load balanced)
+
+  # AuroraCluster:
+  #   Type: AWS::RDS::DBCluster
+  #   DeletionPolicy: Snapshot
+  #   Properties:
+  #     DBClusterIdentifier: !Sub 'book-store-aurora-${Environment}'
+  #     Engine: aurora-postgresql
+  #     EngineVersion: '16.4'
+  #     # Aurora PostgreSQL is wire-compatible with standard PostgreSQL.
+  #     # Your app code doesn't need to change.
+  #
+  #     # Serverless v2 scaling configuration
+  #     ServerlessV2ScalingConfiguration:
+  #       MinCapacity: 0.5
+  #       MaxCapacity: 16
+  #       # 0.5 ACU = minimum (~1 GB RAM). Good for dev.
+  #       # 16 ACU = ~32 GB RAM. Adjust for your workload.
+  #       # Aurora scales up/down automatically based on load.
+  #       # Scaling happens in ~15 seconds, no connection drops.
+  #
+  #     DatabaseName: bookstore
+  #     Port: 5432
+  #     MasterUsername: !Ref DBMasterUsername
+  #     ManageMasterUserPassword: true
+  #     # ManageMasterUserPassword: true = RDS creates and manages
+  #     # the master password in Secrets Manager automatically.
+  #     # No need to create a separate secret or use dynamic references.
+  #     # (New feature, simpler than the manual approach above.)
+  #
+  #     DBSubnetGroupName: !Ref DBSubnetGroup
+  #     VpcSecurityGroupIds:
+  #       - !GetAtt DBSecurityGroup.GroupId
+  #
+  #     BackupRetentionPeriod: 14
+  #     StorageEncrypted: true
+  #     DeletionProtection: !If [IsProduction, true, false]
+  #
+  #     Tags:
+  #       - Key: Project
+  #         Value: book-store
+
+  # # Writer instance (required — handles writes + reads)
+  # AuroraWriterInstance:
+  #   Type: AWS::RDS::DBInstance
+  #   Properties:
+  #     DBClusterIdentifier: !Ref AuroraCluster
+  #     DBInstanceIdentifier: !Sub 'book-store-aurora-writer-${Environment}'
+  #     DBInstanceClass: db.serverless
+  #     # db.serverless = Aurora Serverless v2 instance class.
+  #     # Scaling is controlled by the cluster's ScalingConfiguration.
+  #     Engine: aurora-postgresql
+  #     PubliclyAccessible: false
+
+  # # Reader instance (optional — for read scaling)
+  # AuroraReaderInstance:
+  #   Type: AWS::RDS::DBInstance
+  #   Properties:
+  #     DBClusterIdentifier: !Ref AuroraCluster
+  #     DBInstanceIdentifier: !Sub 'book-store-aurora-reader-${Environment}'
+  #     DBInstanceClass: db.serverless
+  #     Engine: aurora-postgresql
+  #     PubliclyAccessible: false
+  #     # The reader endpoint load-balances across all reader instances.
+  #     # Your app should use the reader endpoint for SELECT queries:
+  #     #   Writer: book-store-aurora-dev.cluster-xxx.rds.amazonaws.com
+  #     #   Reader: book-store-aurora-dev.cluster-ro-xxx.rds.amazonaws.com
+
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  DBEndpointAddress:
+    Description: >-
+      Database endpoint address. Use this in your app's DATABASE_URL.
+      Example: book-store-db-dev.abc123.eu-west-1.rds.amazonaws.com
+    Value: !GetAtt BookStoreDB.Endpoint.Address
+    Export:
+      Name: !Sub '${Environment}-DBEndpointAddress'
+      # Export makes this value available to other stacks via
+      # Fn::ImportValue. Your ECS task definition can import this
+      # to set the DATABASE_URL environment variable.
+
+  DBEndpointPort:
+    Description: Database port (default 5432 for PostgreSQL)
+    Value: !GetAtt BookStoreDB.Endpoint.Port
+    Export:
+      Name: !Sub '${Environment}-DBEndpointPort'
+
+  DBInstanceId:
+    Description: RDS instance identifier
+    Value: !Ref BookStoreDB
+    # !Ref on a DBInstance returns the DBInstanceIdentifier.
+
+  DBSecurityGroupId:
+    Description: Security group ID for the database
+    Value: !GetAtt DBSecurityGroup.GroupId
+    Export:
+      Name: !Sub '${Environment}-DBSecurityGroupId'
+      # Export so other stacks can reference this SG
+      # (e.g., Lambda functions that need DB access).
+
+  ConnectionString:
+    Description: >-
+      PostgreSQL connection string template (password not included).
+      Replace <PASSWORD> with the value from Secrets Manager.
+    Value: !Sub 'postgresql://${DBMasterUsername}:<PASSWORD>@${BookStoreDB.Endpoint.Address}:${BookStoreDB.Endpoint.Port}/bookstore'
+    # This is for documentation only — never put actual passwords
+    # in CloudFormation outputs.

@@ -1,0 +1,475 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — ALB (Step 8)
+# ══════════════════════════════════════════════════════════════════
+# Companion to: 09-alb.py (console walkthrough)
+# Navigation:  ← prev: 08c-ecs-fargate.yaml  |  next: 10c-cloudwatch.yaml →
+#
+# This template creates an Application Load Balancer with:
+#   - ALB in public subnets (internet-facing)
+#   - Target group (IP type for Fargate)
+#   - HTTP listener (redirect to HTTPS)
+#   - HTTPS listener (forward to target group)
+#   - Path-based routing rules
+#
+# REAL REPO: Skills use a shared ALB with path-based routing:
+#   /story-drafting/*  → Story Drafting Target Group
+#   /urgent-drafting/* → Urgent Drafting Target Group
+#   /text-archive/*    → Text Archive Target Group
+#
+#   Client (Browser / Leon Frontend)
+#     │
+#     ▼
+#   ALB (public subnets, internet-facing)
+#     │ HTTPS :443
+#     │
+#     ├── /story-drafting/*  → Target Group A → ECS Tasks (port 8004)
+#     ├── /urgent-drafting/* → Target Group B → ECS Tasks (port 8003)
+#     └── /text-archive/*   → Target Group C → ECS Tasks (port 8000)
+#
+# LOAD BALANCER TYPES:
+#   ┌──────────────┬───────┬──────────────────────────────────┐
+#   │ ALB          │ L7    │ HTTP path/host routing. Best for │
+#   │ (Application)│(HTTP) │ web apps and APIs. USED HERE.    │
+#   ├──────────────┼───────┼──────────────────────────────────┤
+#   │ NLB          │ L4    │ TCP/UDP. Ultra-low latency.      │
+#   │ (Network)    │(TCP)  │ Static IPs. gRPC, gaming.        │
+#   ├──────────────┼───────┼──────────────────────────────────┤
+#   │ GWLB         │ L3    │ Inline security appliances.      │
+#   │ (Gateway)    │(IP)   │ Firewalls, IDS/IPS. Rare.        │
+#   └──────────────┴───────┴──────────────────────────────────┘
+#
+# DEPLOY:
+#   aws cloudformation create-stack \
+#     --stack-name book-store-alb \
+#     --template-body file://09c-alb.yaml \
+#     --parameters \
+#       ParameterKey=VpcId,ParameterValue=vpc-abc123 \
+#       ParameterKey=PublicSubnetIds,ParameterValue="subnet-1\,subnet-2" \
+#       ParameterKey=CertificateArn,ParameterValue=arn:aws:acm:eu-west-1:123:certificate/abc
+#
+# COST: ALB ~$0.025/hour (~$18/month) + $0.008 per LCU-hour
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Application Load Balancer for the Book Store API.
+  Creates ALB, target group, HTTP/HTTPS listeners,
+  and path-based routing rules.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the ALB will be created
+
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >-
+      Public subnets for the ALB (at least 2, in different AZs).
+      ALB must be in public subnets to receive internet traffic.
+
+  # ── ACM Certificate ──────────────────────────────────────────
+  # You need an SSL certificate for HTTPS. ACM (AWS Certificate
+  # Manager) provides free certificates. Create one first
+  # (see 11c-route53-cloudfront-acm.yaml), then paste the ARN here.
+  CertificateArn:
+    Type: String
+    Description: >-
+      ARN of the ACM certificate for HTTPS.
+      Example: arn:aws:acm:eu-west-1:123456789:certificate/abc-def-123
+
+  HealthCheckPath:
+    Type: String
+    Default: /health
+    Description: >-
+      URL path the ALB uses to check if targets are healthy.
+      Your FastAPI app must return 200 OK on this path.
+
+  TargetPort:
+    Type: Number
+    Default: 8000
+    Description: Port your containers listen on
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ════════════════════════════════════════════════════════════════
+  # ALB SECURITY GROUP
+  # ════════════════════════════════════════════════════════════════
+
+  # The ALB needs its own security group. It allows:
+  #   Inbound:  HTTP (80) and HTTPS (443) from the internet
+  #   Outbound: traffic to ECS tasks on their container port
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the Application Load Balancer
+      GroupName: !Sub '${AWS::StackName}-alb-sg'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        # ── Allow HTTP from anywhere ───────────────────────────
+        # We allow port 80 so we can redirect to HTTPS.
+        # Without this rule, users typing http://... would get nothing.
+        - Description: Allow HTTP from internet (will redirect to HTTPS)
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        # ── Allow HTTPS from anywhere ──────────────────────────
+        - Description: Allow HTTPS from internet
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        # ── Allow outbound to anywhere ─────────────────────────
+        # ALB needs to reach ECS tasks in private subnets.
+        - Description: Allow all outbound
+          IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-alb-sg'
+
+  # ════════════════════════════════════════════════════════════════
+  # APPLICATION LOAD BALANCER
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is an ALB? ──────────────────────────────────────────
+  # An Application Load Balancer distributes incoming HTTP/HTTPS
+  # requests across multiple targets (ECS tasks, EC2 instances, IPs).
+  # It operates at Layer 7 (HTTP) so it can route based on:
+  #   - URL path (/api/*, /static/*)
+  #   - Host header (api.example.com, www.example.com)
+  #   - Query strings, HTTP methods, source IP
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${AWS::StackName}-alb'
+      # ── Scheme ───────────────────────────────────────────────
+      # internet-facing: ALB gets a public IP, accessible from internet.
+      # internal:        ALB gets a private IP, only accessible from VPC.
+      #                  Use for service-to-service communication.
+      Scheme: internet-facing
+      # ── Type ─────────────────────────────────────────────────
+      # "application" = ALB (Layer 7, HTTP)
+      # "network"     = NLB (Layer 4, TCP/UDP)
+      # "gateway"     = GWLB (Layer 3, inline appliances)
+      Type: application
+      # ── Subnets ──────────────────────────────────────────────
+      # ALB needs at least 2 subnets in different AZs.
+      # Internet-facing ALB must be in PUBLIC subnets.
+      Subnets: !Ref PublicSubnetIds
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      # ── IP Address Type ──────────────────────────────────────
+      # ipv4:      IPv4 only (most common)
+      # dualstack: IPv4 + IPv6
+      IpAddressType: ipv4
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ════════════════════════════════════════════════════════════════
+  # TARGET GROUP
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is a Target Group? ──────────────────────────────────
+  # A target group is a collection of targets (IPs, instances, Lambdas)
+  # that receive traffic from a listener. The ALB health-checks each
+  # target and only sends traffic to healthy ones.
+  #
+  # TARGET TYPES:
+  #   ┌──────────┬──────────────────────────────────────────────┐
+  #   │ instance │ Targets are EC2 instance IDs.                │
+  #   │          │ Traffic goes to the instance on the port.    │
+  #   ├──────────┼──────────────────────────────────────────────┤
+  #   │ ip       │ Targets are IP addresses. REQUIRED for       │
+  #   │          │ Fargate (each task has its own IP).          │
+  #   │          │ Also for targets in peered VPCs.             │
+  #   ├──────────┼──────────────────────────────────────────────┤
+  #   │ lambda   │ Targets are Lambda functions.                │
+  #   │          │ ALB invokes Lambda directly.                 │
+  #   └──────────┴──────────────────────────────────────────────┘
+  DefaultTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${AWS::StackName}-tg'
+      # ── Target Type ─────────────────────────────────────────
+      # "ip" because Fargate tasks have individual IPs.
+      # ECS automatically registers task IPs when they start.
+      TargetType: ip
+      # ── Protocol and Port ────────────────────────────────────
+      # Protocol the ALB uses to communicate with targets.
+      # Usually HTTP (ALB terminates SSL, talks to targets in plaintext).
+      Protocol: HTTP
+      Port: !Ref TargetPort
+      VpcId: !Ref VpcId
+      # ── Protocol Version ────────────────────────────────────
+      # HTTP1:  Standard HTTP/1.1 (default, compatible everywhere)
+      # HTTP2:  Multiplexed connections (faster for many requests)
+      # GRPC:   For gRPC services (requires HTTP/2)
+      ProtocolVersion: HTTP1
+
+      # ── Health Check ─────────────────────────────────────────
+      # The ALB periodically checks each target to see if it's healthy.
+      # Unhealthy targets stop receiving traffic until they recover.
+      #
+      # This is SEPARATE from the ECS container health check.
+      # Both must pass for traffic to flow:
+      #   ALB health check → determines if ALB sends traffic
+      #   ECS health check → determines if ECS replaces the task
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckPort: traffic-port    # "traffic-port" means same as Port
+      HealthCheckIntervalSeconds: 30   # how often to check (seconds)
+      HealthCheckTimeoutSeconds: 5     # how long to wait for response
+      HealthyThresholdCount: 2         # consecutive passes to mark healthy
+      UnhealthyThresholdCount: 3       # consecutive failures to mark unhealthy
+      # ── Matcher ──────────────────────────────────────────────
+      # Which HTTP status codes mean "healthy."
+      # "200" = only 200. "200-299" = any 2XX. "200,302" = either.
+      Matcher:
+        HttpCode: '200'
+
+      # ── Stickiness (Session Affinity) ────────────────────────
+      # When enabled, a user's requests always go to the same target.
+      # The ALB sets a cookie (AWSALB) on the first response.
+      # Subsequent requests with that cookie go to the same target.
+      #
+      # Use cases:
+      #   ON:  WebSocket connections, shopping carts stored in memory
+      #   OFF: Stateless APIs (FastAPI with DynamoDB sessions) — PREFERRED
+      #
+      # We leave it OFF because our API is stateless.
+      TargetGroupAttributes:
+        # Deregistration delay: seconds to wait before removing a target.
+        # During this time, existing connections finish but no new ones start.
+        # 30s is enough for most APIs. Default is 300s (too long).
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ════════════════════════════════════════════════════════════════
+  # HTTP LISTENER (Port 80) — Redirect to HTTPS
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is a Listener? ──────────────────────────────────────
+  # A listener checks for connection requests on a specific port
+  # and protocol. It has rules that determine where to send traffic.
+  #
+  # Every ALB needs at least one listener.
+  # We create two: HTTP (80) and HTTPS (443).
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      # ── Default Action ───────────────────────────────────────
+      # What to do when a request doesn't match any specific rule.
+      # Action types:
+      #   forward:          Send to a target group
+      #   redirect:         HTTP redirect (301 or 302)
+      #   fixed-response:   Return a static response (e.g., 404 page)
+      #   authenticate-oidc: Redirect to IdP for authentication
+      #   authenticate-cognito: Authenticate with Cognito
+      #
+      # We redirect ALL HTTP traffic to HTTPS (security best practice).
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            Host: '#{host}'        # keep the original hostname
+            Path: '/#{path}'       # keep the original path
+            Query: '#{query}'      # keep the original query string
+            StatusCode: HTTP_301   # 301 = permanent redirect (browsers cache it)
+                                   # 302 = temporary redirect (browsers don't cache)
+
+  # ════════════════════════════════════════════════════════════════
+  # HTTPS LISTENER (Port 443) — Forward to Target Group
+  # ════════════════════════════════════════════════════════════════
+
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 443
+      Protocol: HTTPS
+      # ── SSL Policy ───────────────────────────────────────────
+      # Determines which TLS versions and ciphers the ALB supports.
+      # Use the latest recommended policy for security.
+      # ELBSecurityPolicy-TLS13-1-2-2021-06 supports TLS 1.2 and 1.3.
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      # ── Certificate ─────────────────────────────────────────
+      # The ACM certificate to use for HTTPS. Must match the domain
+      # name users will access (e.g., books.example.com).
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      # ── Default Action ───────────────────────────────────────
+      # Forward all HTTPS traffic to the default target group.
+      # Path-based rules (below) override this for specific paths.
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref DefaultTargetGroup
+
+  # ════════════════════════════════════════════════════════════════
+  # PATH-BASED LISTENER RULES
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What are Listener Rules? ─────────────────────────────────
+  # Rules let you route different URL paths to different target groups.
+  # Each rule has:
+  #   - Priority (lower number = evaluated first)
+  #   - Conditions (what to match: path, host, headers, etc.)
+  #   - Actions (what to do: forward, redirect, fixed-response)
+  #
+  # The default action (on the listener) is a catch-all for
+  # requests that don't match any rule.
+
+  # ── Rule: /story-drafting/* → Story Drafting Target Group ────
+  # In the real repo, each skill has its own target group.
+  # This example shows how path-based routing works.
+  #
+  # NOTE: These rules reference the default target group as a
+  # placeholder. In production, each rule would point to its own
+  # target group (created in separate stacks for each skill).
+  StoryDraftingRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HTTPSListener
+      # Priority: lower = evaluated first.
+      # The default action has no priority (it's the fallback).
+      Priority: 10
+      Conditions:
+        # PathPattern matches the URL path.
+        # Values support * (wildcard) and ? (single char).
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - '/story-drafting/*'
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref DefaultTargetGroup
+
+  UrgentDraftingRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HTTPSListener
+      Priority: 20
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - '/urgent-drafting/*'
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref DefaultTargetGroup
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  ALBDnsName:
+    Description: >-
+      DNS name of the ALB. Use this to access your service.
+      Example: book-store-alb-123456.eu-west-1.elb.amazonaws.com
+      Create a Route 53 ALIAS record pointing to this (see 11c template).
+    Value: !GetAtt ALB.DNSName
+    Export:
+      Name: !Sub '${AWS::StackName}-ALBDnsName'
+
+  ALBArn:
+    Description: ARN of the Application Load Balancer
+    Value: !Ref ALB
+    Export:
+      Name: !Sub '${AWS::StackName}-ALBArn'
+
+  ALBHostedZoneId:
+    Description: >-
+      The hosted zone ID of the ALB. Required when creating
+      Route 53 ALIAS records pointing to the ALB.
+      Each AWS service has a fixed hosted zone ID per region.
+    Value: !GetAtt ALB.CanonicalHostedZoneID
+    Export:
+      Name: !Sub '${AWS::StackName}-ALBHostedZoneId'
+
+  TargetGroupArn:
+    Description: >-
+      ARN of the default target group. Pass this to the ECS
+      service template so it registers tasks with the ALB.
+    Value: !Ref DefaultTargetGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-TargetGroupArn'
+
+  ALBSecurityGroupId:
+    Description: >-
+      Security group ID of the ALB. ECS task security groups should
+      allow inbound from this SG on the container port.
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ALBSecurityGroupId'
+
+  HTTPSListenerArn:
+    Description: >-
+      ARN of the HTTPS listener. Use this when adding listener rules
+      from other stacks (e.g., each skill adds its own path rule).
+    Value: !Ref HTTPSListener
+    Export:
+      Name: !Sub '${AWS::StackName}-HTTPSListenerArn'
+
+# ══════════════════════════════════════════════════════════════════
+# KEY CONCEPTS RECAP
+# ══════════════════════════════════════════════════════════════════
+#
+# ALB ARCHITECTURE:
+#   ALB → Listener (port) → Rules (conditions) → Target Group → Targets
+#
+# TARGET TYPES:
+#   instance = EC2 instances (use with EC2 launch type)
+#   ip       = IP addresses (REQUIRED for Fargate)
+#   lambda   = Lambda functions
+#
+# HEALTH CHECKS:
+#   ALB periodically sends requests to HealthCheckPath.
+#   Targets that return HealthyThresholdCount consecutive 200s
+#   are marked healthy. Targets that fail UnhealthyThresholdCount
+#   times are removed from rotation.
+#
+# LISTENER RULES:
+#   Evaluated by Priority (lower first).
+#   Conditions: path-pattern, host-header, http-request-method,
+#               source-ip, http-header, query-string.
+#   Actions: forward, redirect, fixed-response, authenticate-*.
+#
+# STICKY SESSIONS:
+#   ALB sets a cookie so a user always hits the same target.
+#   Useful for stateful apps. BAD for stateless APIs.
+#
+# SSL TERMINATION:
+#   ALB decrypts HTTPS, sends plain HTTP to targets.
+#   Simplifies certificate management (one cert on ALB, not per container).
+#
+# DEREGISTRATION DELAY:
+#   Seconds to wait before cutting off a draining target.
+#   Gives in-flight requests time to finish.
+#   30s for APIs, 300s for long-running connections.
+# ══════════════════════════════════════════════════════════════════

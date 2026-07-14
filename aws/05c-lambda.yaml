@@ -1,0 +1,473 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — Lambda (Step 4)
+# ══════════════════════════════════════════════════════════════════
+# Navigation:  <- prev: 04c-ec2.yaml  |  next: 06c-api-gateway.yaml ->
+# Companion:  05-lambda.py (console walkthrough)
+#
+# This template creates the same Lambda function that 05-lambda.py
+# builds via the console. Serverless: no servers to manage.
+#
+# What you get:
+#   - Lambda function with Python 3.11 runtime
+#   - Inline code (ZipFile) with a FastAPI app via Mangum
+#   - IAM execution role with basic Lambda + VPC permissions
+#   - VPC configuration (private subnets + security group)
+#   - Environment variables
+#   - CloudWatch log group with retention
+#
+# Prerequisites:
+#   - Deploy 02c-vpc.yaml first (this template imports VPC outputs)
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#       --stack-name book-store-lambda-dev \
+#       --template-body file://aws/05c-lambda.yaml \
+#       --parameters ParameterKey=Environment,ParameterValue=dev \
+#       --capabilities CAPABILITY_IAM \
+#       --region eu-west-1
+#
+# NOTE: --capabilities CAPABILITY_IAM is required because this
+# template creates an IAM role. Without it, CloudFormation refuses.
+#
+# Cost: ~$0.03/month for 1000 requests/day. Practically free.
+#       Free tier: 1M requests + 400,000 GB-seconds per month.
+#
+# ╔══════════════════════════════════════════════════════════════╗
+# ║   LAMBDA EXECUTION MODEL                                     ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+#   Event (JSON)                Lambda Function
+#   ┌────────────────┐          ┌──────────────────────────┐
+#   | httpMethod: GET|  trigger | handler(event, context)  |
+#   | path: /health  | ──────> |   Mangum(app) wraps      |
+#   | headers: {...} |          |   FastAPI to handle      |
+#   | body: null     |          |   Lambda event format    |
+#   └────────────────┘          |   return {statusCode,    |
+#                               |           body}          |
+#                               └──────────────────────────┘
+#
+#   Cold start: ████████████████  3-5s (first request after idle)
+#   Warm call:  ██                50-100ms (container reused)
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >-
+  Lambda function with Python 3.11, Mangum wrapper for FastAPI,
+  IAM execution role, VPC config, and CloudWatch log group.
+  Companion to learn-fastapi-py/aws/05-lambda.py.
+
+
+# ═════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ═════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - qa
+      - uat
+      - prod
+    Description: Deployment environment for resource naming.
+
+  MemorySize:
+    Type: Number
+    Default: 256
+    AllowedValues:
+      - 128       # minimum, cheapest, slow cold starts
+      - 256       # good balance for FastAPI
+      - 512       # faster cold starts, more CPU
+      - 1024      # for compute-heavy handlers
+    Description: >-
+      Memory in MB. Lambda allocates CPU proportionally to memory.
+      128 MB = ~0.07 vCPU. 1024 MB = ~0.58 vCPU.
+      256 MB is the sweet spot for FastAPI: fast enough cold starts
+      without overpaying. More memory = faster but costs more per ms.
+
+  Timeout:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 900
+    Description: >-
+      Max execution time in seconds (max: 900 = 15 minutes).
+      FastAPI cold starts take 3-5s, so set timeout > 10s.
+      30s gives plenty of margin for API calls + processing.
+      If your function regularly hits the timeout, increase it
+      or optimize the code.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues:
+      - 7
+      - 14
+      - 30
+      - 60
+      - 90
+      - 365
+    Description: >-
+      How many days to keep CloudWatch logs. Longer = more cost.
+      30 days is good for dev/qa. 90+ for production debugging.
+
+
+# ═════════════════════════════════════════════════════════════════
+# RESOURCES
+# ═════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ── IAM EXECUTION ROLE ────────────────────────────────────────
+  # Every Lambda function needs an execution role. This role defines
+  # what AWS services the function can access while running.
+  #
+  # Two separate concepts:
+  #   Execution role: what the FUNCTION can do (write logs, read S3)
+  #   Invocation permission: who can TRIGGER the function (API Gateway)
+  #
+  # AssumeRolePolicyDocument: defines WHO can assume this role.
+  # Here, only the Lambda service can assume it.
+  #
+  # ManagedPolicyArns: pre-built AWS policies attached to the role.
+  #   AWSLambdaBasicExecutionRole: write logs to CloudWatch
+  #   AWSLambdaVPCAccessExecutionRole: create/manage VPC ENIs
+  #     (Elastic Network Interfaces — required for Lambda in VPC)
+  #
+  # Console equivalent: created automatically when you select
+  # "Create a new role with basic Lambda permissions"
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-lambda-role'
+      # Trust policy: ONLY the Lambda service can assume this role.
+      # Without this, nobody can use this role — it would just sit there.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      # Attach AWS-managed policies (pre-built permission sets).
+      ManagedPolicyArns:
+        # Basic: allows Lambda to write logs to CloudWatch.
+        # Without this, you get no logs and can't debug anything.
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        # VPC access: allows Lambda to create ENIs in your VPC.
+        # Required when the function is deployed inside a VPC.
+        # ENI = Elastic Network Interface (a virtual network card).
+        # Lambda creates one ENI per subnet to connect to your VPC.
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ── LAMBDA FUNCTION ───────────────────────────────────────────
+  # The serverless function itself. AWS manages:
+  #   - Provisioning servers
+  #   - Auto-scaling (0 to thousands of instances)
+  #   - OS patching
+  #   - Availability
+  # You just provide code.
+  #
+  # Console equivalent: Lambda -> Create function -> Author from scratch
+  BookStoreFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'book-store-api-${Environment}'
+      Description: >-
+        Book Store API on Lambda. Uses Mangum to wrap FastAPI
+        for the Lambda event format. See 05-lambda.py for details.
+
+      # ── Runtime ──────────────────────────────────────────────
+      # The language/version environment. Python 3.11 supports
+      # all modern features (type hints, match statements, etc.).
+      Runtime: python3.11
+
+      # ── Architecture ─────────────────────────────────────────
+      # arm64 (Graviton) is ~20% cheaper and ~34% faster cold starts
+      # than x86_64 for Python. Use arm64 unless you have x86-only
+      # native dependencies (most pure Python packages work on both).
+      Architectures:
+        - arm64
+
+      # ── Handler ──────────────────────────────────────────────
+      # Entry point Lambda calls: filename.function_name
+      # "index.handler" means: find index.py, call handler(event, context)
+      #
+      # With Mangum:
+      #   handler = Mangum(app) converts Lambda events into ASGI
+      #   requests that FastAPI understands.
+      Handler: index.handler
+
+      # ── IAM Role ─────────────────────────────────────────────
+      # The execution role we defined above. !GetAtt gets the ARN.
+      Role: !GetAtt LambdaExecutionRole.Arn
+
+      # ── Memory & Timeout ─────────────────────────────────────
+      MemorySize: !Ref MemorySize
+      Timeout: !Ref Timeout
+
+      # ── Inline Code (ZipFile) ────────────────────────────────
+      # For small functions, you can embed code directly in the
+      # template using ZipFile. Max 4096 characters.
+      #
+      # For real apps, use S3:
+      #   Code:
+      #     S3Bucket: my-deploy-bucket
+      #     S3Key: lambda/deployment-v1.0.0.zip
+      #
+      # Or ECR container images:
+      #   Code:
+      #     ImageUri: 060725138335.dkr.ecr.eu-west-1.amazonaws.com/app:latest
+      #   PackageType: Image
+      #
+      # This inline code demonstrates the Mangum wrapper pattern.
+      # In production, you'd package FastAPI + all dependencies
+      # into a zip or Docker image (see 05-lambda.py for packaging).
+      #
+      # NOTE: This inline code is a simplified demo. A real FastAPI
+      # Lambda deployment would include the full app + dependencies
+      # in a zip file or container image, not inline code.
+      Code:
+        ZipFile: |
+          """
+          Lambda handler using Mangum to wrap a minimal FastAPI app.
+
+          In a real deployment, you'd package the full app from
+          01-overview-and-app.py with all dependencies. This inline
+          version demonstrates the pattern with a minimal example.
+
+          Mangum converts:
+            Lambda event (JSON dict) <-> ASGI request (what FastAPI expects)
+
+          Without Mangum, you'd have to manually parse the event dict
+          and construct HTTP responses. Mangum handles all of that.
+          """
+          import json
+          import os
+
+          # In a real deployment with Mangum + FastAPI:
+          #   from mangum import Mangum
+          #   from main import app
+          #   handler = Mangum(app, lifespan="off")
+          #
+          # For this inline demo, we handle the event directly
+          # (since we can't pip install mangum in ZipFile mode).
+
+          def handler(event, context):
+              """
+              Lambda entry point.
+
+              Args:
+                  event:   the trigger data (API Gateway request, test event, etc.)
+                  context: Lambda metadata (function name, memory, time remaining)
+
+              Returns:
+                  dict with statusCode and body (API Gateway response format)
+              """
+              path = event.get("path", "/")
+              method = event.get("httpMethod", "GET")
+
+              # Simple routing (FastAPI + Mangum handles this in production)
+              if path == "/health":
+                  body = {
+                      "status": "ok",
+                      "version": "1.0.0",
+                      "env": os.environ.get("ENV", "lambda"),
+                      "runtime": "python3.11",
+                      "handler": "inline-demo"
+                  }
+              elif path == "/books" and method == "GET":
+                  body = {"books": [], "message": "No books yet (in-memory store)"}
+              else:
+                  body = {
+                      "message": f"Book Store API on Lambda",
+                      "path": path,
+                      "method": method
+                  }
+
+              return {
+                  "statusCode": 200,
+                  "headers": {
+                      "Content-Type": "application/json",
+                      "Access-Control-Allow-Origin": "*"
+                  },
+                  "body": json.dumps(body)
+              }
+
+      # ── Environment Variables ────────────────────────────────
+      # Available to your code as os.environ["ENV"], etc.
+      # Stored encrypted at rest. Can reference SSM/Secrets Manager.
+      Environment:
+        Variables:
+          ENV: !Ref Environment
+          LOG_LEVEL: INFO
+          # In production, reference Secrets Manager for API keys:
+          # API_KEY: '{{resolve:secretsmanager:my-secret:SecretString:api_key}}'
+
+      # ── VPC Configuration ────────────────────────────────────
+      # Placing Lambda in a VPC lets it access private resources
+      # (RDS, ElastiCache, internal APIs) but adds cold start time
+      # (~1-2s extra for ENI setup).
+      #
+      # Lambda gets a private IP in each subnet. It can reach:
+      #   - Anything in the VPC (via private IP)
+      #   - The internet (via NAT Gateway in the VPC)
+      # But the internet CANNOT reach Lambda directly (API Gateway
+      # is the entry point).
+      #
+      # Use !Split to convert comma-separated subnet IDs to a list.
+      # The VPC stack exports "dev-PrivateSubnetIds" as "subnet-a,subnet-b".
+      VpcConfig:
+        SubnetIds: !Split
+          - ','
+          - !ImportValue
+              !Sub '${Environment}-PrivateSubnetIds'
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ── LAMBDA SECURITY GROUP ─────────────────────────────────────
+  # Controls network traffic for the Lambda function inside the VPC.
+  # Lambda in a VPC creates ENIs (Elastic Network Interfaces) in
+  # the specified subnets. This SG applies to those ENIs.
+  #
+  # Inbound: none needed (Lambda is invoked by AWS, not by network)
+  # Outbound: all (Lambda needs to call external APIs, AWS services)
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: >-
+        Security group for Lambda function. No inbound needed
+        (Lambda is invoked by the service, not via network port).
+        Outbound allows calling external APIs and AWS services.
+      VpcId: !ImportValue
+        !Sub '${Environment}-VpcId'
+      # No inbound rules — Lambda receives invocations from the
+      # AWS Lambda service, not from network connections.
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: '0.0.0.0/0'
+          Description: Allow all outbound (APIs, AWS services)
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lambda-sg'
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ── CLOUDWATCH LOG GROUP ──────────────────────────────────────
+  # Lambda automatically writes logs to CloudWatch. By default,
+  # logs are kept FOREVER (and cost money). This log group sets
+  # a retention policy to auto-delete old logs.
+  #
+  # The log group name MUST match the pattern Lambda expects:
+  #   /aws/lambda/{function-name}
+  # If you don't create it, Lambda creates one automatically
+  # (but with no retention policy = logs kept forever).
+  #
+  # Console equivalent: CloudWatch -> Log groups (auto-created)
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      # Must match the function name exactly
+      LogGroupName: !Sub '/aws/lambda/book-store-api-${Environment}'
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+
+# ═════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ═════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  FunctionName:
+    Description: Lambda function name
+    Value: !Ref BookStoreFunction
+    Export:
+      Name: !Sub '${Environment}-LambdaFunctionName'
+
+  FunctionArn:
+    Description: >-
+      Lambda function ARN. Used by API Gateway to invoke the function.
+      e.g., arn:aws:lambda:eu-west-1:060725138335:function:book-store-api-dev
+    Value: !GetAtt BookStoreFunction.Arn
+    Export:
+      Name: !Sub '${Environment}-LambdaFunctionArn'
+
+  ExecutionRoleArn:
+    Description: ARN of the Lambda execution role
+    Value: !GetAtt LambdaExecutionRole.Arn
+
+  LogGroupName:
+    Description: >-
+      CloudWatch log group name. View logs:
+      aws logs tail /aws/lambda/book-store-api-dev --follow
+    Value: !Ref LambdaLogGroup
+
+  LambdaSecurityGroupId:
+    Description: Security group ID for the Lambda function
+    Value: !Ref LambdaSecurityGroup
+    Export:
+      Name: !Sub '${Environment}-LambdaSecurityGroupId'
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║   CONSOLE <-> CLOUDFORMATION MAPPING                        ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# ┌────────────────────────────────┬──────────────────────────────┐
+# | Console Setting                | CloudFormation Property       |
+# +────────────────────────────────+──────────────────────────────+
+# | Function name                  | FunctionName                  |
+# | Runtime: Python 3.11           | Runtime: python3.11           |
+# | Architecture: arm64            | Architectures: [arm64]        |
+# | Handler: lambda_handler.handler| Handler: index.handler        |
+# | Create role with basic perms   | LambdaExecutionRole resource  |
+# | Enable VPC                     | VpcConfig with SubnetIds +    |
+# |                                |   SecurityGroupIds            |
+# | Memory: 256 MB                 | MemorySize parameter          |
+# | Timeout: 30s                   | Timeout parameter             |
+# | Environment variables          | Environment -> Variables      |
+# | Upload .zip file               | Code -> ZipFile (inline) or   |
+# |                                |   S3Bucket + S3Key            |
+# └────────────────────────────────┴──────────────────────────────┘
+#
+# ── Cold Start Optimization (from 05-lambda.py) ───────────────
+#
+# Cold starts happen on first invocation after idle (~5-15 min).
+# Lambda must: download code -> start runtime -> run imports -> handler
+#
+# Optimization strategies:
+#   1. Use arm64 (Graviton) — ~34% faster cold starts
+#   2. Minimize package size — remove test files, unused deps
+#   3. Use Layers for large dependencies (fastapi, pydantic)
+#   4. Provisioned Concurrency — keeps N instances warm ($$$)
+#   5. Increase memory — more memory = more CPU = faster init
+#
+# ── Pricing Reference ─────────────────────────────────────────
+#
+# ┌─────────────────┬────────────────────────────────────────────┐
+# | Component       | Cost                                       |
+# +─────────────────+────────────────────────────────────────────+
+# | Requests        | $0.20 per 1M invocations                   |
+# | Duration        | $0.0000166667 per GB-second                |
+# | Free tier       | 1M requests + 400,000 GB-s per month       |
+# | Provisioned     | ~$14/mo per warm instance (256MB)          |
+# └─────────────────┴────────────────────────────────────────────┘
+#
+# Example: 1000 req/day, 256MB, 200ms avg = ~$0.03/month

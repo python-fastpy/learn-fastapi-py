@@ -1,0 +1,503 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — VPC (Step 1)
+# ══════════════════════════════════════════════════════════════════
+# Navigation:  <- prev: 01c-overview-and-app.yaml  |  next: 03c-s3.yaml ->
+# Companion:  02-vpc.py (console walkthrough)
+#
+# This template creates the same VPC that 02-vpc.py builds via the
+# console "VPC and more" wizard. Every setting maps 1:1.
+#
+# What you get:
+#   - VPC with 10.0.0.0/16 (65,536 IPs)
+#   - 2 public subnets (10.0.1.0/24, 10.0.2.0/24) in 2 AZs
+#   - 2 private subnets (10.0.11.0/24, 10.0.12.0/24) in 2 AZs
+#   - Internet Gateway (public subnets -> internet, bidirectional)
+#   - NAT Gateway in 1 AZ (private subnets -> internet, outbound only)
+#   - Route tables wiring it all together
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#       --stack-name book-store-vpc-dev \
+#       --template-body file://aws/02c-vpc.yaml \
+#       --parameters ParameterKey=Environment,ParameterValue=dev \
+#       --region eu-west-1
+#
+# Cost: ~$32/month for the NAT Gateway (the only resource that costs
+#       money here). Everything else in this template is free.
+#
+# ╔══════════════════════════════════════════════════════════════╗
+# ║       VPC ARCHITECTURE (same diagram as 02-vpc.py)           ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# ┌─────────────────── VPC (10.0.0.0/16) ──────────────────┐
+# |                                                          |
+# |  ┌─── AZ-a ────┐  ┌─── AZ-b ────┐                     |
+# |  | Public       |  | Public       |                     |
+# |  | 10.0.1.0/24  |  | 10.0.2.0/24  |  <- ALB lives here |
+# |  +──────────────+  +──────────────+                     |
+# |  | Private      |  | Private      |                     |
+# |  | 10.0.11.0/24 |  | 10.0.12.0/24 |  <- ECS/Lambda here|
+# |  └──────────────┘  └──────────────┘                     |
+# |                                                          |
+# |  Internet Gateway        NAT Gateway                     |
+# |  (public->internet)      (private->internet, 1-way)      |
+# └──────────────────────────────────────────────────────────┘
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >-
+  VPC with 2 public and 2 private subnets across 2 Availability Zones.
+  Includes Internet Gateway, NAT Gateway (single AZ to save cost),
+  and route tables. Companion to learn-fastapi-py/aws/02-vpc.py.
+
+
+# ═════════════════════════════════════════════════════════════════
+# PARAMETERS — configurable inputs
+# ═════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - qa
+      - uat
+      - prod
+    Description: >-
+      Deployment environment. Used in resource naming (e.g., book-store-vpc-dev).
+
+  VpcCidr:
+    Type: String
+    Default: '10.0.0.0/16'
+    Description: >-
+      CIDR block for the VPC. /16 gives 65,536 IPs — plenty of room
+      for all subnets. See 02-vpc.py for CIDR math explanation.
+      10.0.0.0/16 means IPs from 10.0.0.0 to 10.0.255.255.
+
+  PublicSubnetACidr:
+    Type: String
+    Default: '10.0.1.0/24'
+    Description: >-
+      CIDR for public subnet in AZ-a. /24 = 256 IPs (251 usable,
+      AWS reserves 5). Hosts ALB and NAT Gateway.
+
+  PublicSubnetBCidr:
+    Type: String
+    Default: '10.0.2.0/24'
+    Description: >-
+      CIDR for public subnet in AZ-b. Second AZ for high availability.
+      ALB requires subnets in at least 2 AZs.
+
+  PrivateSubnetACidr:
+    Type: String
+    Default: '10.0.11.0/24'
+    Description: >-
+      CIDR for private subnet in AZ-a. Hosts ECS tasks, Lambda functions.
+      The gap between 2 and 11 leaves room for future subnets (3-10).
+
+  PrivateSubnetBCidr:
+    Type: String
+    Default: '10.0.12.0/24'
+    Description: >-
+      CIDR for private subnet in AZ-b. Second AZ for high availability.
+      If AZ-a goes down, ECS tasks in AZ-b keep serving traffic.
+
+
+# ═════════════════════════════════════════════════════════════════
+# RESOURCES — what AWS creates
+# ═════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ── THE VPC ────────────────────────────────────────────────────
+  # The VPC is your isolated virtual network inside AWS. Everything
+  # else (subnets, gateways, instances) lives inside it.
+  #
+  # Console equivalent: VPC -> Create VPC -> "VPC only"
+  #   CIDR: 10.0.0.0/16, DNS hostnames: Enable, DNS resolution: Enable
+  #
+  # EnableDnsSupport:   lets resources use AWS's built-in DNS server
+  #                     (at 10.0.0.2) to resolve domain names.
+  # EnableDnsHostnames: gives instances public DNS names like
+  #                     ec2-10-0-1-5.eu-west-1.compute.amazonaws.com.
+  # Both are required for RDS endpoints, ECS service discovery, etc.
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpc'
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ── INTERNET GATEWAY ──────────────────────────────────────────
+  # The front door of the VPC. Connects it to the public internet.
+  # Bidirectional: traffic flows IN and OUT through it.
+  #
+  # One per VPC. Managed by AWS (no cost, no maintenance, no limit).
+  # Without an IGW, nothing in the VPC can reach the internet.
+  #
+  # Console equivalent: VPC -> Internet Gateways -> Create
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-igw'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Attach the IGW to the VPC. An unattached IGW does nothing.
+  # This is a separate resource because CloudFormation models the
+  # attachment as its own entity (not a property of the IGW).
+  #
+  # Console equivalent: IGW -> Actions -> Attach to VPC
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+
+  # ── PUBLIC SUBNETS ────────────────────────────────────────────
+  # Subnets are slices of the VPC's IP range, each in ONE AZ.
+  # A subnet is "public" because its route table points 0.0.0.0/0
+  # at the Internet Gateway (configured below in the route table).
+  #
+  # MapPublicIpOnLaunch: instances launched here automatically get
+  # a public IP. Without this, you'd need an Elastic IP for each.
+  #
+  # !Select [0, !GetAZs ''] picks the first AZ in the region.
+  # In eu-west-1 this would be eu-west-1a. Using !Select + !GetAZs
+  # makes the template work in ANY region without hardcoding AZ names.
+  #
+  # Console equivalent: VPC -> Subnets -> Create subnet
+  #   VPC: book-store-vpc, AZ: eu-west-1a, CIDR: 10.0.1.0/24
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnetACidr
+      # Pick the first AZ in this region (e.g., eu-west-1a)
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      # Auto-assign public IPs to instances launched in this subnet
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public-a'
+        - Key: Environment
+          Value: !Ref Environment
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnetBCidr
+      # Pick the second AZ in this region (e.g., eu-west-1b)
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public-b'
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ── PRIVATE SUBNETS ───────────────────────────────────────────
+  # Private subnets have NO direct route to the internet.
+  # Inbound traffic from the internet CANNOT reach these subnets.
+  # Outbound traffic goes through the NAT Gateway (one-way).
+  #
+  # This is where you run ECS tasks, Lambda functions, and RDS
+  # databases — anything that should not be directly exposed.
+  #
+  # Note: MapPublicIpOnLaunch is false by default (omitted here).
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetACidr
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-private-a'
+        - Key: Environment
+          Value: !Ref Environment
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetBCidr
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-private-b'
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ── NAT GATEWAY ───────────────────────────────────────────────
+  # Lets resources in PRIVATE subnets make outbound calls to the
+  # internet (pull Docker images, call external APIs, etc.)
+  # WITHOUT being reachable FROM the internet. One-way traffic.
+  #
+  # Requires an Elastic IP (static public IP for the NAT to use).
+  # Placed in a PUBLIC subnet (it needs internet access itself).
+  #
+  # We use a single NAT Gateway (1 AZ) to save ~$32/month.
+  # In production, you'd create one NAT per AZ for high availability.
+  # If AZ-a goes down, private subnets in AZ-b lose outbound internet
+  # access (acceptable for dev/qa, not for production).
+  #
+  # COST WARNING:
+  #   NAT Gateway = $0.045/hour = ~$32/month (even if idle!)
+  #   Plus $0.045/GB of data processed.
+  #   Often the MOST EXPENSIVE part of a small deployment.
+  #
+  # Console equivalent: VPC -> NAT Gateways -> Create NAT gateway
+  #   Subnet: public-a, Elastic IP: allocate new
+
+  # Elastic IP for the NAT Gateway. This is the public IP address
+  # that external servers see when your private resources make
+  # outbound calls. It persists even if the NAT Gateway is replaced.
+  NatElasticIP:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-nat-eip'
+        - Key: Environment
+          Value: !Ref Environment
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      # AllocationId links the Elastic IP to this NAT Gateway.
+      # !GetAtt NatElasticIP.AllocationId gets the EIP's allocation ID
+      # (not the IP itself — AWS uses allocation IDs internally).
+      AllocationId: !GetAtt NatElasticIP.AllocationId
+      # NAT Gateway must be in a PUBLIC subnet (it routes through IGW).
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-nat'
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ── PUBLIC ROUTE TABLE ────────────────────────────────────────
+  # A route table is a set of rules that determine where network
+  # traffic goes. Each subnet is associated with exactly one table.
+  #
+  # Public route table rule:
+  #   Destination: 10.0.0.0/16 -> local     (VPC internal traffic)
+  #   Destination: 0.0.0.0/0   -> IGW       (everything else -> internet)
+  #
+  # The "local" route is auto-created by AWS for every route table.
+  # We only need to add the 0.0.0.0/0 -> IGW route.
+  #
+  # Console equivalent: VPC -> Route Tables -> Create route table
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public-rt'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # The actual route: 0.0.0.0/0 (all non-VPC traffic) -> Internet Gateway.
+  # This is what makes the associated subnets "public".
+  #
+  # DependsOn: VPCGatewayAttachment — we must wait for the IGW to be
+  # attached to the VPC before creating a route to it. CloudFormation
+  # can't detect this dependency from !Ref alone because the route
+  # references the IGW (which exists) but the ATTACHMENT is what
+  # actually enables the route to work.
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref InternetGateway
+
+  # Associate the public route table with each public subnet.
+  # Without this, subnets use the VPC's "main" route table (which
+  # has no IGW route, so they'd be private by default).
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+
+  # ── PRIVATE ROUTE TABLE ───────────────────────────────────────
+  # Private route table rule:
+  #   Destination: 10.0.0.0/16 -> local         (VPC internal traffic)
+  #   Destination: 0.0.0.0/0   -> NAT Gateway   (outbound only)
+  #
+  # Traffic from private subnets to the internet goes through NAT.
+  # NAT translates private IP -> NAT's public IP, sends the request,
+  # and routes the response back. External servers never see the
+  # private IP — they see the NAT's Elastic IP.
+  #
+  # Inbound traffic from the internet CANNOT reach private subnets
+  # because the NAT only handles outbound-initiated connections.
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-private-rt'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Route all non-VPC traffic through the NAT Gateway.
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref NatGateway
+
+  # Associate the private route table with each private subnet.
+  PrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+
+# ═════════════════════════════════════════════════════════════════
+# OUTPUTS — values exported for other stacks to import
+# ═════════════════════════════════════════════════════════════════
+# Other stacks (EC2, Lambda, ECS) need VPC IDs and subnet IDs.
+# Export names are globally unique per region+account, so we prefix
+# with the environment name to allow parallel dev/qa/prod stacks.
+#
+# Import in other templates:
+#   !ImportValue !Sub '${Environment}-VpcId'
+
+Outputs:
+
+  VpcId:
+    Description: ID of the VPC (e.g., vpc-0abc123...)
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${Environment}-VpcId'
+
+  VpcCidr:
+    Description: CIDR block of the VPC
+    Value: !GetAtt VPC.CidrBlock
+    Export:
+      Name: !Sub '${Environment}-VpcCidr'
+
+  PublicSubnetAId:
+    Description: ID of public subnet in AZ-a
+    Value: !Ref PublicSubnetA
+    Export:
+      Name: !Sub '${Environment}-PublicSubnetAId'
+
+  PublicSubnetBId:
+    Description: ID of public subnet in AZ-b
+    Value: !Ref PublicSubnetB
+    Export:
+      Name: !Sub '${Environment}-PublicSubnetBId'
+
+  PublicSubnetIds:
+    Description: Comma-separated public subnet IDs (for ALB, etc.)
+    Value: !Join
+      - ','
+      - - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+    Export:
+      Name: !Sub '${Environment}-PublicSubnetIds'
+
+  PrivateSubnetAId:
+    Description: ID of private subnet in AZ-a
+    Value: !Ref PrivateSubnetA
+    Export:
+      Name: !Sub '${Environment}-PrivateSubnetAId'
+
+  PrivateSubnetBId:
+    Description: ID of private subnet in AZ-b
+    Value: !Ref PrivateSubnetB
+    Export:
+      Name: !Sub '${Environment}-PrivateSubnetBId'
+
+  PrivateSubnetIds:
+    Description: Comma-separated private subnet IDs (for ECS, Lambda)
+    Value: !Join
+      - ','
+      - - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+    Export:
+      Name: !Sub '${Environment}-PrivateSubnetIds'
+
+  NatGatewayPublicIP:
+    Description: >-
+      Public IP of the NAT Gateway. This is what external servers see
+      when private resources make outbound calls.
+    Value: !Ref NatElasticIP
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║   CONSOLE <-> CLOUDFORMATION MAPPING                        ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# ┌──────────────────────────────┬────────────────────────────────┐
+# | Console Setting              | CloudFormation Resource         |
+# +──────────────────────────────+────────────────────────────────+
+# | "VPC and more" wizard        | VPC + Subnets + IGW + NAT +    |
+# |                              | RouteTables (each a resource)  |
+# | CIDR block: 10.0.0.0/16     | VPC -> CidrBlock               |
+# | Number of AZs: 2            | Two subnets with !Select       |
+# |                              | [0/1, !GetAZs '']             |
+# | Public subnets: 2           | PublicSubnetA, PublicSubnetB    |
+# | Private subnets: 2          | PrivateSubnetA, PrivateSubnetB |
+# | NAT gateways: In 1 AZ      | One NatGateway + EIP resource  |
+# | DNS hostnames: Enable       | EnableDnsHostnames: true        |
+# | DNS resolution: Enable      | EnableDnsSupport: true          |
+# └──────────────────────────────┴────────────────────────────────┘
+#
+# Total resources created: 14
+#   1 VPC, 1 IGW, 1 IGW attachment, 4 subnets, 1 EIP, 1 NAT,
+#   2 route tables, 2 routes, 4 route table associations

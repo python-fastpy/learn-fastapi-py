@@ -1,0 +1,398 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — EC2 (Step 3)
+# ══════════════════════════════════════════════════════════════════
+# Navigation:  <- prev: 03c-s3.yaml  |  next: 05c-lambda.yaml ->
+# Companion:  04-ec2.py (console walkthrough)
+#
+# This template creates the same EC2 instance that 04-ec2.py builds
+# via the console. Learn EC2, deploy once, then use Fargate/Lambda.
+#
+# What you get:
+#   - Security group allowing SSH (22) and HTTP (80, 443)
+#   - EC2 instance in a public subnet
+#   - UserData script that installs Python and starts FastAPI
+#   - Elastic IP for a stable public address
+#
+# Prerequisites:
+#   - Deploy 02c-vpc.yaml first (this template imports VPC outputs)
+#   - Create an EC2 key pair in the console or CLI:
+#     aws ec2 create-key-pair --key-name book-store-key \
+#         --query 'KeyMaterial' --output text > book-store-key.pem
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#       --stack-name book-store-ec2-dev \
+#       --template-body file://aws/04c-ec2.yaml \
+#       --parameters ParameterKey=Environment,ParameterValue=dev \
+#                    ParameterKey=KeyPairName,ParameterValue=book-store-key \
+#       --region eu-west-1
+#
+# Cost: t3.micro = ~$7.60/month (free tier eligible for 12 months).
+#       Elastic IP attached to running instance = free.
+#
+# IMPORTANT: Terminate when done! EC2 bills by the hour.
+#   aws cloudformation delete-stack --stack-name book-store-ec2-dev
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >-
+  EC2 instance with security group, UserData bootstrap, and Elastic IP.
+  Launches FastAPI in a public subnet. Companion to learn-fastapi-py/aws/04-ec2.py.
+
+
+# ═════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ═════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - qa
+      - uat
+      - prod
+    Description: Deployment environment for resource naming.
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: >-
+      Name of an existing EC2 key pair for SSH access. Create one first:
+      aws ec2 create-key-pair --key-name book-store-key ...
+      DOWNLOAD the .pem file immediately — you can't get it again.
+      Type: AWS::EC2::KeyPair::KeyName auto-validates that the key exists.
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.nano       # 2 vCPU, 0.5 GB  (~$3.80/mo)
+      - t3.micro      # 2 vCPU, 1 GB    (~$7.60/mo) <- free tier
+      - t3.small      # 2 vCPU, 2 GB    (~$15/mo)
+      - t3.medium     # 2 vCPU, 4 GB    (~$30/mo)
+    Description: >-
+      EC2 instance type. t3 = burstable (earns CPU credits while idle,
+      spends them during spikes). t3.micro is free tier eligible.
+      See 04-ec2.py for the full instance type family reference.
+
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: >-
+      AMI ID for the instance. An AMI is a snapshot of an OS +
+      pre-installed software (like a Docker image for VMs).
+      This default uses SSM Parameter Store to always get the latest
+      Amazon Linux 2023 AMI for your region — no hardcoding needed.
+      AWS maintains these SSM parameters and updates them when new
+      AMIs are released.
+
+  SshCidr:
+    Type: String
+    Default: '0.0.0.0/0'
+    Description: >-
+      CIDR block allowed to SSH in. 0.0.0.0/0 = anywhere (NOT safe
+      for production — use your office IP like 203.0.113.50/32).
+      In production, use Systems Manager Session Manager instead of
+      SSH — no key pair needed, no port 22 open.
+
+  VpcStackName:
+    Type: String
+    Default: book-store-vpc-dev
+    Description: >-
+      Name of the VPC CloudFormation stack (from 02c-vpc.yaml).
+      Used to import VPC outputs (VpcId, subnet IDs).
+
+
+# ═════════════════════════════════════════════════════════════════
+# RESOURCES
+# ═════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ── SECURITY GROUP ────────────────────────────────────────────
+  # A virtual firewall that controls inbound and outbound traffic.
+  # Stateful: if you allow inbound on port 80, the response is
+  # automatically allowed out (no outbound rule needed for responses).
+  #
+  # This SG allows:
+  #   Inbound:  SSH (22) from SshCidr, HTTP (80) from anywhere,
+  #             HTTPS (443) from anywhere
+  #   Outbound: all traffic (default — needed for yum/pip installs)
+  #
+  # Console equivalent: VPC -> Security Groups -> Create
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: >-
+        Allow SSH from restricted CIDR and HTTP/HTTPS from anywhere.
+        Attached to the book-store EC2 instance.
+      # Import VpcId from the VPC stack's exports.
+      # The VPC stack exports this as "${Environment}-VpcId".
+      VpcId: !ImportValue
+        !Sub '${Environment}-VpcId'
+      # ── Inbound rules ───────────────────────────────────────
+      SecurityGroupIngress:
+        # SSH access — for logging into the instance remotely.
+        # In production, use SSM Session Manager instead (no port 22 needed).
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SshCidr
+          Description: SSH access (restrict to your IP in production)
+        # HTTP — for the FastAPI app (port 80).
+        # In production, only the ALB security group should be the source,
+        # not 0.0.0.0/0. We allow anywhere here for learning simplicity.
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+          Description: HTTP from anywhere
+        # HTTPS — for secure connections.
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '0.0.0.0/0'
+          Description: HTTPS from anywhere
+      # ── Outbound rules ──────────────────────────────────────
+      # Default: all outbound traffic is allowed. Needed so the
+      # instance can download packages (yum, pip), reach AWS APIs,
+      # and call external services.
+      SecurityGroupEgress:
+        - IpProtocol: '-1'          # -1 = all protocols
+          CidrIp: '0.0.0.0/0'
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ec2-sg'
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ── EC2 INSTANCE ──────────────────────────────────────────────
+  # A virtual server you fully control: OS, patches, scaling.
+  # EC2 underlies ECS (containers run ON EC2 or Fargate).
+  #
+  # Console equivalent: EC2 -> Launch instance -> fill in the form
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      # ── AMI ──────────────────────────────────────────────────
+      # Amazon Machine Image — the OS template.
+      # Our default resolves to the latest Amazon Linux 2023 via SSM.
+      ImageId: !Ref AmiId
+
+      # ── Instance Type ────────────────────────────────────────
+      # CPU + memory combo. t3.micro = 2 vCPU, 1 GB RAM.
+      # See 04-ec2.py for the full family/size reference table.
+      InstanceType: !Ref InstanceType
+
+      # ── Key Pair ─────────────────────────────────────────────
+      # SSH key for remote login. The public key is stored on the
+      # instance, you keep the private key (.pem file).
+      KeyName: !Ref KeyPairName
+
+      # ── Network ──────────────────────────────────────────────
+      # Place in a PUBLIC subnet so we can reach it from the internet.
+      # Import the subnet ID from the VPC stack's exports.
+      SubnetId: !ImportValue
+        !Sub '${Environment}-PublicSubnetAId'
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+
+      # ── Storage ──────────────────────────────────────────────
+      # EBS (Elastic Block Store) = the disk. gp3 is the latest
+      # general-purpose SSD type. 20 GB is enough for our app.
+      #
+      # DeleteOnTermination: true means the disk is deleted when
+      # the instance is terminated. Set to false if you want to
+      # keep data after termination (e.g., for forensics).
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda        # root volume device name
+          Ebs:
+            VolumeSize: 20              # GB
+            VolumeType: gp3             # latest general-purpose SSD
+            DeleteOnTermination: true   # clean up disk on terminate
+            Encrypted: true             # encrypt the volume at rest
+
+      # ── UserData ─────────────────────────────────────────────
+      # A bash script that runs ONCE at first boot. Automates setup
+      # so you don't have to SSH in and install things manually.
+      #
+      # !Base64 encodes the script — EC2 requires UserData in base64.
+      # CloudFormation handles the encoding for you.
+      #
+      # !Sub replaces ${Environment} with the parameter value.
+      #
+      # This script:
+      #   1. Updates the OS packages
+      #   2. Installs Python 3.11
+      #   3. Installs uv (fast Python package manager)
+      #   4. Creates a minimal FastAPI app
+      #   5. Installs dependencies and starts the server on port 80
+      #
+      # Debug: if the app isn't running after launch, SSH in and check:
+      #   cat /var/log/cloud-init-output.log
+      UserData:
+        !Base64
+          !Sub |
+            #!/bin/bash
+            set -e
+
+            # ── Update OS packages ──────────────────────────
+            dnf update -y
+
+            # ── Install Python 3.11 ─────────────────────────
+            dnf install python3.11 python3.11-pip -y
+
+            # ── Install uv (fast Python package manager) ────
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            source /root/.local/bin/env
+
+            # ── Create app directory ────────────────────────
+            mkdir -p /app && cd /app
+
+            # ── Create the FastAPI app ──────────────────────
+            cat > main.py << 'PYEOF'
+            from fastapi import FastAPI
+            import os
+
+            app = FastAPI(title="Book Store API", version="1.0.0")
+
+            @app.get("/health")
+            def health():
+                return {"status": "ok", "env": os.getenv("ENV", "ec2")}
+
+            @app.get("/")
+            def root():
+                return {"message": "Book Store API on EC2"}
+            PYEOF
+
+            # ── Create pyproject.toml ───────────────────────
+            cat > pyproject.toml << 'TOMLEOF'
+            [project]
+            name = "book-store-api"
+            version = "1.0.0"
+            requires-python = ">=3.11"
+            dependencies = [
+                "fastapi==0.115.0",
+                "uvicorn==0.30.0",
+            ]
+            TOMLEOF
+
+            # ── Set environment variable ────────────────────
+            echo "ENV=${Environment}" > .env
+
+            # ── Install dependencies and start server ───────
+            # Port 80 so HTTP works without specifying a port.
+            # --host 0.0.0.0 binds to all interfaces (required
+            # for external access, not just localhost).
+            uv sync
+            nohup uv run uvicorn main:app --host 0.0.0.0 --port 80 &
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-instance'
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ── ELASTIC IP ────────────────────────────────────────────────
+  # A static public IPv4 address that persists across instance
+  # stop/start cycles. Without it, the instance gets a NEW random
+  # public IP every time it stops and starts.
+  #
+  # COST:
+  #   Attached to a RUNNING instance -> FREE
+  #   NOT attached (or instance stopped) -> $0.005/hour (~$3.60/mo)
+  #   AWS charges for UNUSED Elastic IPs to discourage hoarding.
+  #
+  # In production, use an ALB instead of an Elastic IP.
+  # ALB has its own DNS name that never changes + health checks +
+  # load balancing across multiple instances.
+  #
+  # Console equivalent: EC2 -> Elastic IPs -> Allocate -> Associate
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    DependsOn: EC2Instance
+    Properties:
+      Domain: vpc
+      # Associate this EIP with the EC2 instance.
+      InstanceId: !Ref EC2Instance
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-eip'
+        - Key: Environment
+          Value: !Ref Environment
+
+
+# ═════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ═════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  InstanceId:
+    Description: EC2 instance ID (e.g., i-0abc123...)
+    Value: !Ref EC2Instance
+    Export:
+      Name: !Sub '${Environment}-EC2InstanceId'
+
+  PublicIP:
+    Description: >-
+      Elastic IP (static). Use this to access the app:
+      curl http://<this-ip>/health
+    Value: !Ref ElasticIP
+
+  PublicDnsName:
+    Description: >-
+      Public DNS name of the instance. Auto-generated by AWS.
+      e.g., ec2-54-1-2-3.eu-west-1.compute.amazonaws.com
+    Value: !GetAtt EC2Instance.PublicDnsName
+
+  SshCommand:
+    Description: SSH command to connect to the instance
+    Value: !Sub >-
+      ssh -i ${KeyPairName}.pem ec2-user@${ElasticIP}
+
+  HealthCheckUrl:
+    Description: Health check URL (test after launch)
+    Value: !Sub 'http://${ElasticIP}/health'
+
+  SecurityGroupId:
+    Description: Security group ID for the EC2 instance
+    Value: !Ref EC2SecurityGroup
+    Export:
+      Name: !Sub '${Environment}-EC2SecurityGroupId'
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║   CONSOLE <-> CLOUDFORMATION MAPPING                        ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# ┌─────────────────────────────┬────────────────────────────────┐
+# | Console Setting             | CloudFormation Property         |
+# +─────────────────────────────+────────────────────────────────+
+# | Name: book-store-ec2        | Tags -> Key: Name              |
+# | AMI: Amazon Linux 2023      | ImageId (via SSM parameter)    |
+# | Instance type: t3.micro     | InstanceType parameter         |
+# | Key pair: book-store-key    | KeyName parameter              |
+# | VPC: book-store-vpc         | SubnetId (imports from VPC)    |
+# | Subnet: public              | SubnetId -> PublicSubnetAId    |
+# | Auto-assign public IP       | (via Elastic IP resource)      |
+# | Security group rules        | SecurityGroupIngress list      |
+# | Storage: 8 GB gp3           | BlockDeviceMappings -> Ebs     |
+# | User Data script            | UserData -> !Base64            |
+# └─────────────────────────────┴────────────────────────────────┘
+#
+# ── Instance States (reminder from 04-ec2.py) ─────────────────
+#
+# Running   -> billed for compute + EBS + network
+# Stopped   -> no compute charge, EBS still billed
+# Terminated -> everything deleted (unless EBS delete=false)
+#
+# IMPORTANT: delete this stack when done to stop billing:
+#   aws cloudformation delete-stack --stack-name book-store-ec2-dev

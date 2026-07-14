@@ -1,0 +1,440 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — SNS (Step 16)
+# ══════════════════════════════════════════════════════════════════
+# Navigation:  Python lesson: 16-sns.py
+#
+# This template creates SNS resources:
+#   - Standard SNS topic with display name
+#   - Email subscription (requires confirmation)
+#   - Lambda subscription (placeholder ARN)
+#   - SQS subscription with raw message delivery
+#   - Topic policy allowing CloudWatch Alarms to publish
+#   - Subscription filter policy example
+#   - FIFO topic with content-based deduplication
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#     --stack-name book-store-sns-dev \
+#     --template-body file://16c-sns.yaml \
+#     --parameters ParameterKey=Environment,ParameterValue=dev \
+#                  ParameterKey=AlertEmail,ParameterValue=team@example.com
+#
+# ── Pub/Sub Model ───────────────────────────────────────────────
+#
+# SNS implements the publish/subscribe pattern:
+#
+#   Publisher → Topic → Subscriber 1
+#                    → Subscriber 2
+#                    → Subscriber 3
+#
+# Publishers send messages to a TOPIC. Subscribers receive messages
+# FROM the topic. Neither knows about the other — the topic
+# decouples them completely.
+#
+# This is different from SQS (point-to-point):
+#   SNS = broadcast (one message → many receivers)
+#   SQS = queue (one message → one receiver)
+#
+# ── Fanout Pattern: SNS → Multiple SQS Queues ──────────────────
+#
+# One of the most powerful AWS integration patterns:
+#
+#   New book event → SNS Topic → SQS Queue 1 (search indexing)
+#                              → SQS Queue 2 (email notifications)
+#                              → SQS Queue 3 (analytics pipeline)
+#                              → Lambda (generate thumbnail)
+#
+# Each consumer processes the SAME event independently, at its
+# own pace, with its own retry logic. If one consumer fails,
+# the others are unaffected.
+#
+# ── Message Filtering ──────────────────────────────────────────
+#
+# Without filters: EVERY subscriber gets EVERY message.
+# With filters: subscribers only get messages they care about.
+#
+# Filter policy is set on the SUBSCRIPTION (not the topic).
+# The publisher includes "message attributes" — the filter policy
+# matches against these attributes.
+#
+#   Publisher sends:
+#     Message: "New book added"
+#     Attributes: { "genre": "fiction", "price_range": "20-30" }
+#
+#   Subscriber filter policy:
+#     { "genre": ["fiction", "mystery"] }
+#     → Receives only fiction and mystery messages
+#
+# ── FIFO vs Standard ───────────────────────────────────────────
+#
+#   ┌──────────────────┬─────────────────────┬────────────────────┐
+#   │                  │ Standard            │ FIFO               │
+#   ├──────────────────┼─────────────────────┼────────────────────┤
+#   │ Ordering         │ Best-effort         │ Strict (per group) │
+#   │ Delivery         │ At-least-once       │ Exactly-once       │
+#   │ Throughput       │ ~30M messages/sec   │ 300 messages/sec   │
+#   │ Subscribers      │ All protocols       │ SQS FIFO only      │
+#   │ Name             │ my-topic            │ my-topic.fifo      │
+#   │ Deduplication    │ None                │ Content-based or   │
+#   │                  │                     │ dedup ID required   │
+#   └──────────────────┴─────────────────────┴────────────────────┘
+#
+#   Use FIFO when message ordering matters (financial transactions,
+#   sequential workflow steps) or when you need exactly-once delivery.
+#
+# ── Delivery Retries & DLQ ──────────────────────────────────────
+#
+# When SNS fails to deliver a message to a subscriber:
+#   - HTTP/HTTPS: retries 3 times, then backs off (up to 23 tries)
+#   - Lambda: retries 3 times
+#   - SQS: retries immediately (almost never fails)
+#   - Email/SMS: no retries
+#
+# After all retries are exhausted, the message is lost UNLESS you
+# configure a Dead Letter Queue (DLQ) — an SQS queue that captures
+# failed deliveries. Always set a DLQ for Lambda subscriptions.
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  SNS — standard topic, FIFO topic, subscriptions (email, Lambda, SQS),
+  topic policy, and filter policies for the Book Store API (Step 16).
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+    Description: Deployment environment.
+
+  # ── Alert Email ────────────────────────────────────────────────
+  # The email address that receives alarm notifications.
+  # IMPORTANT: After stack creation, the subscriber must click
+  # the confirmation link in the email. Until confirmed, no
+  # messages are delivered to this address.
+  AlertEmail:
+    Type: String
+    Default: 'team@example.com'
+    Description: >-
+      Email address for alert notifications. A confirmation email
+      will be sent after stack creation — click the link to activate.
+    AllowedPattern: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    ConstraintDescription: Must be a valid email address.
+
+  # ── Lambda Function ARN ────────────────────────────────────────
+  # Placeholder for the Lambda function that processes SNS messages.
+  # Replace with an actual Lambda ARN from your Lambda stack.
+  ProcessorLambdaArn:
+    Type: String
+    Default: 'arn:aws:lambda:eu-west-1:123456789012:function:book-store-processor'
+    Description: ARN of the Lambda function that processes SNS messages.
+
+  # ── SQS Queue ARN ──────────────────────────────────────────────
+  # The SQS queue that receives SNS messages for async processing.
+  # Typically imported from the SQS stack: !ImportValue dev-BookStoreQueueArn
+  SubscriberQueueArn:
+    Type: String
+    Default: 'arn:aws:sqs:eu-west-1:123456789012:book-store-events-dev'
+    Description: ARN of the SQS queue that subscribes to the topic.
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ────────────────────────────────────────────────────────────────
+  # 1. STANDARD SNS TOPIC
+  # ────────────────────────────────────────────────────────────────
+  #
+  # A topic is the "channel" that publishers send messages to and
+  # subscribers receive messages from.
+  #
+  # DisplayName appears in email "From" and SMS sender fields.
+  # TopicName is the identifier used in ARNs and API calls.
+
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      # TopicName: the name used in the ARN.
+      # arn:aws:sns:eu-west-1:123456789012:book-store-alerts-dev
+      TopicName: !Sub 'book-store-alerts-${Environment}'
+
+      # DisplayName: shown in email subjects and SMS messages.
+      # Limit: 100 characters. For SMS, limit is 10 characters.
+      DisplayName: !Sub 'Book Store Alerts (${Environment})'
+
+      # KmsMasterKeyId: encrypt messages at rest with KMS.
+      # Default: no encryption (messages are encrypted in transit).
+      # Use 'alias/aws/sns' for the AWS-managed key (free), or
+      # specify a custom KMS key ARN for tighter control.
+      # KmsMasterKeyId: alias/aws/sns
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ────────────────────────────────────────────────────────────────
+  # 2. EMAIL SUBSCRIPTION
+  # ────────────────────────────────────────────────────────────────
+  #
+  # Sends messages to an email address. After stack creation,
+  # a confirmation email is sent — the recipient MUST click
+  # "Confirm subscription" before messages are delivered.
+  #
+  # Status flow:
+  #   PendingConfirmation → Confirmed → (active)
+  #
+  # If unconfirmed, the subscription is deleted after 3 days.
+  # CloudFormation shows the subscription as created, but
+  # messages won't be delivered until confirmed.
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      # TopicArn: which topic to subscribe to.
+      TopicArn: !Ref AlertsTopic
+
+      # Protocol: delivery method.
+      # Options: email, email-json, sms, http, https, sqs, lambda,
+      #          firehose, application (mobile push)
+      Protocol: email
+
+      # Endpoint: the email address to deliver to.
+      Endpoint: !Ref AlertEmail
+
+  # ────────────────────────────────────────────────────────────────
+  # 3. LAMBDA SUBSCRIPTION
+  # ────────────────────────────────────────────────────────────────
+  #
+  # Invokes a Lambda function for each message published to the topic.
+  # The message is passed in the Lambda event object.
+  #
+  # The Lambda function receives an event like:
+  #   {
+  #     "Records": [{
+  #       "Sns": {
+  #         "Message": "High error rate detected",
+  #         "Subject": "ALARM: ECS-errors",
+  #         "MessageAttributes": { ... }
+  #       }
+  #     }]
+  #   }
+  #
+  # IMPORTANT: The Lambda function needs a resource-based policy
+  # (AWS::Lambda::Permission) allowing SNS to invoke it. Without
+  # this permission, the subscription will be created but invocations
+  # will fail silently.
+
+  LambdaSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertsTopic
+      Protocol: lambda
+      Endpoint: !Ref ProcessorLambdaArn
+
+      # RedrivePolicy: send failed deliveries to a dead letter queue.
+      # Without this, messages that fail Lambda delivery are lost.
+      # The DLQ must be an SQS queue — specify its ARN here.
+      # RedrivePolicy:
+      #   deadLetterTargetArn: !GetAtt LambdaDLQ.Arn
+
+      # FilterPolicy: only deliver messages matching these attributes.
+      # This subscription only receives messages with severity "critical"
+      # or "high". Messages with severity "low" or "info" are skipped.
+      #
+      # The publisher must include MessageAttributes when publishing:
+      #   sns.publish(
+      #     TopicArn=topic_arn,
+      #     Message="Something broke",
+      #     MessageAttributes={
+      #       "severity": {"DataType": "String", "StringValue": "critical"},
+      #       "service": {"DataType": "String", "StringValue": "api"}
+      #     }
+      #   )
+      FilterPolicy:
+        severity:
+          - critical
+          - high
+
+      # FilterPolicyScope: where to apply the filter.
+      #   MessageAttributes (default) → filter on message attributes
+      #   MessageBody → filter on the JSON message body itself
+      FilterPolicyScope: MessageAttributes
+
+  # ────────────────────────────────────────────────────────────────
+  # 4. SQS SUBSCRIPTION (with raw message delivery)
+  # ────────────────────────────────────────────────────────────────
+  #
+  # Sends messages to an SQS queue for async processing.
+  # This is the SNS → SQS fanout pattern.
+  #
+  # By default, SNS wraps the message in an SNS envelope JSON.
+  # With RawMessageDelivery: true, the raw message body is sent
+  # directly — no wrapper. Cleaner for consumers that don't need
+  # SNS metadata.
+  #
+  # Without raw delivery (default):
+  #   {
+  #     "Type": "Notification",
+  #     "MessageId": "...",
+  #     "TopicArn": "...",
+  #     "Message": "your actual message here",
+  #     "Timestamp": "..."
+  #   }
+  #
+  # With raw delivery:
+  #   "your actual message here"
+
+  SqsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertsTopic
+      Protocol: sqs
+      Endpoint: !Ref SubscriberQueueArn
+
+      # RawMessageDelivery: bypass the SNS envelope wrapper.
+      # Set to true when your SQS consumer doesn't need the
+      # SNS metadata (MessageId, TopicArn, Timestamp, etc.).
+      RawMessageDelivery: true
+
+  # ────────────────────────────────────────────────────────────────
+  # 5. TOPIC POLICY (who can publish to this topic)
+  # ────────────────────────────────────────────────────────────────
+  #
+  # Controls which AWS services or principals can publish messages
+  # to this topic. Without a policy, only the topic owner (the
+  # account that created it) can publish.
+  #
+  # Common use case: allow CloudWatch Alarms to publish to the topic.
+  # CloudWatch Alarms fire SNS notifications when metrics breach
+  # thresholds — but they need permission to publish.
+
+  AlertsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref AlertsTopic
+
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Allow CloudWatch Alarms to publish to this topic.
+          # This is essential for the CloudWatch → SNS → Email/Lambda
+          # alerting pattern used in 10-cloudwatch.py.
+          - Sid: AllowCloudWatchAlarms
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action: 'sns:Publish'
+            Resource: !Ref AlertsTopic
+            Condition:
+              # Restrict to alarms in the same account.
+              # Without this condition, any AWS account's CloudWatch
+              # could publish to your topic.
+              StringEquals:
+                'AWS:SourceAccount': !Ref 'AWS::AccountId'
+
+          # Allow the topic owner (this account) full control.
+          - Sid: AllowOwnerFullControl
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - 'sns:Publish'
+              - 'sns:Subscribe'
+              - 'sns:Unsubscribe'
+              - 'sns:GetTopicAttributes'
+              - 'sns:SetTopicAttributes'
+              - 'sns:ListSubscriptionsByTopic'
+            Resource: !Ref AlertsTopic
+
+  # ────────────────────────────────────────────────────────────────
+  # 6. FIFO TOPIC (with content-based deduplication)
+  # ────────────────────────────────────────────────────────────────
+  #
+  # FIFO topics guarantee:
+  #   - Strict message ordering (per message group)
+  #   - Exactly-once delivery (deduplication)
+  #
+  # FIFO topic names MUST end with .fifo
+  # FIFO topics can ONLY have SQS FIFO queue subscribers.
+  #
+  # Message groups:
+  #   Messages with the same MessageGroupId are delivered in order.
+  #   Different groups are processed independently (parallelism).
+  #
+  #   Example:
+  #     MessageGroupId: "order-123" → all events for order-123 in order
+  #     MessageGroupId: "order-456" → processed independently
+  #
+  # Content-based deduplication:
+  #   If enabled, SNS uses a SHA-256 hash of the message body to
+  #   detect and reject duplicate messages within a 5-minute window.
+  #   Alternative: publisher provides a MessageDeduplicationId.
+
+  OrderEventsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      # FIFO topic names MUST end with .fifo
+      TopicName: !Sub 'book-store-order-events-${Environment}.fifo'
+      DisplayName: !Sub 'Book Store Order Events (${Environment})'
+
+      # FifoTopic: must be true for FIFO behavior.
+      FifoTopic: true
+
+      # ContentBasedDeduplication: automatically deduplicate based
+      # on message content hash (SHA-256). If two identical messages
+      # are published within 5 minutes, the second is rejected.
+      ContentBasedDeduplication: true
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: TopicType
+          Value: FIFO
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  # ── Standard Topic ARN ─────────────────────────────────────────
+  # Used in CloudWatch Alarm actions:
+  #   AlarmActions:
+  #     - !ImportValue dev-AlertsTopicArn
+  AlertsTopicArn:
+    Description: >-
+      ARN of the alerts SNS topic. Use as AlarmAction in CloudWatch
+      Alarms, or as the target for other AWS service notifications.
+    Value: !Ref AlertsTopic
+    # !Ref on an SNS Topic returns the ARN.
+    Export:
+      Name: !Sub '${Environment}-AlertsTopicArn'
+
+  # ── Standard Topic Name ────────────────────────────────────────
+  AlertsTopicName:
+    Description: Name of the alerts SNS topic.
+    Value: !GetAtt AlertsTopic.TopicName
+    Export:
+      Name: !Sub '${Environment}-AlertsTopicName'
+
+  # ── FIFO Topic ARN ────────────────────────────────────────────
+  OrderEventsTopicArn:
+    Description: >-
+      ARN of the FIFO order events topic. Subscribe SQS FIFO
+      queues to receive ordered, deduplicated order events.
+    Value: !Ref OrderEventsTopic
+    Export:
+      Name: !Sub '${Environment}-OrderEventsTopicArn'

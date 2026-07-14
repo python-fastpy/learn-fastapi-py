@@ -1,0 +1,919 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — CI/CD Pipeline (Step 19)
+# ══════════════════════════════════════════════════════════════════
+# Companion to: 19-codedeploy-pipeline.py
+# Navigation:  next: 20c-rds.yaml →
+#
+# WHAT THIS TEMPLATE CREATES:
+#   A full CI/CD pipeline for the book-store API:
+#     Source (GitHub) → Build (CodeBuild) → Deploy (ECS Blue/Green)
+#
+#   ┌──────────────────────────────────────────────────────────┐
+#   │                    CodePipeline                           │
+#   │              (orchestrator / conveyor belt)               │
+#   │                                                          │
+#   │  ┌─────────┐    ┌──────────┐    ┌───────────┐           │
+#   │  │ Source   │───>│  Build   │───>│  Deploy   │           │
+#   │  │ Stage    │    │  Stage   │    │  Stage    │           │
+#   │  └─────────┘    └──────────┘    └───────────┘           │
+#   │       │               │               │                  │
+#   │   GitHub          CodeBuild       CodeDeploy             │
+#   │   (CodeStar       (compile,       (Blue/Green            │
+#   │    Connection)     test, Docker)   to ECS)               │
+#   └──────────────────────────────────────────────────────────┘
+#
+# CONCEPTS COVERED:
+#   - CodeStar Connections (GitHub integration)
+#   - CodeBuild with inline buildspec
+#   - CodePipeline multi-stage orchestration
+#   - CodeDeploy Blue/Green for ECS
+#   - S3 artifact bucket for passing data between stages
+#   - IAM roles for each service
+#
+# COST:
+#   CodePipeline: $1/month per active pipeline
+#   CodeBuild:    Free tier: 100 build-minutes/month
+#   CodeDeploy:   Free for ECS/Lambda deployments
+#   S3 artifact:  Pennies (small files, short-lived)
+#
+# ── Pipeline Stages & Artifact Flow ────────────────────────────
+#
+#   Artifacts are zip files stored in S3. Each stage produces
+#   output artifacts and consumes input artifacts:
+#
+#   Source Stage:
+#     Output: SourceOutput (zip of your source code)
+#       ↓
+#   Build Stage:
+#     Input:  SourceOutput
+#     Output: BuildOutput (imagedefinitions.json, appspec.yaml,
+#             taskdef.json — whatever your buildspec produces)
+#       ↓
+#   Deploy Stage:
+#     Input:  BuildOutput
+#     (CodeDeploy reads appspec.yaml and taskdef.json from it)
+#
+# ── Blue/Green vs Rolling ───────────────────────────────────────
+#
+#   Rolling (ECS default, simpler):
+#     Old tasks replaced one by one. No extra target groups needed.
+#     Rollback = redeploy old version (slow).
+#
+#   Blue/Green (this template):
+#     Two target groups. Deploy to "green", test, flip traffic.
+#     Rollback = flip back to "blue" instantly.
+#     Requires: 2 target groups, CodeDeploy app + deployment group.
+#
+#   Blue/Green is production-grade but more complex to set up.
+#   This template shows the full setup.
+#
+# ── CodeStar Connections ────────────────────────────────────────
+#
+#   CodeStar Connections replace the old OAuth-based GitHub
+#   integration (GitHub v1 source action). Key differences:
+#
+#   Old way (v1):  OAuth token stored in Secrets Manager.
+#                  Limited to one user's permissions.
+#   New way (v2):  CodeStar Connection installed as GitHub App.
+#                  Organization-level access, more granular.
+#
+#   You create the connection in the console first, then pass
+#   its ARN as a parameter. The connection must be in AVAILABLE
+#   status (requires completing the handshake in the console).
+#
+# ── Buildspec Structure ─────────────────────────────────────────
+#
+#   The buildspec.yml defines what CodeBuild does. It has phases:
+#
+#   install:    Install dependencies, runtimes
+#   pre_build:  Login to ECR, set env vars
+#   build:      Run tests, build Docker image
+#   post_build: Push to ECR, create deployment artifacts
+#
+#   This template uses an inline buildspec (BuildSpec property)
+#   so everything is in one file. In practice, you'd reference
+#   a buildspec.yml file in your source repo instead.
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CI/CD Pipeline for book-store API.
+  CodePipeline orchestrates Source (GitHub) → Build (CodeBuild) →
+  Deploy (ECS Blue/Green via CodeDeploy). See 19-codedeploy-pipeline.py.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS — configurable inputs (like function arguments)
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+    Description: >-
+      Deployment environment. Affects naming and deployment config.
+      dev/qa = faster deploys. uat/prod = blue/green with rollback.
+
+  # ── Source (GitHub) ──────────────────────────────────────────
+
+  CodeStarConnectionArn:
+    Type: String
+    Description: >-
+      ARN of the CodeStar Connection to GitHub.
+      Create this in the console first:
+        Developer Tools → Settings → Connections → Create connection.
+      Must be in AVAILABLE status (complete the OAuth handshake).
+      Example: arn:aws:codeconnections:eu-west-1:123456789012:connection/abc-123
+    AllowedPattern: 'arn:aws:codeconnections:.*'
+    # Note: older connections use 'arn:aws:codestar-connections:...'
+    # Both work. AWS renamed the service to CodeConnections in 2024.
+
+  GitHubOwner:
+    Type: String
+    Default: your-org
+    Description: GitHub organization or username that owns the repo.
+
+  GitHubRepo:
+    Type: String
+    Default: book-store-api
+    Description: GitHub repository name (not the full URL).
+
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: Branch to trigger pipeline on push.
+
+  # ── Build ────────────────────────────────────────────────────
+
+  EcrRepositoryUri:
+    Type: String
+    Description: >-
+      ECR repository URI for Docker images.
+      Example: 060725138335.dkr.ecr.eu-west-1.amazonaws.com/book-store-api
+      This was created in the 07c ECR template.
+
+  ContainerName:
+    Type: String
+    Default: book-store-container
+    Description: >-
+      Name of the container in the ECS task definition.
+      Must match the container name in your taskdef.json.
+
+  # ── Deploy (ECS) ─────────────────────────────────────────────
+
+  EcsClusterName:
+    Type: String
+    Default: book-store-cluster
+    Description: ECS cluster name (from 08c-ecs-fargate template).
+
+  EcsServiceName:
+    Type: String
+    Default: book-store-service
+    Description: ECS service name (from 08c-ecs-fargate template).
+
+  # Blue/Green target group ARNs — these are the two target groups
+  # on your ALB. CodeDeploy flips traffic between them.
+  ProdListenerArn:
+    Type: String
+    Description: >-
+      ARN of the ALB production listener (port 443).
+      Traffic is routed through this listener.
+
+  BlueTargetGroupName:
+    Type: String
+    Default: book-store-tg-blue
+    Description: Name of the "blue" (current production) target group.
+
+  GreenTargetGroupName:
+    Type: String
+    Default: book-store-tg-green
+    Description: Name of the "green" (new deployment) target group.
+
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES — the AWS infrastructure to create
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ────────────────────────────────────────────────────────────────
+  # S3 ARTIFACT BUCKET
+  # ────────────────────────────────────────────────────────────────
+  # CodePipeline needs an S3 bucket to pass artifacts between stages.
+  # Each stage writes its output artifacts as zip files here.
+  # The bucket is private and encrypted — these are temporary build
+  # artifacts, not user-facing content.
+
+  PipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'book-store-pipeline-artifacts-${AWS::AccountId}-${Environment}'
+      # Include account ID to ensure global uniqueness (S3 bucket
+      # names are globally unique across ALL AWS accounts).
+
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+              # AES256 = SSE-S3 (free, AWS-managed key).
+              # Use aws:kms for customer-managed KMS key if needed.
+
+      PublicAccessBlockConfiguration:
+        # Block ALL public access — these are internal build artifacts.
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+      LifecycleConfiguration:
+        Rules:
+          - Id: CleanupOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+            # Artifacts older than 30 days are useless — delete them.
+            # This keeps costs near zero. Adjust for audit requirements.
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Purpose
+          Value: pipeline-artifacts
+
+
+  # ────────────────────────────────────────────────────────────────
+  # IAM ROLE: CODEBUILD
+  # ────────────────────────────────────────────────────────────────
+  # CodeBuild needs permissions to:
+  #   - Pull source from S3 (pipeline artifacts)
+  #   - Push Docker images to ECR
+  #   - Write logs to CloudWatch
+  #   - Read secrets from Secrets Manager (for build-time config)
+  #   - Write output artifacts back to S3
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'book-store-codebuild-role-${Environment}'
+
+      # ── Trust Policy (WHO can assume this role) ──────────────
+      # Only the CodeBuild service can assume this role.
+      # Think of it as: "I trust codebuild.amazonaws.com to wear
+      # this hat and use its permissions."
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+
+      # ── Permissions Policy (WHAT this role can do) ───────────
+      Policies:
+        - PolicyName: CodeBuildPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+
+              # CloudWatch Logs — CodeBuild writes build logs here.
+              # Without this, you can't see build output.
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/book-store-build-${Environment}*'
+
+              # S3 — Read input artifacts, write output artifacts.
+              # The pipeline bucket is where stages pass data.
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketLocation
+                Resource:
+                  - !GetAtt PipelineArtifactBucket.Arn
+                  - !Sub '${PipelineArtifactBucket.Arn}/*'
+
+              # ECR — Push Docker images after building them.
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+                # GetAuthorizationToken doesn't support resource-level
+                # restrictions — it must be '*'. This is an AWS limitation.
+
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/book-store-api'
+
+              # Secrets Manager — Read build-time secrets (API keys,
+              # tokens) that CodeBuild injects as environment variables.
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:book-store/*'
+
+
+  # ────────────────────────────────────────────────────────────────
+  # CODEBUILD PROJECT
+  # ────────────────────────────────────────────────────────────────
+  # CodeBuild compiles code, runs tests, and builds Docker images.
+  # Think of it as a managed Jenkins build agent that spins up on
+  # demand and shuts down when done. No servers to maintain.
+  #
+  # Build flow:
+  #   1. CodePipeline triggers CodeBuild with source code
+  #   2. CodeBuild spins up a Docker container (build environment)
+  #   3. Runs the phases defined in the buildspec
+  #   4. Produces output artifacts (imagedefinitions.json)
+  #   5. CodePipeline picks up the artifacts for the next stage
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub 'book-store-build-${Environment}'
+      Description: >-
+        Builds and tests the book-store API, pushes Docker image to ECR.
+
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+
+      # ── Build Environment ────────────────────────────────────
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        # BUILD_GENERAL1_SMALL = 3 GB RAM, 2 vCPUs. Cheapest option.
+        # Options: SMALL (3GB/2vCPU), MEDIUM (7GB/4vCPU),
+        #          LARGE (15GB/8vCPU), 2XLARGE (145GB/72vCPU)
+
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        # This is the CodeBuild managed image. Ubuntu and Amazon Linux
+        # options available. Standard images include Docker, Python,
+        # Node.js, Java, Go, .NET. Version 5.0 is latest as of 2024.
+        #
+        # Alternative: aws/codebuild/standard:7.0 (Ubuntu-based)
+        # Use Ubuntu if you need apt-get packages or Ubuntu-specific tools.
+
+        PrivilegedMode: true
+        # CRITICAL: Must be true to build Docker images inside CodeBuild.
+        # Without this, `docker build` fails with permission errors.
+        # Only enable when you actually need Docker-in-Docker.
+
+        # ── Environment Variables ──────────────────────────────
+        # These are available in the buildspec as $VAR_NAME.
+        EnvironmentVariables:
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref 'AWS::AccountId'
+            Type: PLAINTEXT
+            # PLAINTEXT = visible in console and logs.
+
+          - Name: ECR_REPO_URI
+            Value: !Ref EcrRepositoryUri
+            Type: PLAINTEXT
+
+          - Name: CONTAINER_NAME
+            Value: !Ref ContainerName
+            Type: PLAINTEXT
+
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+            Type: PLAINTEXT
+
+          # Example: reading a secret from Secrets Manager as an env var.
+          # CodeBuild resolves this at build time — the value never
+          # appears in the buildspec or template.
+          #
+          # - Name: DOCKER_HUB_TOKEN
+          #   Value: book-store/dockerhub-token
+          #   Type: SECRETS_MANAGER
+          #   # SECRETS_MANAGER type: value is the secret name (or ARN).
+          #   # CodeBuild fetches and injects the secret value at runtime.
+          #   # Format: secret-name:json-key:version-stage:version-id
+          #   # Example: my-secret:password:AWSCURRENT
+
+          # Example: reading from Parameter Store
+          # - Name: FEATURE_FLAG
+          #   Value: /book-store/dev/enable-new-ui
+          #   Type: PARAMETER_STORE
+          #   # PARAMETER_STORE type: value is the parameter name.
+          #   # Fetched at build start, injected as env var.
+
+      # ── Source ───────────────────────────────────────────────
+      # When triggered by CodePipeline, source comes from the
+      # pipeline (not directly from GitHub). Set Type to CODEPIPELINE.
+      Source:
+        Type: CODEPIPELINE
+        # When Source Type is CODEPIPELINE, CodePipeline provides the
+        # source code. The BuildSpec below defines what to do with it.
+
+        # ── Inline Buildspec ─────────────────────────────────
+        # In production, you'd use a buildspec.yml file in your repo.
+        # Inline is shown here so the template is self-contained.
+        BuildSpec: |
+          version: 0.2
+
+          # Buildspec version 0.2 is current. Don't use 0.1.
+
+          phases:
+            # ── INSTALL: set up runtimes and dependencies ────
+            install:
+              runtime-versions:
+                python: 3.11
+                # CodeBuild managed images support multiple runtimes.
+                # Specify the ones you need.
+              commands:
+                - echo "Installing dependencies..."
+                - pip install -r requirements.txt
+
+            # ── PRE_BUILD: prepare for the build ─────────────
+            pre_build:
+              commands:
+                - echo "Logging in to Amazon ECR..."
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION |
+                  docker login --username AWS --password-stdin
+                  $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+
+                - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+                - IMAGE_TAG=${COMMIT_HASH:-latest}
+                # CODEBUILD_RESOLVED_SOURCE_VERSION = full git SHA.
+                # We take the first 7 chars for a shorter tag.
+
+            # ── BUILD: compile, test, build image ────────────
+            build:
+              commands:
+                - echo "Running tests..."
+                - pytest tests/ -v --tb=short
+                # If tests fail, the build fails. Pipeline stops here.
+
+                - echo "Building Docker image..."
+                - docker build -t $ECR_REPO_URI:$IMAGE_TAG .
+                - docker tag $ECR_REPO_URI:$IMAGE_TAG $ECR_REPO_URI:latest
+
+            # ── POST_BUILD: push image, create artifacts ─────
+            post_build:
+              commands:
+                - echo "Pushing image to ECR..."
+                - docker push $ECR_REPO_URI:$IMAGE_TAG
+                - docker push $ECR_REPO_URI:latest
+
+                # Create imagedefinitions.json for ECS rolling deploy.
+                # This tells ECS which container image to use.
+                - printf '[{"name":"%s","imageUri":"%s"}]'
+                  $CONTAINER_NAME $ECR_REPO_URI:$IMAGE_TAG
+                  > imagedefinitions.json
+
+                - echo "Build completed on $(date)"
+
+          # ── ARTIFACTS: what to pass to the next stage ──────
+          artifacts:
+            files:
+              - imagedefinitions.json
+              - appspec.yaml
+              - taskdef.json
+            # These files are zipped and stored in S3.
+            # CodePipeline picks them up for the Deploy stage.
+
+      # ── Artifacts ────────────────────────────────────────────
+      Artifacts:
+        Type: CODEPIPELINE
+        # Output goes back to CodePipeline (stored in the artifact bucket).
+
+      # ── Logging ──────────────────────────────────────────────
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Sub '/aws/codebuild/book-store-build-${Environment}'
+          # Build logs are essential for debugging failed builds.
+          # You can also send them to S3 for long-term retention.
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ────────────────────────────────────────────────────────────────
+  # IAM ROLE: CODEPIPELINE
+  # ────────────────────────────────────────────────────────────────
+  # CodePipeline needs permissions to:
+  #   - Use the CodeStar Connection (pull from GitHub)
+  #   - Trigger CodeBuild
+  #   - Trigger CodeDeploy
+  #   - Read/write the S3 artifact bucket
+  #   - Pass IAM roles to other services
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'book-store-pipeline-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+
+      Policies:
+        - PolicyName: CodePipelinePermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+
+              # CodeStar Connection — pull source code from GitHub.
+              - Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                Resource: !Ref CodeStarConnectionArn
+
+              # CodeBuild — start and monitor builds.
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: !GetAtt CodeBuildProject.Arn
+
+              # CodeDeploy — trigger deployments.
+              - Effect: Allow
+                Action:
+                  - codedeploy:CreateDeployment
+                  - codedeploy:GetApplication
+                  - codedeploy:GetApplicationRevision
+                  - codedeploy:GetDeployment
+                  - codedeploy:GetDeploymentConfig
+                  - codedeploy:RegisterApplicationRevision
+                Resource: '*'
+                # CodeDeploy actions are hard to scope to specific
+                # resources. In production, use resource-level ARNs.
+
+              # S3 — read/write artifacts between stages.
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !GetAtt PipelineArtifactBucket.Arn
+                  - !Sub '${PipelineArtifactBucket.Arn}/*'
+
+              # IAM PassRole — CodePipeline passes roles to CodeBuild
+              # and CodeDeploy. Without this, it can't delegate work.
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: '*'
+                Condition:
+                  StringEqualsIfExists:
+                    iam:PassedToService:
+                      - codebuild.amazonaws.com
+                      - codedeploy.amazonaws.com
+                      - ecs-tasks.amazonaws.com
+
+              # ECS — needed if using the ECS deploy action directly
+              # (rolling deploys without CodeDeploy).
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                  - ecs:DescribeTaskDefinition
+                  - ecs:DescribeTasks
+                  - ecs:ListTasks
+                  - ecs:RegisterTaskDefinition
+                  - ecs:UpdateService
+                Resource: '*'
+
+
+  # ────────────────────────────────────────────────────────────────
+  # CODEPIPELINE
+  # ────────────────────────────────────────────────────────────────
+  # The pipeline itself — the orchestrator that ties everything together.
+  # It watches for source changes, triggers builds, and deploys.
+  #
+  # Pipeline execution flow:
+  #   1. GitHub push → CodeStar detects change
+  #   2. Source stage downloads code → S3 artifact
+  #   3. Build stage runs CodeBuild → produces deployment artifacts
+  #   4. Deploy stage triggers CodeDeploy → blue/green ECS deployment
+  #
+  # Each stage runs sequentially. If any stage fails, the pipeline
+  # stops and shows a red indicator in the console.
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub 'book-store-pipeline-${Environment}'
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+
+      # Where to store artifacts between stages.
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineArtifactBucket
+
+      # ── Pipeline Stages ──────────────────────────────────────
+      Stages:
+
+        # ── STAGE 1: SOURCE ─────────────────────────────────
+        # Pulls code from GitHub when a push occurs.
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+                # Provider: CodeStarSourceConnection = GitHub v2.
+                # The old GitHub v1 provider is deprecated.
+                # CodeCommit is being deprecated too — use GitHub.
+
+              Configuration:
+                ConnectionArn: !Ref CodeStarConnectionArn
+                FullRepositoryId: !Sub '${GitHubOwner}/${GitHubRepo}'
+                BranchName: !Ref GitHubBranch
+                OutputArtifactFormat: CODE_ZIP
+                # CODE_ZIP = download as zip. Alternative: CODEBUILD_CLONE_REF
+                # which does a full git clone (needed for git history).
+                DetectChanges: true
+                # true = automatically trigger pipeline on push.
+                # false = manual trigger only (or triggered by schedule).
+
+              OutputArtifacts:
+                - Name: SourceOutput
+                  # This artifact is passed to the Build stage.
+
+              RunOrder: 1
+              # RunOrder determines action sequence within a stage.
+              # Actions with the same RunOrder run in parallel.
+
+        # ── STAGE 2: BUILD ───────────────────────────────────
+        # Runs CodeBuild to compile, test, and build Docker image.
+        - Name: Build
+          Actions:
+            - Name: CodeBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+
+              InputArtifacts:
+                - Name: SourceOutput
+                  # Source code from Stage 1.
+
+              OutputArtifacts:
+                - Name: BuildOutput
+                  # imagedefinitions.json, appspec.yaml, taskdef.json
+
+              RunOrder: 1
+
+        # ── STAGE 3: DEPLOY ──────────────────────────────────
+        # Blue/Green deployment to ECS via CodeDeploy.
+        - Name: Deploy
+          Actions:
+            - Name: DeployToECS
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeployToECS
+                Version: '1'
+                # Provider: CodeDeployToECS = Blue/Green ECS deploy.
+                # For rolling ECS deploy, use Provider: ECS instead.
+                # Rolling is simpler but rollback is slower.
+
+              Configuration:
+                ApplicationName: !Ref CodeDeployApplication
+                DeploymentGroupName: !Ref CodeDeployDeploymentGroup
+                AppSpecTemplateArtifact: BuildOutput
+                AppSpecTemplatePath: appspec.yaml
+                # appspec.yaml tells CodeDeploy which task definition
+                # and container/port to use for the new deployment.
+                TaskDefinitionTemplateArtifact: BuildOutput
+                TaskDefinitionTemplatePath: taskdef.json
+                # taskdef.json is the ECS task definition with a
+                # placeholder <IMAGE1_NAME> that CodeDeploy replaces
+                # with the actual image URI.
+                Image1ArtifactName: BuildOutput
+                Image1ContainerName: IMAGE1_NAME
+                # IMAGE1_NAME is the placeholder token in taskdef.json
+                # that gets replaced with the image URI from the build.
+
+              InputArtifacts:
+                - Name: BuildOutput
+
+              RunOrder: 1
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ────────────────────────────────────────────────────────────────
+  # IAM ROLE: CODEDEPLOY
+  # ────────────────────────────────────────────────────────────────
+  # CodeDeploy needs permissions to manage ECS services, target groups,
+  # and the traffic shifting during blue/green deployments.
+
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'book-store-codedeploy-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS
+        # This AWS-managed policy includes all permissions CodeDeploy
+        # needs for ECS blue/green: ECS, ELB, Lambda (for hooks),
+        # S3, SNS, CloudWatch. Using managed policies is recommended
+        # over inline for standard service roles.
+
+
+  # ────────────────────────────────────────────────────────────────
+  # CODEDEPLOY APPLICATION
+  # ────────────────────────────────────────────────────────────────
+  # A CodeDeploy Application is a logical grouping. It contains
+  # one or more Deployment Groups. Think of it as a project folder.
+  #
+  # ComputePlatform options:
+  #   Server = EC2/on-premises
+  #   Lambda = Lambda functions
+  #   ECS    = ECS services (this template)
+
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub 'book-store-deploy-${Environment}'
+      ComputePlatform: ECS
+      # ECS platform enables blue/green deployments with target groups.
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ────────────────────────────────────────────────────────────────
+  # CODEDEPLOY DEPLOYMENT GROUP
+  # ────────────────────────────────────────────────────────────────
+  # The Deployment Group defines HOW to deploy:
+  #   - Which ECS service to update
+  #   - Which target groups to use for blue/green
+  #   - How long to wait before shifting traffic
+  #   - Whether to auto-rollback on failure
+  #
+  # Blue/Green flow:
+  #   1. Deploy new tasks to "green" target group
+  #   2. Wait for health checks to pass
+  #   3. Shift traffic from "blue" to "green"
+  #   4. Wait TerminationWaitTimeInMinutes
+  #   5. Terminate old "blue" tasks
+  #   Rollback at any point = shift traffic back to "blue"
+
+  CodeDeployDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      DeploymentGroupName: !Sub 'book-store-dg-${Environment}'
+      ApplicationName: !Ref CodeDeployApplication
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+
+      # ── Deployment Configuration ─────────────────────────────
+      DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
+      # Options for ECS blue/green:
+      #   CodeDeployDefault.ECSAllAtOnce  — shift all traffic at once
+      #   CodeDeployDefault.ECSLinear10PercentEvery1Minutes
+      #   CodeDeployDefault.ECSLinear10PercentEvery3Minutes
+      #   CodeDeployDefault.ECSCanary10Percent5Minutes
+      #   CodeDeployDefault.ECSCanary10Percent15Minutes
+      #
+      # AllAtOnce = simple. Canary = safest (test with 10% first).
+      # For prod, consider Canary10Percent5Minutes.
+
+      # ── Blue/Green Deployment Style ──────────────────────────
+      DeploymentStyle:
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+        DeploymentType: BLUE_GREEN
+        # WITH_TRAFFIC_CONTROL = route traffic through load balancer.
+        # BLUE_GREEN = deploy to new target group, then flip.
+
+      # ── Blue/Green Configuration ─────────────────────────────
+      BlueGreenDeploymentConfiguration:
+        TerminateBlueInstancesOnDeploymentSuccess:
+          Action: TERMINATE
+          TerminationWaitTimeInMinutes: 5
+          # After traffic shifts to green, wait 5 minutes before
+          # terminating old blue tasks. This gives you a window to
+          # manually rollback if something looks wrong.
+          # Set to 0 for faster cleanup, or 60 for extra safety.
+
+        DeploymentReadyOption:
+          ActionOnTimeout: CONTINUE_DEPLOYMENT
+          WaitTimeInMinutes: 0
+          # 0 = shift traffic immediately after health checks pass.
+          # Set > 0 to add a manual approval step before traffic shift.
+          # STOP_DEPLOYMENT = require manual approval every time.
+
+      # ── ECS Service ──────────────────────────────────────────
+      ECSServices:
+        - ClusterName: !Ref EcsClusterName
+          ServiceName: !Ref EcsServiceName
+
+      # ── Load Balancer Info ───────────────────────────────────
+      LoadBalancerInfo:
+        TargetGroupPairInfoList:
+          - TargetGroups:
+              - Name: !Ref BlueTargetGroupName
+              - Name: !Ref GreenTargetGroupName
+            ProdTrafficRoute:
+              ListenerArns:
+                - !Ref ProdListenerArn
+            # You can also add a TestTrafficRoute for pre-traffic
+            # validation (e.g., a listener on port 8443 that routes
+            # to the green target group for smoke testing).
+            # TestTrafficRoute:
+            #   ListenerArns:
+            #     - !Ref TestListenerArn
+
+      # ── Auto-Rollback ───────────────────────────────────────
+      AutoRollbackConfiguration:
+        Enabled: true
+        Events:
+          - DEPLOYMENT_FAILURE
+          - DEPLOYMENT_STOP_ON_ALARM
+          # DEPLOYMENT_FAILURE = rollback if deployment fails
+          #   (health checks fail, tasks crash, etc.)
+          # DEPLOYMENT_STOP_ON_ALARM = rollback if a CloudWatch
+          #   alarm triggers during deployment (e.g., error rate > 5%).
+          # This is the safety net. Blue/green + auto-rollback =
+          # near-zero-risk deployments.
+
+      # Optional: CloudWatch alarms to monitor during deployment.
+      # If any alarm triggers, CodeDeploy auto-rolls back.
+      # AlarmConfiguration:
+      #   Enabled: true
+      #   Alarms:
+      #     - Name: book-store-5xx-alarm
+      #     - Name: book-store-latency-alarm
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS — values to use in other templates or reference later
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  PipelineName:
+    Description: Name of the CodePipeline
+    Value: !Ref Pipeline
+    # !Ref on a Pipeline returns its name.
+
+  PipelineArn:
+    Description: ARN of the CodePipeline
+    Value: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
+    # CodePipeline doesn't have a GetAtt for ARN, so we construct it.
+
+  CodeBuildProjectName:
+    Description: Name of the CodeBuild project
+    Value: !Ref CodeBuildProject
+
+  CodeBuildProjectArn:
+    Description: ARN of the CodeBuild project
+    Value: !GetAtt CodeBuildProject.Arn
+
+  ArtifactBucketName:
+    Description: S3 bucket for pipeline artifacts
+    Value: !Ref PipelineArtifactBucket
+
+  CodeDeployApplicationName:
+    Description: CodeDeploy application name
+    Value: !Ref CodeDeployApplication
+
+  CodeDeployDeploymentGroupName:
+    Description: CodeDeploy deployment group name
+    Value: !Ref CodeDeployDeploymentGroup

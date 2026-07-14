@@ -1,0 +1,437 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — Overview & App (Step 0)
+# ══════════════════════════════════════════════════════════════════
+# Navigation:  next: 02c-vpc.yaml ->
+# Companion:  01-overview-and-app.py (console walkthrough)
+#
+# ── Table of Contents ────────────────────────────────────────────
+#   01c-overview-and-app.yaml   — This file: skeleton + concepts
+#   02c-vpc.yaml                — VPC, subnets, IGW, NAT, route tables
+#   03c-s3.yaml                 — S3 bucket, versioning, lifecycle, policy
+#   04c-ec2.yaml                — EC2 instance, security group, user data
+#   05c-lambda.yaml             — Lambda function, IAM role, log group
+#   06c-api-gateway.yaml        — REST API, Lambda proxy, CORS, API key
+#
+#   (Future CloudFormation templates — matching remaining .py files)
+#   07c-ecr.yaml                — ECR repository, lifecycle policy
+#   08c-ecs-fargate.yaml        — ECS cluster, task def, service
+#   09c-alb.yaml                — ALB, target group, listener rules
+#   10c-cloudwatch.yaml         — Log groups, metric filters, alarms
+#   11c-route53-cloudfront-acm.yaml — DNS, CDN, SSL certificates
+#   12c-cloudfront-deep-dive.yaml   — Origins, behaviors, caching
+#   13c-secrets-manager.yaml    — Secrets, rotation config
+#   14c-cleanup.yaml            — (no template — cleanup is manual)
+#   15c-dynamodb.yaml           — DynamoDB table, GSI, autoscaling
+#   16c-sns.yaml                — SNS topic, subscriptions
+#   17c-sqs.yaml                — SQS queue, DLQ, Lambda trigger
+#   18c-waf.yaml                — WAF web ACL, managed rules
+#   19c-codedeploy-pipeline.yaml — CodeBuild + CodePipeline
+#   20c-rds.yaml                — RDS instance, subnet group
+#   21c-cognito.yaml            — User pool, app client
+#   22c-ssm-parameter-store.yaml — SSM parameters
+#   23c-iam.yaml                — IAM users, roles, policies
+#   24c-full-stack.yaml         — All services in one stack
+# ─────────────────────────────────────────────────────────────────
+#
+# This file is NOT a deployable template. It is a heavily-commented
+# skeleton that introduces every section of a CloudFormation template
+# and the 3 intrinsic functions beginners need most.
+#
+# The .py files teach AWS by clicking through the console.
+# These .yaml files teach the SAME services as infrastructure-as-code.
+# Same resources, same settings — different way of creating them.
+#
+# ╔══════════════════════════════════════════════════════════════╗
+# ║           WHAT WE'RE BUILDING (as CloudFormation)           ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+#   The architecture is identical to 01-overview-and-app.py.
+#   Each layer becomes one or more CloudFormation stacks:
+#
+#   Stack deploy order (each stack exports values the next imports):
+#
+#   ┌─────────────────────────────────────────────────────────────┐
+#   │  1. VPC stack (02c)                                         │
+#   │     └─ exports: VpcId, SubnetIds, SecurityGroupIds          │
+#   │                                                             │
+#   │  2. S3 stack (03c)   <── can deploy in parallel with VPC    │
+#   │     └─ exports: BucketName, BucketArn                       │
+#   │                                                             │
+#   │  3. EC2 stack (04c)  <── imports VPC outputs                │
+#   │     └─ exports: InstanceId, PublicIP                        │
+#   │                                                             │
+#   │  4. Lambda stack (05c) <── imports VPC outputs              │
+#   │     └─ exports: FunctionArn, FunctionName                   │
+#   │                                                             │
+#   │  5. API Gateway stack (06c) <── imports Lambda outputs      │
+#   │     └─ exports: ApiUrl, ApiId                               │
+#   │                                                             │
+#   │  (future) ECR -> ECS -> ALB -> CloudWatch -> Route53 -> ... │
+#   └─────────────────────────────────────────────────────────────┘
+#
+#   User (browser / curl)
+#     |
+#     v
+#   API Gateway (06c)  -->  Lambda (05c)     <-- serverless path
+#     |
+#     v
+#   ALB (future 09c)  -->  ECS Fargate (08c) <-- container path
+#           |
+#           +---> S3 (03c)
+#           +---> CloudWatch (10c)
+#           +---> Secrets Manager (13c)
+#
+# All running inside the VPC (02c).
+#
+#
+# ╔══════════════════════════════════════════════════════════════╗
+# ║          CLOUDFORMATION TEMPLATE SKELETON                    ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# Below is a complete (but non-functional) template showing every
+# section. Read the comments, then move on to 02c-vpc.yaml for
+# the first real deployable template.
+# ══════════════════════════════════════════════════════════════════
+
+# ── Section 1: Format Version ────────────────────────────────────
+# Always this value. It's the CloudFormation template schema version
+# (not the date you wrote it). There's only ever been one version.
+AWSTemplateFormatVersion: '2010-09-09'
+
+
+# ── Section 2: Description ──────────────────────────────────────
+# A human-readable string. Shows up in the CloudFormation console
+# when you list stacks. Max 1024 characters.
+Description: >-
+  Skeleton CloudFormation template — not deployable.
+  Demonstrates every template section and key intrinsic functions.
+  Companion to learn-fastapi-py/aws/01-overview-and-app.py.
+
+
+# ── Section 3: Parameters ───────────────────────────────────────
+# Inputs to your template — like function arguments. You supply
+# values when you create or update a stack:
+#
+#   aws cloudformation create-stack \
+#       --parameters ParameterKey=Environment,ParameterValue=prod
+#
+# In the console: CloudFormation prompts you to fill in a form
+# for each parameter.
+Parameters:
+
+  Environment:
+    # Type can be: String, Number, List<Number>,
+    #              CommaDelimitedList, or AWS-specific types
+    #              (AWS::EC2::VPC::Id, AWS::EC2::Subnet::Id, etc.)
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - qa
+      - uat
+      - prod
+    Description: >-
+      Deployment environment. Controls naming and sizing.
+      Same environments as the real reuters-assistant deploy pipeline.
+
+  ProjectName:
+    Type: String
+    Default: book-store
+    Description: >-
+      Name prefix for all resources. Used in resource naming via !Sub.
+    # Constraints validate input before stack creation starts.
+    # If validation fails, CloudFormation rejects the request immediately.
+    MinLength: 3
+    MaxLength: 20
+    AllowedPattern: '[a-z][a-z0-9-]*'
+    ConstraintDescription: >-
+      Must start with a lowercase letter and contain only lowercase
+      letters, numbers, and hyphens. 3-20 characters.
+
+
+# ── Section 4: Mappings ─────────────────────────────────────────
+# Static lookup tables. Like a Python dict-of-dicts.
+# Use !FindInMap to retrieve values.
+#
+#   !FindInMap [MapName, FirstKey, SecondKey]
+#
+# Use case: different instance sizes per environment, or
+# different AMI IDs per region.
+Mappings:
+
+  EnvironmentConfig:
+    dev:
+      InstanceType: t3.micro      # small & cheap for dev
+      DesiredCount: '1'           # 1 ECS task
+    qa:
+      InstanceType: t3.small      # slightly larger for QA
+      DesiredCount: '1'
+    uat:
+      InstanceType: t3.medium     # match production sizing
+      DesiredCount: '2'
+    prod:
+      InstanceType: t3.medium
+      DesiredCount: '2'           # 2 tasks for high availability
+
+  # Real-world example: AMI IDs differ by region
+  RegionAMI:
+    eu-west-1:
+      HVM64: ami-0abcdef1234567890   # placeholder
+    us-east-1:
+      HVM64: ami-0fedcba9876543210   # placeholder
+
+
+# ── Section 5: Conditions ────────────────────────────────────────
+# Boolean expressions. Create resources only in certain situations.
+# Reference with !If, or use Condition: on a resource.
+Conditions:
+
+  # True when Environment parameter = "prod"
+  IsProd: !Equals
+    - !Ref Environment
+    - prod
+
+  # True when Environment parameter is NOT "dev"
+  IsNotDev: !Not
+    - !Equals
+      - !Ref Environment
+      - dev
+
+  # You can combine conditions:
+  # IsProdOrUat: !Or
+  #   - !Equals [!Ref Environment, prod]
+  #   - !Equals [!Ref Environment, uat]
+
+
+# ── Section 6: Resources (REQUIRED — the only mandatory section)─
+# What AWS resources to create. Each resource has:
+#   LogicalName:          your chosen name (used with !Ref)
+#   Type:                 AWS resource type (e.g. AWS::S3::Bucket)
+#   Properties:           configuration for that resource
+#   DependsOn (optional): explicit ordering (usually auto-detected)
+#   Condition (optional): only create if condition is true
+Resources:
+
+  # ── Example: An S3 bucket ────────────────────────────────────
+  # This is just a skeleton — see 03c-s3.yaml for the real template.
+  ExampleBucket:
+    Type: AWS::S3::Bucket
+    # Condition: IsProd               # uncomment to only create in prod
+    Properties:
+      # !Sub is like Python f-strings. ${Variable} gets replaced.
+      # ${AWS::AccountId} and ${AWS::Region} are pseudo-parameters
+      # available in every template — you never declare them.
+      BucketName: !Sub '${ProjectName}-example-${AWS::AccountId}-${Environment}'
+
+      # Tags help you find and track resources. Always tag everything.
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName        # !Ref gets a parameter value
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── Example: A resource that depends on another ──────────────
+  # Most dependencies are auto-detected from !Ref and !GetAtt usage.
+  # DependsOn is rarely needed — use it only when there's an
+  # implicit dependency CloudFormation can't see.
+  ExampleBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    # DependsOn: ExampleBucket         # not needed — !Ref implies it
+    Properties:
+      Bucket: !Ref ExampleBucket       # !Ref a resource = its ID/name
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              # !GetAtt gets a specific attribute of a resource.
+              # ExampleBucket.Arn = "arn:aws:s3:::book-store-example-..."
+              - !GetAtt ExampleBucket.Arn
+              - !Sub '${ExampleBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+
+
+# ── Section 7: Outputs ──────────────────────────────────────────
+# Values to display after stack creation and optionally export
+# for other stacks to import.
+#
+# View in console: CloudFormation -> stack -> Outputs tab
+# View in CLI:     aws cloudformation describe-stacks --query Outputs
+Outputs:
+
+  BucketName:
+    Description: Name of the example S3 bucket
+    Value: !Ref ExampleBucket
+    # Export makes this value available to OTHER stacks via
+    # !ImportValue. Export names must be unique per region+account.
+    Export:
+      Name: !Sub '${Environment}-ExampleBucketName'
+
+  BucketArn:
+    Description: ARN of the example S3 bucket
+    Value: !GetAtt ExampleBucket.Arn
+    Export:
+      Name: !Sub '${Environment}-ExampleBucketArn'
+
+  BucketDomainName:
+    Description: S3 domain name (for CloudFront origin)
+    Value: !GetAtt ExampleBucket.DomainName
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║   THE 3 INTRINSIC FUNCTIONS BEGINNERS NEED                  ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# 1. !Ref — "reference this thing"
+#    ─────────────────────────────────────────────────────────
+#    On a Parameter: returns the parameter's value.
+#      !Ref Environment  -->  "dev" (or whatever you passed)
+#
+#    On a Resource: returns the resource's primary ID.
+#      !Ref ExampleBucket  -->  "book-store-example-060725138335-dev"
+#      !Ref MyVPC          -->  "vpc-0abc123..."
+#      !Ref MySubnet       -->  "subnet-0def456..."
+#
+#    What !Ref returns depends on the resource type:
+#      AWS::S3::Bucket       -->  bucket name
+#      AWS::EC2::VPC         -->  VPC ID
+#      AWS::EC2::Subnet      -->  subnet ID
+#      AWS::Lambda::Function -->  function name
+#      AWS::EC2::SecurityGroup -> security group ID
+#
+#
+# 2. !Sub — "substitute variables in a string"
+#    ─────────────────────────────────────────────────────────
+#    Like Python f-strings but for YAML. Replaces ${...} placeholders.
+#
+#    With parameter/resource references:
+#      !Sub '${ProjectName}-vpc-${Environment}'
+#      -->  "book-store-vpc-dev"
+#
+#    With pseudo-parameters (always available, never declared):
+#      !Sub 'arn:aws:s3:::${AWS::AccountId}-bucket'
+#      -->  "arn:aws:s3:::060725138335-bucket"
+#
+#    Common pseudo-parameters:
+#      ${AWS::AccountId}   -->  060725138335
+#      ${AWS::Region}      -->  eu-west-1
+#      ${AWS::StackName}   -->  book-store-vpc-dev
+#      ${AWS::StackId}     -->  arn:aws:cloudformation:eu-west-1:...
+#
+#    With resource attributes (GetAtt inside Sub):
+#      !Sub '${ExampleBucket.Arn}/*'
+#      -->  "arn:aws:s3:::book-store-example-060725138335-dev/*"
+#
+#
+# 3. !GetAtt — "get attribute of a resource"
+#    ─────────────────────────────────────────────────────────
+#    !Ref gives you the resource's primary ID.
+#    !GetAtt gives you OTHER properties.
+#
+#    Format: !GetAtt LogicalName.AttributeName
+#
+#    Examples:
+#      !GetAtt ExampleBucket.Arn
+#      -->  "arn:aws:s3:::book-store-example-060725138335-dev"
+#
+#      !GetAtt ExampleBucket.DomainName
+#      -->  "book-store-example-060725138335-dev.s3.amazonaws.com"
+#
+#      !GetAtt MyLambda.Arn
+#      -->  "arn:aws:lambda:eu-west-1:060725138335:function:my-func"
+#
+#      !GetAtt MyVPC.CidrBlock
+#      -->  "10.0.0.0/16"
+#
+#    Each resource type documents which attributes are available.
+#    Check the AWS docs: "AWS::S3::Bucket Return values" section.
+#
+#
+# ╔══════════════════════════════════════════════════════════════╗
+# ║   OTHER USEFUL INTRINSIC FUNCTIONS (for reference)           ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# !Join — join list items with a delimiter
+#   !Join ['-', ['book', 'store', 'api']]  -->  "book-store-api"
+#   !Join [',', [!Ref SubnetA, !Ref SubnetB]]  -->  "subnet-abc,subnet-def"
+#
+# !Select — pick item from a list by index
+#   !Select [0, !GetAZs '']  -->  "eu-west-1a" (first AZ in region)
+#   !Select [1, !GetAZs '']  -->  "eu-west-1b" (second AZ)
+#
+# !GetAZs — get list of AZs for current region (or specified region)
+#   !GetAZs ''   -->  ["eu-west-1a", "eu-west-1b", "eu-west-1c"]
+#   !GetAZs 'us-east-1'  -->  ["us-east-1a", "us-east-1b", ...]
+#
+# !If — conditional value (requires a Condition)
+#   !If [IsProd, 2, 1]  -->  2 if prod, 1 otherwise
+#   !If [IsProd, 't3.medium', 't3.micro']
+#
+# !FindInMap — look up value from Mappings section
+#   !FindInMap [EnvironmentConfig, !Ref Environment, InstanceType]
+#   -->  "t3.micro" (if Environment=dev)
+#
+# !ImportValue — get an output exported by another stack
+#   !ImportValue !Sub '${Environment}-VpcId'
+#   -->  "vpc-0abc123..." (from the VPC stack's exports)
+#
+# !Split — split a string into a list
+#   !Split [',', 'a,b,c']  -->  ['a', 'b', 'c']
+#
+#
+# ╔══════════════════════════════════════════════════════════════╗
+# ║   DEPLOYING THIS SKELETON (just to see it work)              ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# Although this is a teaching file, it IS valid CloudFormation.
+# The ExampleBucket resource will create a real S3 bucket.
+#
+#   # Validate the template (catches syntax errors)
+#   aws cloudformation validate-template \
+#       --template-body file://aws/01c-overview-and-app.yaml
+#
+#   # Create the stack
+#   aws cloudformation create-stack \
+#       --stack-name book-store-skeleton-dev \
+#       --template-body file://aws/01c-overview-and-app.yaml \
+#       --parameters ParameterKey=Environment,ParameterValue=dev \
+#       --region eu-west-1
+#
+#   # Check status
+#   aws cloudformation describe-stacks \
+#       --stack-name book-store-skeleton-dev \
+#       --query 'Stacks[0].StackStatus'
+#
+#   # View outputs (bucket name, ARN)
+#   aws cloudformation describe-stacks \
+#       --stack-name book-store-skeleton-dev \
+#       --query 'Stacks[0].Outputs'
+#
+#   # Clean up (deletes the bucket too)
+#   aws cloudformation delete-stack \
+#       --stack-name book-store-skeleton-dev
+#
+#
+# ╔══════════════════════════════════════════════════════════════╗
+# ║   CONSOLE vs CLOUDFORMATION CHEAT SHEET                      ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+#   ┌───────────────────────┬──────────────────────────────────┐
+#   | Console (manual)      | CloudFormation (code)            |
+#   +───────────────────────+──────────────────────────────────+
+#   | Click "Create bucket" | Type: AWS::S3::Bucket            |
+#   | Fill in form          | Properties: BucketName: ...      |
+#   | Click "Create"        | aws cloudformation create-stack   |
+#   | Repeat for QA, prod   | Change --parameters, redeploy    |
+#   | Delete manually       | aws cloudformation delete-stack   |
+#   | Forgot a setting?     | Git diff shows what changed.     |
+#   |   Start over          |   update-stack applies the diff. |
+#   | Different per person  | Same YAML = same result, always. |
+#   └───────────────────────┴──────────────────────────────────┘
+#
+# Now proceed to 02c-vpc.yaml for the first real template.

@@ -1,0 +1,547 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — API Gateway (Step 5)
+# ══════════════════════════════════════════════════════════════════
+# Navigation:  <- prev: 05c-lambda.yaml
+# Companion:  06-api-gateway.py (console walkthrough)
+#
+# This template creates the same REST API that 06-api-gateway.py
+# builds via the console. API Gateway is the front door for Lambda.
+#
+# What you get:
+#   - REST API with proxy+ integration to Lambda
+#   - Lambda permission for API Gateway invocation
+#   - Deployment + Stage (dev)
+#   - CORS support (OPTIONS mock integration)
+#   - Usage plan with throttling and quota
+#   - API key for rate limiting
+#
+# Prerequisites:
+#   - Deploy 05c-lambda.yaml first (imports Lambda function ARN)
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#       --stack-name book-store-apigw-dev \
+#       --template-body file://aws/06c-api-gateway.yaml \
+#       --parameters ParameterKey=Environment,ParameterValue=dev \
+#       --region eu-west-1
+#
+# Cost: REST API = $3.50 per million requests + data transfer.
+#       HTTP API = $1.00 per million (cheaper, but fewer features).
+#       First 1M requests free for 12 months.
+#
+# ╔══════════════════════════════════════════════════════════════╗
+# ║   API GATEWAY TYPES (from 06-api-gateway.py)                 ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+#   ┌─────────────┬──────────────────────────────────────────────┐
+#   | REST API    | Full-featured: caching, WAF, request          |
+#   |             | validation, usage plans, API keys.            |
+#   |             | What we build in this template.               |
+#   +─────────────+──────────────────────────────────────────────+
+#   | HTTP API    | Simpler, 70% cheaper, lower latency.          |
+#   |             | Good for most apps. Missing: caching,         |
+#   |             | request validation, usage plans.              |
+#   +─────────────+──────────────────────────────────────────────+
+#   | WebSocket   | Real-time bidirectional: chat, live feeds.    |
+#   | API         | Not covered in this template.                 |
+#   └─────────────┴──────────────────────────────────────────────┘
+#
+#   We use REST API here because it's the full-featured option
+#   and matches what sphinx_story-service uses in production.
+#
+#   Request flow:
+#
+#   Client                 API Gateway              Lambda
+#   ┌──────┐   HTTPS      ┌───────────┐  invoke   ┌──────────┐
+#   | curl | ────────────> |  Routes   | ────────> | handler()|
+#   |      | <──────────── |  Auth     | <──────── | return   |
+#   └──────┘   response   |  CORS     |  response └──────────┘
+#                          |  Throttle |
+#                          └───────────┘
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >-
+  REST API Gateway with Lambda proxy integration, CORS, usage plan,
+  and API key. Companion to learn-fastapi-py/aws/06-api-gateway.py.
+
+
+# ═════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ═════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - qa
+      - uat
+      - prod
+    Description: Deployment environment. Used as the stage name.
+
+  StageName:
+    Type: String
+    Default: v1
+    Description: >-
+      API stage name, appended to the URL path:
+      https://{api-id}.execute-api.{region}.amazonaws.com/{stage}/
+      Common conventions: v1 (versioned), dev/prod (environment-based).
+
+  ThrottleRateLimit:
+    Type: Number
+    Default: 100
+    Description: >-
+      Steady-state requests per second. Requests beyond this rate
+      get throttled (HTTP 429 Too Many Requests). Protects your
+      Lambda from being overwhelmed. 100/s is generous for dev.
+
+  ThrottleBurstLimit:
+    Type: Number
+    Default: 200
+    Description: >-
+      Max concurrent requests (burst). API Gateway queues requests
+      above this limit. Should be >= rate limit. The burst bucket
+      fills at the rate limit speed, allowing short spikes.
+
+  QuotaLimit:
+    Type: Number
+    Default: 10000
+    Description: >-
+      Maximum total requests per month for each API key.
+      10,000/month is generous for dev. Set higher for production.
+
+  BookStoreLambdaArn:
+    Type: String
+    Description: >-
+      ARN of the Lambda function to integrate with. Get this from
+      the Lambda stack's outputs, or use:
+      aws lambda get-function --function-name book-store-api-dev \
+          --query 'Configuration.FunctionArn' --output text
+      Example: arn:aws:lambda:eu-west-1:060725138335:function:book-store-api-dev
+
+
+# ═════════════════════════════════════════════════════════════════
+# RESOURCES
+# ═════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ── REST API ──────────────────────────────────────────────────
+  # The API itself — a container for resources, methods, and stages.
+  #
+  # EndpointConfiguration:
+  #   EDGE    — routes through CloudFront edge locations (best for global users)
+  #   REGIONAL — direct to the region (use with your own CDN)
+  #   PRIVATE  — only accessible from within a VPC
+  #
+  # Console equivalent: API Gateway -> Create API -> REST API -> Build
+  BookStoreApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub 'book-store-api-${Environment}'
+      Description: >-
+        Book Store REST API. Proxies all requests to Lambda.
+        FastAPI handles routing inside the Lambda function.
+      # REGIONAL endpoint: no built-in CloudFront. Use this when
+      # you plan to add your own CloudFront distribution (which we
+      # do in a later stack) or when all users are in one region.
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+
+  # ── PROXY RESOURCE /{proxy+} ──────────────────────────────────
+  # A catch-all resource that matches ANY path after the root.
+  # {proxy+} is a "greedy path variable" — it captures everything:
+  #   /health, /books, /books/abc123, /any/deep/path
+  #
+  # We let FastAPI handle routing inside Lambda, so API Gateway
+  # just forwards everything. This is the "Lambda proxy integration"
+  # pattern — the most common setup for frameworks like FastAPI,
+  # Express, Flask, etc.
+  #
+  # Console equivalent: Actions -> Create Resource -> Configure as proxy
+  ProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref BookStoreApi
+      # GetAtt RootResourceId gets the API's root "/" resource.
+      # Our proxy resource is a child of root: "/{proxy+}"
+      ParentId: !GetAtt BookStoreApi.RootResourceId
+      PathPart: '{proxy+}'
+
+
+  # ── ANY METHOD on /{proxy+} ───────────────────────────────────
+  # Handles ALL HTTP methods (GET, POST, PUT, DELETE, PATCH, etc.)
+  # on any path. Combined with {proxy+}, this means:
+  #   ANY method + ANY path -> Lambda function
+  #
+  # Integration type: AWS_PROXY (Lambda Proxy Integration)
+  #   API Gateway passes the FULL request (method, path, headers,
+  #   body, query params) as a JSON event to Lambda. Lambda returns
+  #   a response object {statusCode, headers, body} and API Gateway
+  #   converts it back to an HTTP response.
+  #
+  #   With AWS_PROXY, API Gateway does NO transformation — it's a
+  #   pass-through. Your Lambda/FastAPI code handles everything.
+  #
+  #   Alternative: AWS (non-proxy) integration
+  #   API Gateway maps request/response using templates. More
+  #   control but more configuration. Rarely used with frameworks.
+  #
+  # Console equivalent: /{proxy+} -> ANY -> Lambda Function Proxy
+  ProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref BookStoreApi
+      ResourceId: !Ref ProxyResource
+      HttpMethod: ANY
+      # No authorization (public API). In production, add:
+      #   AuthorizationType: COGNITO_USER_POOLS (or CUSTOM for Lambda auth)
+      AuthorizationType: NONE
+      # API key not required for proxy method. The usage plan
+      # applies to the API key separately (see below).
+      ApiKeyRequired: false
+      Integration:
+        # AWS_PROXY = Lambda Proxy Integration (pass-through)
+        Type: AWS_PROXY
+        # Lambda integration always uses POST (even for GET requests).
+        # This is the integration HTTP method, NOT the client's method.
+        IntegrationHttpMethod: POST
+        # URI format for Lambda integration:
+        # arn:aws:apigateway:{region}:lambda:path/2015-03-31/functions/{arn}/invocations
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BookStoreLambdaArn}/invocations
+
+  # ── ROOT METHOD (/) ───────────────────────────────────────────
+  # {proxy+} does NOT match the root path "/". We need a separate
+  # ANY method on the root resource to handle requests to "/".
+  # Without this, GET / returns 403 {"message": "Missing Authentication Token"}
+  # (confusing error — it actually means "no route found").
+  RootMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref BookStoreApi
+      ResourceId: !GetAtt BookStoreApi.RootResourceId
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BookStoreLambdaArn}/invocations
+
+
+  # ── CORS: OPTIONS METHOD ──────────────────────────────────────
+  # CORS (Cross-Origin Resource Sharing) is required when a browser
+  # on domain A (your frontend) calls an API on domain B (this API).
+  # The browser sends a "preflight" OPTIONS request first to check
+  # if the API allows cross-origin requests.
+  #
+  # This is a MOCK integration — API Gateway handles it directly
+  # without invoking Lambda. Returns the CORS headers the browser needs.
+  #
+  # If you don't handle OPTIONS, browsers block your API calls with:
+  #   "Access to fetch at '...' has been blocked by CORS policy"
+  #
+  # Note: With AWS_PROXY integration, you ALSO need to return CORS
+  # headers from your Lambda function (in the response headers).
+  # The OPTIONS method handles the preflight; your app handles the
+  # actual request headers.
+  CorsOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref BookStoreApi
+      ResourceId: !Ref ProxyResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      # MOCK integration: API Gateway responds directly, no backend.
+      Integration:
+        Type: MOCK
+        # RequestTemplates: always return statusCode 200
+        RequestTemplates:
+          'application/json': '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              # These headers tell the browser: "yes, you can call this API"
+              method.response.header.Access-Control-Allow-Headers: >-
+                'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'
+              method.response.header.Access-Control-Allow-Methods: >-
+                'GET,POST,PUT,PATCH,DELETE,OPTIONS'
+              method.response.header.Access-Control-Allow-Origin: >-
+                '*'
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+
+  # ── LAMBDA PERMISSION ─────────────────────────────────────────
+  # Grants API Gateway permission to invoke the Lambda function.
+  # Without this, API Gateway gets "AccessDenied" when calling Lambda.
+  #
+  # This is a RESOURCE-BASED policy (on Lambda), not an IAM role.
+  # It says: "API Gateway service from THIS specific API can invoke
+  # this Lambda function."
+  #
+  # The SourceArn restricts which API/stage/method can invoke.
+  # /*/*  means: any stage, any method/path.
+  #
+  # Console equivalent: auto-created when you click "OK" in the
+  # "Add Permission to Lambda Function" dialog.
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref BookStoreLambdaArn
+      Action: 'lambda:InvokeFunction'
+      Principal: apigateway.amazonaws.com
+      # SourceArn restricts which API can invoke. Format:
+      # arn:aws:execute-api:{region}:{account}:{api-id}/{stage}/{method}/{path}
+      # /*/* = any stage, any method+path
+      SourceArn: !Sub >-
+        arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BookStoreApi}/*/*
+
+
+  # ── DEPLOYMENT ────────────────────────────────────────────────
+  # A snapshot of the API configuration at a point in time.
+  # You must create a deployment before the API is callable.
+  # Each deployment is immutable — update by creating a new one.
+  #
+  # DependsOn is critical here: the deployment must wait for ALL
+  # methods to be created first. Without DependsOn, CloudFormation
+  # might deploy an empty API (no routes configured yet).
+  #
+  # Console equivalent: Actions -> Deploy API
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    # Must wait for methods to be created before deploying
+    DependsOn:
+      - ProxyMethod
+      - RootMethod
+      - CorsOptionsMethod
+    Properties:
+      RestApiId: !Ref BookStoreApi
+
+
+  # ── STAGE ─────────────────────────────────────────────────────
+  # A named reference to a deployment. The stage name appears in
+  # the URL: https://{api-id}.execute-api.{region}.amazonaws.com/{stage}/
+  #
+  # Stages can have:
+  #   - Stage variables (like environment variables for the API)
+  #   - Caching (REST API only)
+  #   - Throttling overrides
+  #   - Access logging
+  #   - Canary deployments (route % of traffic to new deployment)
+  #
+  # Common patterns:
+  #   Single stage: "v1" (version-based, environment in separate stacks)
+  #   Multi-stage:  "dev", "staging", "prod" (all in one API)
+  #
+  # Console equivalent: Stages -> Create stage
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref BookStoreApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: !Ref StageName
+      Description: !Sub 'Book Store API - ${Environment} environment'
+      # MethodSettings applies config to all methods (*/* = all)
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          # Throttling at the stage level (per-client via usage plans below)
+          ThrottlingRateLimit: !Ref ThrottleRateLimit
+          ThrottlingBurstLimit: !Ref ThrottleBurstLimit
+          # Enable CloudWatch metrics for this stage
+          MetricsEnabled: true
+          # Log level: OFF, ERROR, or INFO
+          # INFO logs full request/response (verbose, useful for debugging)
+          DataTraceEnabled: false
+          LoggingLevel: ERROR
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ── USAGE PLAN ────────────────────────────────────────────────
+  # Controls how much an API key can use the API. Defines:
+  #   - Throttle limits (requests per second)
+  #   - Quota (total requests per time period)
+  #
+  # Usage plans are a REST API feature (not available in HTTP API).
+  # Use them to:
+  #   - Rate-limit external consumers
+  #   - Offer different tiers (free: 1000/day, pro: 100,000/day)
+  #   - Prevent runaway costs from abusive clients
+  #
+  # Console equivalent: Usage Plans -> Create
+  UsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: ApiStage
+    Properties:
+      UsagePlanName: !Sub 'book-store-plan-${Environment}'
+      Description: >-
+        Rate limiting for the Book Store API.
+        Throttle: steady-state RPS + burst limit.
+        Quota: total requests per month.
+      # Throttle limits (per API key)
+      Throttle:
+        RateLimit: !Ref ThrottleRateLimit      # requests per second
+        BurstLimit: !Ref ThrottleBurstLimit     # max concurrent
+      # Quota (per API key, per month)
+      Quota:
+        Limit: !Ref QuotaLimit
+        Period: MONTH          # DAY, WEEK, or MONTH
+      # Associate this plan with the API + stage
+      ApiStages:
+        - ApiId: !Ref BookStoreApi
+          Stage: !Ref ApiStage
+
+
+  # ── API KEY ───────────────────────────────────────────────────
+  # A string token that identifies a client. Sent in the
+  # x-api-key header with each request.
+  #
+  # API keys are for IDENTIFICATION and THROTTLING, not for
+  # AUTHENTICATION. Anyone with the key can use the API.
+  # For real auth, use Cognito, Lambda authorizers, or IAM.
+  #
+  # To require the API key on a method, set ApiKeyRequired: true
+  # on the Method resource. Our proxy methods don't require it
+  # (set to false above) so the API works without a key too.
+  #
+  # Console equivalent: API Keys -> Create API Key
+  ApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn: ApiStage
+    Properties:
+      Name: !Sub 'book-store-key-${Environment}'
+      Description: API key for the Book Store API
+      Enabled: true
+      # Associate with the API + stage
+      StageKeys:
+        - RestApiId: !Ref BookStoreApi
+          StageName: !Ref StageName
+
+  # Link the API key to the usage plan
+  UsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref ApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+
+# ═════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ═════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  ApiId:
+    Description: REST API ID
+    Value: !Ref BookStoreApi
+    Export:
+      Name: !Sub '${Environment}-ApiGatewayId'
+
+  ApiUrl:
+    Description: >-
+      Base URL of the API. Test with:
+      curl https://{api-id}.execute-api.{region}.amazonaws.com/{stage}/health
+    Value: !Sub >-
+      https://${BookStoreApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}
+
+  HealthCheckUrl:
+    Description: Health check endpoint
+    Value: !Sub >-
+      https://${BookStoreApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/health
+
+  ApiKeyId:
+    Description: >-
+      API key ID. To get the actual key value:
+      aws apigateway get-api-key --api-key {id} --include-value
+    Value: !Ref ApiKey
+
+  UsagePlanId:
+    Description: Usage plan ID for monitoring and management
+    Value: !Ref UsagePlan
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║   CONSOLE <-> CLOUDFORMATION MAPPING                        ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# ┌────────────────────────────────┬──────────────────────────────┐
+# | Console Setting                | CloudFormation Resource       |
+# +────────────────────────────────+──────────────────────────────+
+# | API name: book-store-rest-api  | RestApi -> Name               |
+# | Endpoint type: EDGE/REGIONAL  | EndpointConfiguration         |
+# | Create Resource: /{proxy+}    | ApiGateway::Resource           |
+# | Method: ANY -> Lambda Proxy   | ApiGateway::Method             |
+# |   Integration: AWS_PROXY      |   Integration -> Type          |
+# |   Lambda function: ...        |   Integration -> Uri           |
+# | Enable CORS                   | OPTIONS Method (MOCK)          |
+# | Deploy API -> stage: v1       | Deployment + Stage resources   |
+# | Usage plan: throttle + quota  | UsagePlan resource             |
+# | API key                       | ApiKey + UsagePlanKey          |
+# | "OK" (grant Lambda perm)      | Lambda::Permission resource   |
+# └────────────────────────────────┴──────────────────────────────┘
+#
+# ── REST API vs HTTP API Comparison ───────────────────────────
+#
+# ┌──────────────────────┬──────────────┬──────────────┐
+# | Feature              | REST API     | HTTP API     |
+# +──────────────────────+──────────────+──────────────+
+# | Cost per 1M requests | $3.50        | $1.00        |
+# | Latency              | Higher       | Lower        |
+# | Caching              | Yes          | No           |
+# | Usage plans/API keys | Yes          | No           |
+# | Request validation   | Yes          | No           |
+# | WAF integration      | Yes          | No           |
+# | Resource policies    | Yes          | No           |
+# | Private endpoints    | Yes          | No           |
+# | Custom domain        | Yes          | Yes          |
+# | Lambda integration   | Yes          | Yes          |
+# | CORS                 | Manual       | Built-in     |
+# | JWT authorizers      | No           | Yes          |
+# | IAM auth             | Yes          | Yes          |
+# | Max timeout          | 29 seconds   | 30 seconds   |
+# └──────────────────────┴──────────────┴──────────────┘
+#
+# Rule of thumb:
+#   - Use HTTP API for most new projects (cheaper, simpler)
+#   - Use REST API when you need caching, WAF, usage plans,
+#     or request validation
+#   - The skills repo (sphinx_story-service) uses REST API
+#     because it needs shared authorizers and usage plans
+#
+# ── Integration Types Reference ───────────────────────────────
+#
+# ┌──────────────┬──────────────────────────────────────────────┐
+# | Type         | What it does                                 |
+# +──────────────+──────────────────────────────────────────────+
+# | AWS_PROXY    | Pass entire request to Lambda as-is.         |
+# |              | Lambda returns {statusCode, headers, body}.  |
+# |              | Most common. Used with FastAPI/Express/Flask. |
+# +──────────────+──────────────────────────────────────────────+
+# | AWS          | Transform request/response with templates.   |
+# |              | More control, more config. Rarely used.      |
+# +──────────────+──────────────────────────────────────────────+
+# | HTTP_PROXY   | Forward to an HTTP endpoint (e.g., ALB).     |
+# |              | Pass-through like AWS_PROXY but for HTTP.    |
+# +──────────────+──────────────────────────────────────────────+
+# | HTTP         | Forward to HTTP endpoint with transforms.    |
+# +──────────────+──────────────────────────────────────────────+
+# | MOCK         | Return a static response (no backend).       |
+# |              | Used for CORS OPTIONS and health checks.     |
+# └──────────────┴──────────────────────────────────────────────┘

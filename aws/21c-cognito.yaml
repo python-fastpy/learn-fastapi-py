@@ -1,0 +1,636 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — Cognito (Step 21)
+# ══════════════════════════════════════════════════════════════════
+# Companion to: 21-cognito.py
+# Navigation:  ← prev: 20c-rds.yaml  |  next: 22c-ssm-parameter-store.yaml →
+#
+# WHAT THIS TEMPLATE CREATES:
+#   A complete Cognito User Pool for the book-store API:
+#     - User Pool (user directory with password policy, MFA, attributes)
+#     - User Pool Client (app registration with OAuth config)
+#     - User Pool Domain (hosted login page)
+#     - Resource Server (API scopes for access control)
+#
+# ── User Pools vs Identity Pools ────────────────────────────────
+#
+#   ┌──────────────────────────┬──────────────────────────────────┐
+#   │ User Pool                │ Identity Pool                    │
+#   │ (user directory)         │ (AWS credential broker)          │
+#   ├──────────────────────────┼──────────────────────────────────┤
+#   │ Sign-up / sign-in        │ Exchange tokens for temp AWS     │
+#   │ Password policy, MFA     │ credentials (IAM roles)          │
+#   │ Email/phone verification │                                  │
+#   │ Social login (Google,    │ Federate from Cognito User Pool, │
+#   │   Facebook, Apple)       │ Google, Facebook, SAML, OIDC     │
+#   │ SAML / OIDC federation   │                                  │
+#   │                          │ Use for: direct AWS resource     │
+#   │ Issues JWTs:             │ access from client apps          │
+#   │   - ID token             │ (S3 uploads, IoT, mobile)        │
+#   │   - Access token         │                                  │
+#   │   - Refresh token        │                                  │
+#   │                          │                                  │
+#   │ Use for: API auth,       │ NOT needed for most web APIs.    │
+#   │ user management          │ Only if client needs direct      │
+#   │                          │ AWS access.                      │
+#   └──────────────────────────┴──────────────────────────────────┘
+#
+#   For the book-store: User Pool only. Your FastAPI backend
+#   validates JWTs from the User Pool on every request.
+#
+# ── JWT Token Structure ─────────────────────────────────────────
+#
+#   Cognito issues three JWTs on successful sign-in:
+#
+#   ID Token (who the user is):
+#     Header:  {"kid": "...", "alg": "RS256"}
+#     Payload: {
+#       "sub": "abc-123-...",              # unique user ID
+#       "email": "alice@example.com",
+#       "email_verified": true,
+#       "custom:role": "editor",           # custom attribute
+#       "custom:department": "news",       # custom attribute
+#       "iss": "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_ABC123",
+#       "aud": "your-client-id",           # app client ID
+#       "exp": 1700000000                  # expiry timestamp
+#     }
+#
+#   Access Token (what the user can do):
+#     Payload: {
+#       "sub": "abc-123-...",
+#       "scope": "openid email book-store-api/books.read",
+#       "client_id": "your-client-id",
+#       "token_use": "access",
+#       "exp": 1700000000
+#     }
+#
+#   Refresh Token (get new tokens without re-login):
+#     Opaque token (not a JWT). Sent to Cognito to get fresh
+#     ID + Access tokens. Long-lived (days to months).
+#
+# ── Auth Flows ──────────────────────────────────────────────────
+#
+#   ┌───────────────────────┬──────────────────────────────────────┐
+#   │ Flow                  │ Use Case                             │
+#   ├───────────────────────┼──────────────────────────────────────┤
+#   │ USER_SRP_AUTH          │ Browser/mobile login. Password never │
+#   │                       │ sent over the wire (SRP protocol).   │
+#   │                       │ Most secure for end-user auth.       │
+#   ├───────────────────────┼──────────────────────────────────────┤
+#   │ USER_PASSWORD_AUTH     │ Simple username + password. Good for │
+#   │                       │ testing and server-side auth.        │
+#   │                       │ Password IS sent (over HTTPS).       │
+#   ├───────────────────────┼──────────────────────────────────────┤
+#   │ ALLOW_REFRESH_TOKEN   │ Exchange refresh token for new       │
+#   │                       │ ID + access tokens. Required for     │
+#   │                       │ seamless session renewal.            │
+#   ├───────────────────────┼──────────────────────────────────────┤
+#   │ CUSTOM_AUTH            │ Custom challenge/response flow.      │
+#   │                       │ Uses Lambda triggers for custom      │
+#   │                       │ authentication logic.                │
+#   ├───────────────────────┼──────────────────────────────────────┤
+#   │ ADMIN_NO_SRP_AUTH      │ Server-side admin authentication.    │
+#   │                       │ Requires AWS credentials (IAM).      │
+#   └───────────────────────┴──────────────────────────────────────┘
+#
+# ── OAuth 2.0 with Cognito ──────────────────────────────────────
+#
+#   Cognito supports standard OAuth 2.0 grant types:
+#
+#   authorization_code:  Browser redirects to Cognito login page,
+#                        user authenticates, Cognito redirects back
+#                        with an authorization code. Your backend
+#                        exchanges the code for tokens. Most secure.
+#
+#   implicit:            Tokens returned directly in URL fragment.
+#                        No backend exchange. Less secure (tokens
+#                        in URL). Being phased out industry-wide.
+#
+#   client_credentials:  Machine-to-machine auth. No user involved.
+#                        App authenticates with client_id + secret.
+#                        Use for service-to-service APIs.
+#
+# ── API Gateway Integration ─────────────────────────────────────
+#
+#   Cognito User Pools integrate directly with API Gateway:
+#
+#   1. Create a Cognito Authorizer on API Gateway
+#   2. Point it at your User Pool
+#   3. API Gateway validates JWTs automatically
+#   4. No custom auth code needed
+#
+#   With FastAPI (book-store), you'd validate JWTs manually:
+#     1. Extract Bearer token from Authorization header
+#     2. Download JWKS from Cognito (cached)
+#     3. Verify signature, expiry, audience, issuer
+#     4. Extract user info from claims
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Cognito User Pool for the book-store API.
+  User directory with email sign-in, password policy, MFA,
+  OAuth 2.0, and API scopes. See 21-cognito.py for concepts.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+    Description: Deployment environment.
+
+  DomainPrefix:
+    Type: String
+    Default: book-store-auth
+    Description: >-
+      Prefix for the Cognito hosted domain. The full URL will be:
+      https://{DomainPrefix}.auth.{region}.amazoncognito.com
+      Must be globally unique across all AWS accounts.
+      Only lowercase letters, numbers, and hyphens allowed.
+    AllowedPattern: '^[a-z0-9][a-z0-9-]*[a-z0-9]$'
+    MinLength: 3
+    MaxLength: 63
+
+  CallbackUrl:
+    Type: String
+    Default: 'http://localhost:3000/callback'
+    Description: >-
+      OAuth callback URL. Cognito redirects here after sign-in
+      with the authorization code. For local dev, use localhost.
+      For production, use your app's domain (e.g., https://bookstore.example.com/callback).
+
+  LogoutUrl:
+    Type: String
+    Default: 'http://localhost:3000/'
+    Description: >-
+      URL to redirect to after sign-out.
+
+  # ── Lambda Trigger ARNs (optional) ───────────────────────────
+
+  PreSignUpLambdaArn:
+    Type: String
+    Default: ''
+    Description: >-
+      ARN of a Lambda function to run before user sign-up.
+      Use to: validate email domains, auto-confirm users,
+      block disposable emails, add custom logic.
+      Leave empty to skip.
+
+  PostConfirmationLambdaArn:
+    Type: String
+    Default: ''
+    Description: >-
+      ARN of a Lambda function to run after user confirms email.
+      Use to: send welcome email, create user profile in DynamoDB,
+      add user to a default group, sync to external systems.
+      Leave empty to skip.
+
+
+# ══════════════════════════════════════════════════════════════════
+# CONDITIONS
+# ══════════════════════════════════════════════════════════════════
+
+Conditions:
+  HasPreSignUpLambda: !Not [!Equals [!Ref PreSignUpLambdaArn, '']]
+  HasPostConfirmationLambda: !Not [!Equals [!Ref PostConfirmationLambdaArn, '']]
+  # These conditions control whether Lambda triggers are configured.
+  # If the ARN parameter is empty, the trigger is omitted.
+
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ────────────────────────────────────────────────────────────────
+  # COGNITO USER POOL
+  # ────────────────────────────────────────────────────────────────
+  # The user directory. Stores usernames, passwords (hashed),
+  # email addresses, phone numbers, custom attributes, and MFA
+  # configuration. Think of it as a managed user database.
+  #
+  # IMPORTANT: Some settings CANNOT be changed after creation:
+  #   - Sign-in options (email vs username vs phone)
+  #   - Required attributes
+  #   - Custom attribute definitions
+  # Plan carefully before creating in production.
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub 'book-store-users-${Environment}'
+
+      # ── Sign-in Configuration ────────────────────────────────
+      # How users identify themselves when signing in.
+      UsernameAttributes:
+        - email
+        # email = users sign in with their email address.
+        # Alternative: phone_number, or omit for username-based.
+        # CANNOT be changed after user pool creation!
+
+      UsernameConfiguration:
+        CaseSensitive: false
+        # false = alice@example.com == Alice@Example.com
+        # Recommended: false. Case-sensitive usernames cause
+        # confusion ("I can't log in!" — wrong case).
+
+      # ── Password Policy ──────────────────────────────────────
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          # Symbols are annoying on mobile keyboards. 8+ chars with
+          # upper/lower/numbers is strong enough for most apps.
+          # NIST 800-63B recommends >= 8 chars, no composition rules,
+          # but Cognito requires at least MinimumLength.
+          TemporaryPasswordValidityDays: 7
+          # How long a temporary password (from admin-created accounts)
+          # is valid. User must change it on first login.
+
+      # ── Auto-verification ────────────────────────────────────
+      AutoVerifiedAttributes:
+        - email
+        # Cognito sends a verification code to the email address
+        # during sign-up. The user must enter the code to confirm.
+        # This proves they own the email address.
+
+      # ── MFA Configuration ───────────────────────────────────
+      MfaConfiguration: OPTIONAL
+      # OFF      = no MFA
+      # OPTIONAL = users can enable MFA (recommended for most apps)
+      # ON       = MFA required for all users
+      #
+      # Start with OPTIONAL, then move to ON when users are ready.
+
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+        # SOFTWARE_TOKEN_MFA = TOTP apps (Google Authenticator, Authy)
+        # SMS_MFA = SMS text message codes (costs money, less secure)
+        # TOTP is recommended over SMS (SIM swapping attacks).
+
+      # ── Email Configuration ──────────────────────────────────
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+        # COGNITO_DEFAULT = Cognito sends emails (free, 50/day limit).
+        # DEVELOPER = use your own SES identity (higher limits,
+        #   custom From address, custom email templates).
+        # For production, switch to DEVELOPER with SES.
+
+      # ── Account Recovery ─────────────────────────────────────
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+          # Priority determines which recovery method is tried first.
+          # 1 = email (most common). Can also add verified_phone_number.
+
+      # ── User Attribute Schema ────────────────────────────────
+      # Standard attributes: email, name, phone_number, address, etc.
+      # Custom attributes: prefixed with "custom:" in tokens.
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+          # Required: true = must be provided during sign-up.
+          # Mutable: true = can be changed after sign-up.
+
+        - Name: role
+          AttributeDataType: String
+          Mutable: true
+          # Custom attribute. Appears as "custom:role" in JWT tokens.
+          # Use for: authorization decisions in your API.
+          # Example values: "reader", "editor", "admin"
+          StringAttributeConstraints:
+            MinLength: '1'
+            MaxLength: '50'
+
+        - Name: department
+          AttributeDataType: String
+          Mutable: true
+          # Custom attribute for organizational structure.
+          # Appears as "custom:department" in JWT tokens.
+          StringAttributeConstraints:
+            MinLength: '1'
+            MaxLength: '100'
+
+      # ── Lambda Triggers ──────────────────────────────────────
+      # Lambda functions invoked at specific points in the auth flow.
+      # Each trigger receives an event with user data and must return
+      # a response. See: https://docs.aws.amazon.com/cognito/latest/
+      # developerguide/cognito-user-identity-pools-working-with-
+      # aws-lambda-triggers.html
+      LambdaConfig:
+        PreSignUp: !If
+          - HasPreSignUpLambda
+          - !Ref PreSignUpLambdaArn
+          - !Ref 'AWS::NoValue'
+          # AWS::NoValue = omit this property entirely.
+          # This is how you conditionally set a property in CF.
+          # If no Lambda ARN is provided, the trigger is not configured.
+
+        PostConfirmation: !If
+          - HasPostConfirmationLambda
+          - !Ref PostConfirmationLambdaArn
+          - !Ref 'AWS::NoValue'
+
+        # Other available triggers (not configured here):
+        #
+        # PreAuthentication:     Before sign-in. Block users, log attempts.
+        # PostAuthentication:    After sign-in. Log successful logins.
+        # PreTokenGeneration:    Customize JWT claims before token is issued.
+        #                        Add/remove/modify custom claims.
+        # CustomMessage:         Customize verification emails/SMS.
+        # DefineAuthChallenge:   Custom auth flow — define challenge sequence.
+        # CreateAuthChallenge:   Custom auth flow — create the challenge.
+        # VerifyAuthResponse:    Custom auth flow — verify the response.
+        # UserMigration:         Migrate users from legacy system on first login.
+
+      # ── Deletion Protection ──────────────────────────────────
+      DeletionProtection: ACTIVE
+      # ACTIVE = cannot delete the user pool without first setting
+      # this to INACTIVE. Prevents accidental deletion.
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ────────────────────────────────────────────────────────────────
+  # USER POOL CLIENT
+  # ────────────────────────────────────────────────────────────────
+  # An "app client" in Cognito. Your application uses this to
+  # communicate with the User Pool. Think of it as an API key for
+  # the auth system — it identifies which app is making requests.
+  #
+  # You can have multiple clients for the same User Pool:
+  #   - Web app client (with secret, for server-side apps)
+  #   - Mobile app client (without secret, for SPAs/mobile)
+  #   - Admin client (with different scopes)
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: ResourceServer
+    # DependsOn ensures the Resource Server (API scopes) is created
+    # before the client, so the scopes are available for AllowedOAuthScopes.
+    Properties:
+      ClientName: !Sub 'book-store-web-${Environment}'
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      # false = no client secret. Required for SPAs and mobile apps
+      # (they can't securely store a secret).
+      # true = generates a client secret. Use for server-side apps
+      # where the secret is stored in environment variables.
+
+      # ── Auth Flows ───────────────────────────────────────────
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        # Simple username + password authentication.
+        # Good for testing and server-to-server auth.
+        # Password sent over HTTPS.
+
+        - ALLOW_USER_SRP_AUTH
+        # Secure Remote Password protocol. Password never leaves
+        # the client — a zero-knowledge proof is used instead.
+        # Use this for browser/mobile apps.
+
+        - ALLOW_REFRESH_TOKEN_AUTH
+        # Exchange refresh tokens for new access/ID tokens.
+        # Required for seamless session renewal without re-login.
+
+      # ── Token Validity ───────────────────────────────────────
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+      # Access/ID tokens: 1 hour (industry standard).
+      # Shorter = more secure (less time for stolen token to be used).
+      # Longer = fewer token refresh requests (better UX).
+      #
+      # Refresh token: 30 days = user stays logged in for 30 days
+      # without re-entering password (as long as they use the app
+      # within the 30-day window).
+
+      # ── OAuth Configuration ──────────────────────────────────
+      AllowedOAuthFlows:
+        - code
+        # "code" = Authorization Code Grant. Most secure OAuth flow.
+        # Browser redirects to Cognito → user logs in → Cognito
+        # redirects back with a code → your server exchanges code
+        # for tokens.
+        #
+        # "implicit" = tokens returned directly in URL. Less secure.
+        # "client_credentials" = machine-to-machine (no user).
+
+      AllowedOAuthFlowsUserPoolClient: true
+      # Must be true to enable OAuth flows.
+
+      AllowedOAuthScopes:
+        - openid
+        # openid = required for OpenID Connect. Returns ID token.
+
+        - email
+        # email = include email in ID token claims.
+
+        - profile
+        # profile = include name, picture, etc. in ID token claims.
+
+        - !Sub '${ResourceServer}/books.read'
+        - !Sub '${ResourceServer}/books.write'
+        # Custom API scopes defined on the Resource Server below.
+        # These appear in the Access Token's "scope" claim.
+        # Your API checks these scopes for authorization:
+        #   "Does this token have books.write scope?"
+        #
+        # Note: !Sub with !Ref on ResourceServer returns the
+        # resource server identifier (book-store-api).
+
+      CallbackURLs:
+        - !Ref CallbackUrl
+        # Where Cognito redirects after successful authentication.
+        # Must exactly match what your app sends in the auth request.
+        # Multiple URLs supported (e.g., localhost + production).
+
+      LogoutURLs:
+        - !Ref LogoutUrl
+        # Where Cognito redirects after sign-out.
+
+      SupportedIdentityProviders:
+        - COGNITO
+        # COGNITO = the built-in user directory.
+        # Can also add: Google, Facebook, Amazon, Apple, SAML, OIDC.
+        # Example for Google:
+        #   1. Create a Google OAuth app (console.developers.google.com)
+        #   2. Create a UserPoolIdentityProviderGoogle resource
+        #   3. Add 'Google' to this list
+        #   4. Users see "Sign in with Google" on the hosted UI
+
+      # ── Prevent User Existence Errors ────────────────────────
+      PreventUserExistenceErrors: ENABLED
+      # ENABLED = Cognito returns generic "incorrect username or
+      # password" instead of "user does not exist". Prevents
+      # attackers from enumerating valid email addresses.
+
+
+  # ────────────────────────────────────────────────────────────────
+  # USER POOL DOMAIN
+  # ────────────────────────────────────────────────────────────────
+  # The domain for the Cognito hosted UI (login page) and OAuth
+  # endpoints (authorize, token, userinfo).
+  #
+  # Two options:
+  #   1. Cognito domain: {prefix}.auth.{region}.amazoncognito.com
+  #      Free, quick to set up, Cognito-branded.
+  #
+  #   2. Custom domain: auth.yourdomain.com
+  #      Requires ACM certificate in us-east-1.
+  #      More professional, your branding.
+  #
+  # This template uses the Cognito domain (option 1).
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub '${DomainPrefix}-${Environment}'
+      UserPoolId: !Ref UserPool
+      # The hosted UI will be at:
+      # https://{DomainPrefix}-{Environment}.auth.{region}.amazoncognito.com
+      #
+      # Key endpoints:
+      #   /login          — hosted login page
+      #   /oauth2/authorize — start OAuth flow
+      #   /oauth2/token     — exchange code for tokens
+      #   /oauth2/userInfo  — get user attributes
+      #   /logout           — sign out
+
+      # For custom domain:
+      # CustomDomainConfig:
+      #   CertificateArn: arn:aws:acm:us-east-1:123456789012:certificate/abc-123
+      # Domain: auth.bookstore.example.com
+      # Note: ACM certificate MUST be in us-east-1 for Cognito custom domains.
+
+
+  # ────────────────────────────────────────────────────────────────
+  # RESOURCE SERVER
+  # ────────────────────────────────────────────────────────────────
+  # A Resource Server represents your API in Cognito's OAuth model.
+  # It defines custom scopes that can be requested during auth
+  # and included in Access Tokens.
+  #
+  # Without a Resource Server, you only get standard OIDC scopes
+  # (openid, email, profile). With one, you define API-specific
+  # scopes like books.read, books.write, admin.
+  #
+  # Scope format in tokens: "{identifier}/{scope}"
+  # Example: "book-store-api/books.read"
+
+  ResourceServer:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      UserPoolId: !Ref UserPool
+      Identifier: book-store-api
+      # Unique identifier for your API. This becomes the scope prefix.
+      # Convention: use your API name or domain.
+
+      Name: Book Store API
+      # Human-readable name (shown in the Cognito console).
+
+      Scopes:
+        - ScopeName: books.read
+          ScopeDescription: Read access to books catalog
+
+        - ScopeName: books.write
+          ScopeDescription: Create, update, and delete books
+
+        # You can add more granular scopes:
+        # - ScopeName: orders.read
+        #   ScopeDescription: Read access to orders
+        # - ScopeName: admin
+        #   ScopeDescription: Full administrative access
+
+      # In your FastAPI app, verify scopes like this:
+      #
+      #   from fastapi import Security, HTTPException
+      #   from fastapi.security import SecurityScopes
+      #
+      #   async def require_scope(security_scopes: SecurityScopes, token: str):
+      #       token_scopes = decode_jwt(token)["scope"].split()
+      #       for scope in security_scopes.scopes:
+      #           if scope not in token_scopes:
+      #               raise HTTPException(403, "Insufficient scope")
+      #
+      #   @app.get("/books", dependencies=[Security(require_scope,
+      #       scopes=["book-store-api/books.read"])])
+
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  UserPoolId:
+    Description: >-
+      Cognito User Pool ID. Used by your app to identify the pool.
+      Format: {region}_{random} (e.g., eu-west-1_ABC123)
+    Value: !Ref UserPool
+    Export:
+      Name: !Sub '${Environment}-UserPoolId'
+
+  UserPoolArn:
+    Description: >-
+      User Pool ARN. Used in API Gateway Cognito Authorizer
+      configuration and IAM policies.
+    Value: !GetAtt UserPool.Arn
+    Export:
+      Name: !Sub '${Environment}-UserPoolArn'
+
+  UserPoolClientId:
+    Description: >-
+      App Client ID. Your frontend uses this to initiate auth flows.
+      This is NOT a secret — it's safe to embed in client-side code.
+    Value: !Ref UserPoolClient
+
+  UserPoolDomainUrl:
+    Description: >-
+      Cognito hosted UI domain URL. The login page is at /login.
+      OAuth endpoints: /oauth2/authorize, /oauth2/token, /oauth2/userInfo
+    Value: !Sub 'https://${DomainPrefix}-${Environment}.auth.${AWS::Region}.amazoncognito.com'
+
+  IssuerUrl:
+    Description: >-
+      OIDC Issuer URL. Used for JWT validation in your backend.
+      Your app downloads the JWKS (public keys) from:
+        {IssuerUrl}/.well-known/jwks.json
+      And validates that the "iss" claim in tokens matches this URL.
+    Value: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
+    Export:
+      Name: !Sub '${Environment}-CognitoIssuerUrl'
+
+  JwksUrl:
+    Description: >-
+      JSON Web Key Set URL. Contains the public keys used to verify
+      JWT signatures. Your backend should cache these keys and
+      refresh periodically (they rotate occasionally).
+    Value: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}/.well-known/jwks.json'
+
+  HostedLoginUrl:
+    Description: >-
+      Direct URL to the hosted login page (for testing).
+      In production, redirect users here to start the OAuth flow.
+    Value: !Sub >-
+      https://${DomainPrefix}-${Environment}.auth.${AWS::Region}.amazoncognito.com/login?client_id=${UserPoolClient}&response_type=code&scope=openid+email+profile&redirect_uri=${CallbackUrl}

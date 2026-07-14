@@ -1,0 +1,351 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — ECR Repository (Step 6)
+# ══════════════════════════════════════════════════════════════════
+# Companion to: 07-ecr.py (console walkthrough)
+# Navigation:  next: 08c-ecs-fargate.yaml →
+#
+# This template creates an ECR (Elastic Container Registry) repository
+# to store your Docker images. ECS pulls images from here to run
+# your containers.
+#
+#   You (laptop)           ECR                   ECS
+#   ┌──────────┐  push   ┌──────────┐  pull   ┌──────────┐
+#   │ docker   │────────►│ image:v1 │────────►│ container│
+#   │ build    │         │ image:v2 │         │ running  │
+#   └──────────┘         └──────────┘         └──────────┘
+#
+# DEPLOY:
+#   aws cloudformation create-stack \
+#     --stack-name book-store-ecr \
+#     --template-body file://07c-ecr.yaml \
+#     --parameters ParameterKey=RepositoryName,ParameterValue=book-store-api \
+#     --capabilities CAPABILITY_IAM
+#
+# COST: ECR charges $0.10/GB/month for storage. First 500 MB free.
+#       Data transfer to ECS in same region is FREE.
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+# ── Description ──────────────────────────────────────────────────
+# Every template should have a Description. It shows up in the
+# CloudFormation console so you know what a stack does at a glance.
+Description: >-
+  ECR Repository for the Book Store API.
+  Creates a private container registry with vulnerability scanning,
+  lifecycle policies, and encryption.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS — Inputs to the template (like function arguments)
+# ══════════════════════════════════════════════════════════════════
+# Parameters make templates reusable. Same template, different
+# names for dev/qa/prod.
+
+Parameters:
+
+  RepositoryName:
+    # Type can be: String, Number, List<Number>, CommaDelimitedList,
+    #              or AWS-specific types (AWS::EC2::VPC::Id, etc.)
+    Type: String
+    Default: book-store-api
+    Description: Name of the ECR repository (lowercase, hyphens OK)
+    # AllowedPattern validates the input with a regex.
+    # ECR names must be lowercase, can have hyphens, slashes, dots.
+    AllowedPattern: '^[a-z0-9][a-z0-9._/-]*$'
+    ConstraintDescription: >-
+      Repository name must start with a lowercase letter or number
+      and contain only lowercase letters, numbers, hyphens, dots,
+      underscores, or forward slashes.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - qa
+      - uat
+      - prod
+    Description: Deployment environment (controls tag immutability)
+
+  # ── What is Tag Immutability? ────────────────────────────────
+  # MUTABLE (default):  You can push image:v1 again and overwrite.
+  #                     Simple but risky — "v1" might mean different
+  #                     code on Monday vs Tuesday.
+  # IMMUTABLE:          Once image:v1 is pushed, you CANNOT overwrite.
+  #                     Safer for prod. Forces unique tags (v1.0.1, v1.0.2).
+  #
+  # We enable immutability for prod only (via Condition below).
+  EnableImmutableTags:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: >-
+      Enable tag immutability (prevents overwriting existing tags).
+      Recommended for production.
+
+  ECSTaskExecutionRoleArn:
+    Type: String
+    Default: ''
+    Description: >-
+      ARN of the ECS Task Execution Role that needs to pull images.
+      Leave empty to skip the repository policy.
+
+# ══════════════════════════════════════════════════════════════════
+# CONDITIONS — If/else logic
+# ══════════════════════════════════════════════════════════════════
+# Conditions control whether resources are created or how properties
+# are set. They evaluate at deploy time based on parameter values.
+
+Conditions:
+  # !Equals returns true if the two values match.
+  # We use it to decide whether to make tags immutable.
+  UseImmutableTags: !Equals [!Ref EnableImmutableTags, 'true']
+
+  # Check if an ECS execution role ARN was provided.
+  # !Not + !Equals '' means "is not empty".
+  HasExecutionRole: !Not [!Equals [!Ref ECSTaskExecutionRoleArn, '']]
+
+  # Is this production? Used in lifecycle rules.
+  IsProd: !Equals [!Ref Environment, 'prod']
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES — The actual AWS resources to create
+# ══════════════════════════════════════════════════════════════════
+# This is the only REQUIRED section in a CloudFormation template.
+# Everything else (Parameters, Conditions, Outputs) is optional.
+
+Resources:
+
+  # ── ECR Repository ─────────────────────────────────────────────
+  # AWS::ECR::Repository creates a private Docker image repository.
+  #
+  # Think of it like a private Docker Hub namespace:
+  #   <account-id>.dkr.ecr.<region>.amazonaws.com/<repo-name>:<tag>
+  #   123456789.dkr.ecr.eu-west-1.amazonaws.com/book-store-api:v1
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      # ── Repository Name ──────────────────────────────────────
+      # The name you'll use when pushing/pulling images.
+      # !Ref pulls the value from the Parameter above.
+      RepositoryName: !Ref RepositoryName
+
+      # ── Image Tag Mutability ─────────────────────────────────
+      # !If takes 3 args: ConditionName, ValueIfTrue, ValueIfFalse
+      # If UseImmutableTags is true → IMMUTABLE, else → MUTABLE.
+      ImageTagMutability: !If
+        - UseImmutableTags
+        - IMMUTABLE
+        - MUTABLE
+
+      # ── Image Scanning ───────────────────────────────────────
+      # Scan on push uses Amazon Inspector to find vulnerabilities
+      # in your container images (CVEs, OS package issues).
+      #
+      # TWO scanning modes (set at registry level, not repo level):
+      #   Basic:    Scans on push only. Free for first 500 images.
+      #   Enhanced: Continuous scanning (re-scans when new CVEs found).
+      #             Uses Amazon Inspector. Costs ~$0.11/image/month.
+      #
+      # ScanOnPush triggers a basic scan every time you push an image.
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+      # ── Encryption ───────────────────────────────────────────
+      # ECR encrypts images at rest. Two options:
+      #   AES256:  AWS-managed key. Free. Default. Use this.
+      #   KMS:     Customer-managed KMS key. More control, costs $1/month/key.
+      #            Use for compliance (HIPAA, PCI) or cross-account sharing.
+      EncryptionConfiguration:
+        EncryptionType: AES256
+        # If using KMS, you'd add:
+        # EncryptionType: KMS
+        # KmsKey: arn:aws:kms:eu-west-1:123456789:key/abc-123
+
+      # ── Lifecycle Policy ─────────────────────────────────────
+      # Lifecycle policies automatically clean up old images to save
+      # storage costs. Without these, your repo fills up over time.
+      #
+      # Rules are evaluated by priority number (lower = first).
+      # Each rule matches images and either counts or expires them.
+      #
+      # RULE TYPES:
+      #   imageCountMoreThan: Keep only the N most recent images
+      #   sinceImagePushed:   Expire images older than N days
+      #
+      # TAG STATUS:
+      #   tagged:   Matches images with specific tag prefixes
+      #   untagged: Matches images with no tag (leftover layers)
+      #   any:      Matches all images regardless of tag status
+      #
+      # The policy below does two things:
+      #   1. Delete untagged images after 1 day (cleanup leftover layers)
+      #   2. Keep only the last 10 tagged images (save storage)
+      LifecyclePolicy:
+        # LifecyclePolicyText must be a JSON string (not YAML).
+        # CloudFormation requires it as a string, not an object.
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire untagged images after 1 day",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 1
+                },
+                "action": {
+                  "type": "expire"
+                }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Keep only the last 10 tagged images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+      # ── Tags ─────────────────────────────────────────────────
+      # Tags are key-value metadata. Essential for:
+      #   - Cost allocation (which team/project owns this?)
+      #   - Automation (scripts that find resources by tag)
+      #   - Compliance (tagging policies)
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: book-store
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # ── Repository Policy ────────────────────────────────────────
+  # A repository policy is a RESOURCE-BASED IAM policy that controls
+  # who can pull/push images from this specific repository.
+  #
+  # This is DIFFERENT from IAM user/role policies:
+  #   IAM Policy:        "This user CAN pull from any ECR repo"
+  #   Repository Policy: "This repo ALLOWS pulls from this role"
+  #
+  # You need BOTH to succeed (IAM evaluates all policies together).
+  #
+  # We only create this if an ECS Execution Role ARN was provided.
+  # The Condition key on the resource controls this.
+  ECRRepositoryPolicy:
+    Type: AWS::ECR::Repository
+    Condition: HasExecutionRole
+    # DependsOn ensures this resource is created AFTER the repository.
+    # CloudFormation usually figures out order from !Ref and !GetAtt,
+    # but sometimes you need to be explicit.
+    DependsOn: ECRRepository
+    Properties:
+      RepositoryName: !Ref RepositoryName
+      RepositoryPolicyText:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowECSPull
+            Effect: Allow
+            Principal:
+              AWS: !Ref ECSTaskExecutionRoleArn
+            Action:
+              # These are the minimum permissions ECS needs to pull images:
+              - ecr:GetDownloadUrlForLayer   # Download image layers
+              - ecr:BatchGetImage            # Get image manifests
+              - ecr:BatchCheckLayerAvailability  # Check if layers exist
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS — Values to export from this stack
+# ══════════════════════════════════════════════════════════════════
+# Outputs serve two purposes:
+#   1. Display values in the console after stack creation
+#   2. Export values for other stacks to import (cross-stack refs)
+#
+# The Export/Name lets other stacks use !ImportValue to reference
+# these values. This creates a dependency between stacks.
+
+Outputs:
+
+  RepositoryUri:
+    Description: >-
+      The URI to use in docker push/pull commands and ECS task definitions.
+      Format: <account-id>.dkr.ecr.<region>.amazonaws.com/<repo-name>
+    # !GetAtt gets an attribute from a resource.
+    # ECR::Repository exposes RepositoryUri as an attribute.
+    Value: !GetAtt ECRRepository.RepositoryUri
+    Export:
+      # Export name must be unique across ALL stacks in the region.
+      # Convention: <StackName>-<OutputName> avoids collisions.
+      Name: !Sub '${AWS::StackName}-RepositoryUri'
+
+  RepositoryArn:
+    Description: >-
+      The ARN (Amazon Resource Name) of the ECR repository.
+      Needed for IAM policies that grant access to this repo.
+    Value: !GetAtt ECRRepository.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RepositoryArn'
+
+  RepositoryName:
+    Description: The name of the ECR repository
+    Value: !Ref ECRRepository
+    Export:
+      Name: !Sub '${AWS::StackName}-RepositoryName'
+
+  # ── Helpful Commands ─────────────────────────────────────────
+  # These outputs show the exact commands you need after deployment.
+  PushCommands:
+    Description: >-
+      Run these commands to push your Docker image to this repository.
+    Value: !Sub |
+      # 1. Authenticate Docker to ECR
+      aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+
+      # 2. Build your image
+      docker build -t ${RepositoryName} .
+
+      # 3. Tag it for ECR
+      docker tag ${RepositoryName}:latest ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${RepositoryName}:latest
+
+      # 4. Push to ECR
+      docker push ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${RepositoryName}:latest
+
+# ══════════════════════════════════════════════════════════════════
+# KEY CONCEPTS RECAP
+# ══════════════════════════════════════════════════════════════════
+#
+# !Ref          → References a Parameter or Resource (returns ID/name)
+# !GetAtt       → Gets a specific attribute from a Resource
+# !Sub          → String substitution with ${Variable} syntax
+# !If           → Conditional value based on a Condition
+# !Equals       → Compares two values (used in Conditions)
+# !Not          → Negates a condition
+# !Sub with ${AWS::StackName} → Built-in pseudo-parameter (stack name)
+# !Sub with ${AWS::Region}    → Built-in pseudo-parameter (region)
+# !Sub with ${AWS::AccountId} → Built-in pseudo-parameter (account ID)
+#
+# LIFECYCLE RULES:
+#   - sinceImagePushed + days → expire images older than N days
+#   - imageCountMoreThan + N  → keep only the last N images
+#   - tagStatus: untagged     → match images with no tag
+#   - tagStatus: tagged       → match images with specific tag prefixes
+#   - tagStatus: any          → match all images
+#
+# TAG IMMUTABILITY:
+#   MUTABLE (default) → same tag can be reused (simple, risky)
+#   IMMUTABLE         → once pushed, a tag cannot be overwritten (safe)
+#
+# ENCRYPTION:
+#   AES256 → AWS-managed, free, default choice
+#   KMS    → customer-managed key, $1/month, for compliance
+# ══════════════════════════════════════════════════════════════════

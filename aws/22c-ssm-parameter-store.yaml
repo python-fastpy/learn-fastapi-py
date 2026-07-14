@@ -1,0 +1,494 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — SSM Parameter Store (Step 22)
+# ══════════════════════════════════════════════════════════════════
+# Companion to: 22-ssm-parameter-store.py
+# Navigation:  ← prev: 21c-cognito.yaml  |  next: 23c-iam.yaml →
+#
+# WHAT THIS TEMPLATE CREATES:
+#   SSM Parameter Store parameters for the book-store API:
+#     - String parameter (plain text — feature flag)
+#     - SecureString parameter (KMS encrypted — API key)
+#     - StringList parameter (comma-separated — allowed origins)
+#     - Hierarchical parameters (/book-store/{env}/...)
+#     - Parameter with validation pattern
+#
+# ── SSM Parameter Store vs Secrets Manager ──────────────────────
+#
+#   Both store configuration. Choose based on what you're storing:
+#
+#   ┌──────────────────────┬──────────────────┬──────────────────┐
+#   │ Feature              │ Parameter Store   │ Secrets Manager  │
+#   ├──────────────────────┼──────────────────┼──────────────────┤
+#   │ Cost                 │ Standard: FREE    │ $0.40/secret/mo  │
+#   │                      │ Advanced: $0.05/  │ + $0.05 per 10K  │
+#   │                      │ param/month       │ API calls        │
+#   ├──────────────────────┼──────────────────┼──────────────────┤
+#   │ Auto-rotation        │ No               │ Yes (Lambda)     │
+#   ├──────────────────────┼──────────────────┼──────────────────┤
+#   │ Encryption           │ Optional         │ Always encrypted │
+#   │                      │ (SecureString)    │                  │
+#   ├──────────────────────┼──────────────────┼──────────────────┤
+#   │ Max size             │ 4 KB (std)       │ 64 KB            │
+#   │                      │ 8 KB (advanced)   │                  │
+#   ├──────────────────────┼──────────────────┼──────────────────┤
+#   │ Versioning           │ Yes              │ Yes              │
+#   ├──────────────────────┼──────────────────┼──────────────────┤
+#   │ Cross-account access │ No               │ Yes (via policy) │
+#   ├──────────────────────┼──────────────────┼──────────────────┤
+#   │ Parameter policies   │ Advanced tier    │ N/A              │
+#   │ (expiration, notify) │ only             │                  │
+#   └──────────────────────┴──────────────────┴──────────────────┘
+#
+#   DECISION GUIDE:
+#     Use Parameter Store for:
+#       - Feature flags (true/false)
+#       - Configuration URLs, endpoints
+#       - Non-sensitive settings (timeouts, limits, regions)
+#       - Anything that doesn't need rotation
+#       - Cost-sensitive scenarios (it's free!)
+#
+#     Use Secrets Manager for:
+#       - Database passwords (auto-rotation!)
+#       - API keys to third-party services
+#       - OAuth client secrets
+#       - Anything that needs periodic rotation
+#       - Cross-account secret sharing
+#
+# ── Parameter Tiers ─────────────────────────────────────────────
+#
+#   ┌────────────────────┬───────────────┬──────────────────────┐
+#   │                    │ Standard      │ Advanced             │
+#   ├────────────────────┼───────────────┼──────────────────────┤
+#   │ Max parameters     │ 10,000        │ 100,000              │
+#   │ Max value size     │ 4 KB          │ 8 KB                 │
+#   │ Parameter policies │ No            │ Yes (expiration,     │
+#   │                    │               │  change notification)│
+#   │ Cost               │ FREE          │ $0.05/param/month    │
+#   │ API throughput     │ 40 TPS (std)  │ 1,000 TPS (higher)  │
+#   └────────────────────┴───────────────┴──────────────────────┘
+#
+#   Standard tier is almost always sufficient. 10,000 parameters
+#   per account/region is rarely a limit.
+#
+# ── Hierarchy Best Practices ────────────────────────────────────
+#
+#   Organize parameters with forward-slash hierarchy:
+#
+#     /book-store/dev/db-host        → "book-store-db-dev.abc.rds..."
+#     /book-store/dev/db-port        → "5432"
+#     /book-store/dev/feature-flags/dark-mode → "true"
+#     /book-store/prod/db-host       → "book-store-db-prod.xyz.rds..."
+#     /book-store/prod/feature-flags/dark-mode → "false"
+#
+#   Benefits:
+#     1. GetParametersByPath: fetch all params under /book-store/dev/
+#     2. IAM scoping: allow access to /book-store/dev/* but not prod
+#     3. Readability: clear what each parameter is for
+#     4. Organization: group by app → environment → category
+#
+#   Convention:  /{app-name}/{environment}/{category}/{param-name}
+#
+# ── Dynamic References in CloudFormation ────────────────────────
+#
+#   CloudFormation can resolve SSM parameters at deploy time using
+#   dynamic references. The parameter value is fetched when the
+#   stack is created/updated — not stored in the template:
+#
+#   Plain text parameter:
+#     {{resolve:ssm:/book-store/dev/db-host}}
+#
+#   SecureString parameter:
+#     {{resolve:ssm-secure:/book-store/dev/api-key}}
+#
+#   Specific version:
+#     {{resolve:ssm:/book-store/dev/db-host:3}}
+#     (version 3 of the parameter)
+#
+#   Secrets Manager:
+#     {{resolve:secretsmanager:my-secret:SecretString:password}}
+#
+#   These are resolved at deploy time. The actual value never
+#   appears in the CloudFormation template or console.
+#
+# ── Parameter Policies (Advanced tier only) ─────────────────────
+#
+#   Parameter policies add lifecycle management:
+#
+#   Expiration:
+#     Delete the parameter after a date. Useful for temporary
+#     API keys or time-limited configurations.
+#
+#   ExpirationNotification:
+#     Send an EventBridge event N days before expiration.
+#     Trigger a Lambda to rotate or alert.
+#
+#   NoChangeNotification:
+#     Alert if a parameter hasn't been updated in N days.
+#     Useful for credentials that should be rotated regularly.
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  SSM Parameter Store parameters for the book-store API.
+  Feature flags, config values, hierarchical parameters, and
+  encrypted secrets. See 22-ssm-parameter-store.py for concepts.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+    Description: Deployment environment. Used in parameter paths.
+
+  DBHost:
+    Type: String
+    Default: 'localhost'
+    Description: >-
+      Database hostname. In production, this would be the RDS endpoint
+      from the 20c-rds template output.
+
+  DBPort:
+    Type: String
+    Default: '5432'
+    Description: Database port.
+
+  ThirdPartyApiKey:
+    Type: String
+    NoEcho: true
+    Description: >-
+      API key for a third-party service (e.g., Stripe, SendGrid).
+      NoEcho: true means the value is masked in the console and
+      CLI output. It's still stored in CloudFormation state —
+      for truly sensitive values, use Secrets Manager instead.
+    MinLength: 10
+    MaxLength: 256
+
+  AllowedOrigins:
+    Type: String
+    Default: 'http://localhost:3000,http://localhost:8080'
+    Description: >-
+      Comma-separated list of allowed CORS origins.
+      Will be stored as a StringList parameter.
+
+  DarkModeEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Feature flag for dark mode UI.
+
+  MaxUploadSizeMB:
+    Type: String
+    Default: '10'
+    AllowedPattern: '^[1-9][0-9]*$'
+    Description: >-
+      Maximum file upload size in MB. Must be a positive integer.
+      AllowedPattern validates the format at deploy time.
+
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ────────────────────────────────────────────────────────────────
+  # STRING PARAMETER — Plain Text Feature Flag
+  # ────────────────────────────────────────────────────────────────
+  # Type: String = unencrypted plain text. Good for non-sensitive
+  # configuration values like feature flags, URLs, and counts.
+  #
+  # This is the simplest parameter type. Zero cost (Standard tier).
+
+  DarkModeFlag:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/book-store/${Environment}/feature-flags/dark-mode'
+      # Hierarchical path. Your app fetches this with:
+      #   ssm.get_parameter(Name="/book-store/dev/feature-flags/dark-mode")
+      #
+      # Or fetch ALL feature flags at once with:
+      #   ssm.get_parameters_by_path(Path="/book-store/dev/feature-flags/")
+
+      Type: String
+      # String = plain text, not encrypted.
+      # Anyone with ssm:GetParameter permission can read it.
+
+      Value: !Ref DarkModeEnabled
+      Description: !Sub 'Feature flag: dark mode UI (${Environment})'
+
+      Tier: Standard
+      # Standard = free, 4 KB max, 10,000 params per account/region.
+      # Advanced = $0.05/month, 8 KB max, 100,000 params, policies.
+
+      Tags:
+        Project: book-store
+        Environment: !Ref Environment
+        Category: feature-flag
+        # Tags help with cost allocation and access control.
+        # You can scope IAM policies to tags:
+        #   Condition: { StringEquals: { "ssm:resourceTag/Category": "feature-flag" } }
+
+
+  # ────────────────────────────────────────────────────────────────
+  # SECURESTRING PARAMETER — Encrypted API Key
+  # ────────────────────────────────────────────────────────────────
+  # Type: SecureString = encrypted with AWS KMS at rest.
+  # Decrypted automatically when you call GetParameter with
+  # WithDecryption=True (the default).
+  #
+  # IMPORTANT: CloudFormation does NOT support creating SecureString
+  # parameters directly (as of 2024). This is an AWS limitation.
+  # You must create them via:
+  #   - AWS CLI: aws ssm put-parameter --type SecureString ...
+  #   - SDK: ssm.put_parameter(Type='SecureString', ...)
+  #   - Custom Resource (Lambda-backed)
+  #
+  # The resource below creates a String parameter as a placeholder.
+  # In practice, use a Custom Resource or create the SecureString
+  # outside of CloudFormation. The commented-out CLI command shows
+  # how to create it manually.
+
+  # To create a SecureString via CLI:
+  # aws ssm put-parameter \
+  #   --name "/book-store/dev/api-keys/third-party" \
+  #   --type "SecureString" \
+  #   --value "sk_live_abc123..." \
+  #   --key-id "alias/aws/ssm" \
+  #   --description "Third-party API key (encrypted)" \
+  #   --tier "Standard"
+  #
+  # key-id options:
+  #   alias/aws/ssm  = default AWS-managed key (free)
+  #   alias/my-key   = customer-managed KMS key ($1/month + API calls)
+  #   arn:aws:kms:... = KMS key ARN
+  #
+  # To read it:
+  # aws ssm get-parameter \
+  #   --name "/book-store/dev/api-keys/third-party" \
+  #   --with-decryption
+
+  # Placeholder String parameter (replace with SecureString via CLI):
+  ApiKeyPlaceholder:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/book-store/${Environment}/api-keys/third-party-placeholder'
+      Type: String
+      Value: 'REPLACE_ME_WITH_SECURESTRING_VIA_CLI'
+      Description: >-
+        Placeholder. Create the actual SecureString parameter via CLI:
+        aws ssm put-parameter --name "/book-store/{env}/api-keys/third-party"
+        --type SecureString --value "your-api-key" --key-id alias/aws/ssm
+
+      Tags:
+        Project: book-store
+        Environment: !Ref Environment
+        Category: api-key
+
+
+  # ────────────────────────────────────────────────────────────────
+  # STRINGLIST PARAMETER — Comma-Separated Values
+  # ────────────────────────────────────────────────────────────────
+  # Type: StringList = comma-separated values stored as one parameter.
+  # The SDK returns the raw string — you split it yourself.
+  #
+  # Good for: lists of allowed origins, regions, email addresses,
+  # feature flag lists, etc.
+  #
+  # NOTE: CloudFormation also doesn't natively support creating
+  # StringList parameters (same limitation as SecureString). The
+  # workaround is to store them as a plain String and split in
+  # your application code, which works identically in practice.
+
+  AllowedOriginsParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/book-store/${Environment}/cors/allowed-origins'
+      Type: String
+      # Stored as String (CF limitation). Your app splits by comma:
+      #   origins = value.split(",")
+      # Functionally identical to a StringList for most purposes.
+
+      Value: !Ref AllowedOrigins
+      # Example value: "http://localhost:3000,http://localhost:8080"
+      # Your FastAPI CORS middleware reads this:
+      #
+      #   import boto3
+      #   ssm = boto3.client('ssm')
+      #   result = ssm.get_parameter(
+      #       Name="/book-store/dev/cors/allowed-origins"
+      #   )
+      #   origins = result['Parameter']['Value'].split(',')
+      #   app.add_middleware(CORSMiddleware, allow_origins=origins)
+
+      Description: !Sub 'Allowed CORS origins (${Environment})'
+
+      Tags:
+        Project: book-store
+        Environment: !Ref Environment
+        Category: cors
+
+
+  # ────────────────────────────────────────────────────────────────
+  # HIERARCHICAL PARAMETERS — Database Configuration
+  # ────────────────────────────────────────────────────────────────
+  # Group related parameters under a common path.
+  # Fetch all at once with GetParametersByPath:
+  #
+  #   ssm.get_parameters_by_path(
+  #       Path="/book-store/dev/database/",
+  #       Recursive=True
+  #   )
+  #   → Returns all parameters under /book-store/dev/database/
+
+  DBHostParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/book-store/${Environment}/database/host'
+      Type: String
+      Value: !Ref DBHost
+      Description: !Sub 'Database hostname (${Environment})'
+      Tags:
+        Project: book-store
+        Environment: !Ref Environment
+        Category: database
+
+  DBPortParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/book-store/${Environment}/database/port'
+      Type: String
+      Value: !Ref DBPort
+      Description: !Sub 'Database port (${Environment})'
+      Tags:
+        Project: book-store
+        Environment: !Ref Environment
+        Category: database
+
+  DBNameParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/book-store/${Environment}/database/name'
+      Type: String
+      Value: bookstore
+      Description: !Sub 'Database name (${Environment})'
+      Tags:
+        Project: book-store
+        Environment: !Ref Environment
+        Category: database
+
+
+  # ────────────────────────────────────────────────────────────────
+  # PARAMETER WITH ALLOWEDPATTERN VALIDATION
+  # ────────────────────────────────────────────────────────────────
+  # AllowedPattern on the CloudFormation Parameter validates input
+  # at deploy time. The SSM parameter itself doesn't have built-in
+  # validation — validation happens in the CF parameter definition.
+
+  MaxUploadSizeParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/book-store/${Environment}/limits/max-upload-size-mb'
+      Type: String
+      Value: !Ref MaxUploadSizeMB
+      # The AllowedPattern on the CF parameter ensures this is always
+      # a positive integer. CloudFormation rejects invalid values
+      # before the parameter is created.
+
+      Description: !Sub 'Maximum file upload size in MB (${Environment})'
+
+      Tags:
+        Project: book-store
+        Environment: !Ref Environment
+        Category: limits
+
+
+  # ────────────────────────────────────────────────────────────────
+  # APPLICATION CONFIGURATION — All-in-one JSON parameter
+  # ────────────────────────────────────────────────────────────────
+  # Alternative approach: store multiple config values as a single
+  # JSON string. Fewer parameters, one API call to read.
+  #
+  # Trade-off:
+  #   Multiple params: granular IAM control, individual versioning
+  #   Single JSON:     fewer API calls, atomic updates, simpler code
+
+  AppConfigParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/book-store/${Environment}/app-config'
+      Type: String
+      Value: !Sub |
+        {
+          "log_level": "INFO",
+          "pagination_default_size": 20,
+          "pagination_max_size": 100,
+          "cache_ttl_seconds": 300,
+          "enable_signup": true,
+          "maintenance_mode": false
+        }
+      # Your app reads and parses this JSON:
+      #
+      #   import json, boto3
+      #   ssm = boto3.client('ssm')
+      #   result = ssm.get_parameter(Name="/book-store/dev/app-config")
+      #   config = json.loads(result['Parameter']['Value'])
+      #   page_size = config['pagination_default_size']  # 20
+
+      Description: !Sub 'Application configuration JSON (${Environment})'
+
+      Tags:
+        Project: book-store
+        Environment: !Ref Environment
+        Category: app-config
+
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  DarkModeFlagName:
+    Description: Parameter name for the dark mode feature flag
+    Value: !Ref DarkModeFlag
+    # !Ref on an SSM Parameter returns the parameter name (the path).
+
+  DarkModeFlagArn:
+    Description: ARN of the dark mode parameter
+    Value: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/book-store/${Environment}/feature-flags/dark-mode'
+    # SSM parameter ARNs follow this pattern. Note: no leading slash
+    # in the ARN path (even though the parameter name has one).
+
+  AllowedOriginsParamName:
+    Description: Parameter name for allowed CORS origins
+    Value: !Ref AllowedOriginsParam
+
+  DBHostParamName:
+    Description: Parameter name for database host
+    Value: !Ref DBHostParam
+
+  AppConfigParamName:
+    Description: Parameter name for app configuration JSON
+    Value: !Ref AppConfigParam
+
+  ParameterPathPrefix:
+    Description: >-
+      Base path for all book-store parameters in this environment.
+      Use with GetParametersByPath to fetch all config at once:
+        aws ssm get-parameters-by-path --path "/book-store/dev/" --recursive
+    Value: !Sub '/book-store/${Environment}/'
+
+  DynamicReferenceExample:
+    Description: >-
+      Example dynamic reference for use in other CloudFormation templates.
+      Paste this into another template to resolve the DB host at deploy time.
+    Value: !Sub '{{resolve:ssm:/book-store/${Environment}/database/host}}'
+    # This output shows the dynamic reference syntax but doesn't
+    # actually resolve it (outputs are not resolved). It's here for
+    # documentation — copy this pattern into other templates.

@@ -1,0 +1,570 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — Cleanup & Summary (Step 14)
+# ══════════════════════════════════════════════════════════════════
+# Navigation:  Python lesson: 14-cleanup-and-summary.py
+#
+# THIS IS NOT A DEPLOYABLE PRODUCTION TEMPLATE.
+# It is an educational reference that demonstrates:
+#   - How to delete stacks in the correct dependency order
+#   - Custom resources (Lambda-backed) for pre-deletion cleanup
+#   - DeletionPolicy / UpdateReplacePolicy on resources
+#   - Stack termination protection
+#   - Change sets, drift detection, and nested stacks
+#
+# ── Deleting Stacks in the Correct Order ────────────────────────
+#
+# When you have multiple stacks that depend on each other, you must
+# delete them in REVERSE order of creation. If Stack B imports a
+# value from Stack A, you cannot delete Stack A first.
+#
+#   DELETE ORDER (reverse of creation):
+#
+#     1. WAF stack          (depends on ALB stack)
+#     2. CloudFront stack   (depends on ALB, S3)
+#     3. Route 53 stack     (depends on CloudFront, ALB)
+#     4. ECS stack          (depends on ALB, ECR, Secrets, VPC)
+#     5. ALB stack          (depends on VPC)
+#     6. CloudWatch stack   (depends on SNS, ECS, Lambda)
+#     7. SNS + SQS stacks   (standalone or linked)
+#     8. Lambda stack       (depends on S3, Secrets)
+#     9. API Gateway stack  (depends on Lambda)
+#    10. Secrets stack      (standalone)
+#    11. DynamoDB stack     (standalone)
+#    12. ECR stack          (standalone — images inside get deleted)
+#    13. S3 stack           (REQUIRES emptying bucket first!)
+#    14. VPC stack          (delete last — everything depends on it)
+#
+#   IMPORTANT: S3 buckets that contain objects CANNOT be deleted by
+#   CloudFormation. You must empty the bucket first. The custom
+#   resource below automates this.
+#
+#   Delete command:
+#     aws cloudformation delete-stack --stack-name book-store-waf-dev
+#     aws cloudformation wait stack-delete-complete --stack-name book-store-waf-dev
+#     # ... repeat for each stack in order
+#
+# ── Stack Termination Protection ────────────────────────────────
+#
+# Prevents accidental deletion of critical stacks (e.g., production).
+# When enabled, delete-stack fails until you explicitly disable it.
+#
+#   Enable (for production stacks):
+#     aws cloudformation update-termination-protection \
+#       --enable-termination-protection \
+#       --stack-name book-store-vpc-prod
+#
+#   Disable (when you intentionally want to delete):
+#     aws cloudformation update-termination-protection \
+#       --no-enable-termination-protection \
+#       --stack-name book-store-vpc-prod
+#
+#   You can also set it at creation time:
+#     aws cloudformation create-stack \
+#       --stack-name book-store-vpc-prod \
+#       --template-body file://02c-vpc.yaml \
+#       --enable-termination-protection
+#
+# ── Change Sets ─────────────────────────────────────────────────
+#
+# A change set is a PREVIEW of what will happen when you update a
+# stack. It shows which resources will be added, modified, or deleted
+# BEFORE you apply the change. Like a "dry run" for infrastructure.
+#
+#   Create a change set (preview):
+#     aws cloudformation create-change-set \
+#       --stack-name book-store-ecs-dev \
+#       --template-body file://08c-ecs-fargate.yaml \
+#       --change-set-name update-task-count \
+#       --parameters ParameterKey=DesiredCount,ParameterValue=3
+#
+#   Review the change set:
+#     aws cloudformation describe-change-set \
+#       --stack-name book-store-ecs-dev \
+#       --change-set-name update-task-count
+#
+#   Execute (apply the change):
+#     aws cloudformation execute-change-set \
+#       --stack-name book-store-ecs-dev \
+#       --change-set-name update-task-count
+#
+#   Delete (cancel without applying):
+#     aws cloudformation delete-change-set \
+#       --stack-name book-store-ecs-dev \
+#       --change-set-name update-task-count
+#
+#   Change types in the output:
+#     Add       → new resource will be created
+#     Modify    → existing resource will be updated
+#     Remove    → resource will be deleted
+#     Replacement: True  → resource will be REPLACED (deleted + recreated)
+#     Replacement: False → in-place update (no downtime)
+#
+# ── Stack Drift Detection ──────────────────────────────────────
+#
+# Drift occurs when someone manually changes a resource that is
+# managed by CloudFormation (e.g., editing a security group in the
+# console). Drift detection identifies these discrepancies.
+#
+#   Detect drift:
+#     aws cloudformation detect-stack-drift \
+#       --stack-name book-store-vpc-dev
+#
+#   Check drift status:
+#     aws cloudformation describe-stack-drift-detection-status \
+#       --stack-drift-detection-id <id-from-above>
+#
+#   View drifted resources:
+#     aws cloudformation describe-stack-resource-drifts \
+#       --stack-name book-store-vpc-dev \
+#       --stack-resource-drift-status-filters MODIFIED DELETED
+#
+#   Drift statuses:
+#     IN_SYNC   → resource matches the template (good)
+#     MODIFIED  → resource was changed outside CloudFormation
+#     DELETED   → resource was deleted outside CloudFormation
+#     NOT_CHECKED → drift detection hasn't been run
+#
+#   After finding drift, you have two options:
+#     1. Update the template to match reality (import the drift)
+#     2. Update the stack to reset the resource (overwrite the drift)
+#
+# ── Nested Stacks vs Cross-Stack References ─────────────────────
+#
+# Two ways to organize multi-stack architectures:
+#
+#   ┌────────────────────────────┬────────────────────────────────┐
+#   │ Nested Stacks              │ Cross-Stack References         │
+#   ├────────────────────────────┼────────────────────────────────┤
+#   │ Parent stack creates child │ Independent stacks that share  │
+#   │ stacks as resources        │ values via Exports/Imports     │
+#   │                            │                                │
+#   │ Type: AWS::CloudFormation::│ Producer: Outputs + Export     │
+#   │   Stack                    │ Consumer: !ImportValue         │
+#   │                            │                                │
+#   │ Parent controls lifecycle  │ Each stack has own lifecycle   │
+#   │ of ALL children            │ Delete order matters           │
+#   │                            │                                │
+#   │ Good for: tightly coupled  │ Good for: loosely coupled     │
+#   │ resources deployed together│ resources, team ownership      │
+#   │                            │                                │
+#   │ Template stored in S3      │ No S3 needed                  │
+#   │                            │                                │
+#   │ Example:                   │ Example:                      │
+#   │   Parent: infrastructure   │   VPC stack exports SubnetIds │
+#   │     Child: VPC             │   ECS stack imports SubnetIds │
+#   │     Child: ECS             │                                │
+#   │     Child: ALB             │                                │
+#   └────────────────────────────┴────────────────────────────────┘
+#
+# ══════════════════════════════════════════════════════════════════
+# SUMMARY TABLE: Service → CloudFormation Resource Type
+# ══════════════════════════════════════════════════════════════════
+#
+#   ┌───────────────────────────┬──────────────────────────────────────────┐
+#   │ AWS Service               │ CloudFormation Resource Type              │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ VPC                       │ AWS::EC2::VPC                            │
+#   │ Subnet                    │ AWS::EC2::Subnet                         │
+#   │ Internet Gateway          │ AWS::EC2::InternetGateway                │
+#   │ NAT Gateway               │ AWS::EC2::NatGateway                     │
+#   │ Security Group            │ AWS::EC2::SecurityGroup                  │
+#   │ Route Table               │ AWS::EC2::RouteTable                     │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ S3 Bucket                 │ AWS::S3::Bucket                          │
+#   │ S3 Bucket Policy          │ AWS::S3::BucketPolicy                    │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ EC2 Instance              │ AWS::EC2::Instance                       │
+#   │ EC2 Key Pair              │ AWS::EC2::KeyPair                        │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ Lambda Function           │ AWS::Lambda::Function                    │
+#   │ Lambda Permission         │ AWS::Lambda::Permission                  │
+#   │ Lambda Event Source Map   │ AWS::Lambda::EventSourceMapping          │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ API Gateway (REST)        │ AWS::ApiGateway::RestApi                 │
+#   │ API Gateway (HTTP)        │ AWS::ApiGatewayV2::Api                   │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ ECR Repository            │ AWS::ECR::Repository                     │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ ECS Cluster               │ AWS::ECS::Cluster                        │
+#   │ ECS Service               │ AWS::ECS::Service                        │
+#   │ ECS Task Definition       │ AWS::ECS::TaskDefinition                 │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ ALB                       │ AWS::ElasticLoadBalancingV2::LoadBalancer │
+#   │ ALB Target Group          │ AWS::ElasticLoadBalancingV2::TargetGroup  │
+#   │ ALB Listener              │ AWS::ElasticLoadBalancingV2::Listener     │
+#   │ ALB Listener Rule         │ AWS::ElasticLoadBalancingV2::ListenerRule │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ CloudWatch Log Group      │ AWS::Logs::LogGroup                      │
+#   │ CloudWatch Alarm          │ AWS::CloudWatch::Alarm                   │
+#   │ CloudWatch Dashboard      │ AWS::CloudWatch::Dashboard               │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ Route 53 Hosted Zone      │ AWS::Route53::HostedZone                 │
+#   │ Route 53 Record           │ AWS::Route53::RecordSet                  │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ CloudFront Distribution   │ AWS::CloudFront::Distribution            │
+#   │ CloudFront OAC            │ AWS::CloudFront::OriginAccessControl     │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ ACM Certificate           │ AWS::CertificateManager::Certificate     │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ Secrets Manager Secret    │ AWS::SecretsManager::Secret              │
+#   │ Secrets Rotation          │ AWS::SecretsManager::RotationSchedule    │
+#   │ Secrets Resource Policy   │ AWS::SecretsManager::ResourcePolicy      │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ DynamoDB Table            │ AWS::DynamoDB::Table                     │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ SNS Topic                 │ AWS::SNS::Topic                          │
+#   │ SNS Subscription          │ AWS::SNS::Subscription                   │
+#   │ SNS Topic Policy          │ AWS::SNS::TopicPolicy                    │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ SQS Queue                 │ AWS::SQS::Queue                          │
+#   │ SQS Queue Policy          │ AWS::SQS::QueuePolicy                   │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ WAF WebACL                │ AWS::WAFv2::WebACL                       │
+#   │ WAF IP Set                │ AWS::WAFv2::IPSet                        │
+#   │ WAF Rule Group            │ AWS::WAFv2::RuleGroup                    │
+#   │ WAF Association           │ AWS::WAFv2::WebACLAssociation            │
+#   │ WAF Logging Config        │ AWS::WAFv2::LoggingConfiguration         │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ IAM Role                  │ AWS::IAM::Role                           │
+#   │ IAM Policy                │ AWS::IAM::Policy                         │
+#   │ IAM Instance Profile      │ AWS::IAM::InstanceProfile                │
+#   ├───────────────────────────┼──────────────────────────────────────────┤
+#   │ RDS Instance              │ AWS::RDS::DBInstance                     │
+#   │ RDS Cluster               │ AWS::RDS::DBCluster                      │
+#   │ Cognito User Pool         │ AWS::Cognito::UserPool                   │
+#   │ SSM Parameter             │ AWS::SSM::Parameter                      │
+#   │ CodePipeline              │ AWS::CodePipeline::Pipeline              │
+#   │ CodeBuild Project         │ AWS::CodeBuild::Project                  │
+#   └───────────────────────────┴──────────────────────────────────────────┘
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Cleanup & Summary — educational template demonstrating DeletionPolicy,
+  UpdateReplacePolicy, custom resources for S3 cleanup, and stack
+  lifecycle concepts (Step 14). NOT for production deployment.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+    Description: Environment name for resource naming and tags.
+
+  BucketToClean:
+    Type: String
+    Default: ''
+    Description: >-
+      Name of an existing S3 bucket to empty before stack deletion.
+      Leave empty to skip bucket cleanup. The custom resource Lambda
+      will delete ALL objects in this bucket when the stack is deleted.
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ────────────────────────────────────────────────────────────────
+  # 1. DeletionPolicy EXAMPLES
+  # ────────────────────────────────────────────────────────────────
+  #
+  # DeletionPolicy controls what happens to a resource when:
+  #   - The stack is deleted
+  #   - The resource is removed from the template
+  #
+  # Three options:
+  #
+  #   Delete   → resource is deleted (DEFAULT for most resources)
+  #   Retain   → resource is KEPT but no longer managed by CF
+  #   Snapshot → resource is snapshotted, then deleted
+  #              (only for RDS, EBS, ElastiCache, Neptune, Redshift)
+  #
+  # UpdateReplacePolicy controls what happens when a resource must
+  # be REPLACED during an update (e.g., changing a property that
+  # requires replacement, like an RDS engine type):
+  #
+  #   Delete   → old resource deleted after new one is created
+  #   Retain   → old resource kept (orphaned)
+  #   Snapshot → old resource snapshotted, then deleted
+  #
+  # ── DeletionPolicy: Retain ────────────────────────────────────
+  # The resource survives stack deletion. Use for:
+  #   - S3 buckets with irreplaceable data
+  #   - DynamoDB tables with production data
+  #   - CloudWatch log groups you want to keep for audit
+
+  RetainedBucket:
+    Type: AWS::S3::Bucket
+    # DeletionPolicy: Retain means this bucket will NOT be deleted
+    # when the CloudFormation stack is deleted. It becomes an
+    # "orphaned" resource — still exists in AWS, but no longer
+    # managed by CloudFormation. You must delete it manually.
+    DeletionPolicy: Retain
+    # UpdateReplacePolicy: Retain means if CloudFormation needs to
+    # REPLACE this bucket (e.g., you change a property that requires
+    # replacement), the old bucket is kept instead of deleted.
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'book-store-retained-${AWS::AccountId}-${Environment}'
+      Tags:
+        - Key: DeletionPolicy
+          Value: Retain
+        - Key: Note
+          Value: This bucket survives stack deletion
+
+  # ── DeletionPolicy: Delete (default) ──────────────────────────
+  # The resource is deleted when the stack is deleted.
+  # This is the DEFAULT — you don't need to write it explicitly.
+  # Shown here for educational purposes.
+
+  DeletedOnCleanup:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub 'book-store-temp-${AWS::AccountId}-${Environment}'
+      Tags:
+        - Key: DeletionPolicy
+          Value: Delete
+        - Key: Note
+          Value: This bucket is deleted with the stack
+
+  # ── DeletionPolicy: Snapshot (for databases) ──────────────────
+  # Takes a final snapshot before deletion. Only works with:
+  #   AWS::RDS::DBInstance, AWS::RDS::DBCluster,
+  #   AWS::EC2::Volume, AWS::ElastiCache::CacheCluster,
+  #   AWS::Neptune::DBCluster, AWS::Redshift::Cluster
+  #
+  # Example (not created here — RDS costs money):
+  #
+  #   ProductionDatabase:
+  #     Type: AWS::RDS::DBInstance
+  #     DeletionPolicy: Snapshot
+  #     UpdateReplacePolicy: Snapshot
+  #     Properties:
+  #       DBInstanceClass: db.t3.micro
+  #       Engine: postgres
+  #       MasterUsername: admin
+  #       MasterUserPassword: '{{resolve:secretsmanager:my-db:SecretString:password}}'
+  #
+  #   When the stack is deleted:
+  #     1. CloudFormation creates a final RDS snapshot
+  #     2. Snapshot name: <stack-name>-<logical-id>-<timestamp>
+  #     3. RDS instance is deleted
+  #     4. Snapshot remains (you can restore from it later)
+
+  # ────────────────────────────────────────────────────────────────
+  # 2. CUSTOM RESOURCE — Lambda-backed S3 Bucket Cleaner
+  # ────────────────────────────────────────────────────────────────
+  #
+  # PROBLEM: CloudFormation cannot delete an S3 bucket that contains
+  # objects. If you try, the stack deletion fails with:
+  #   "The bucket you tried to delete is not empty."
+  #
+  # SOLUTION: A Custom Resource that runs a Lambda function during
+  # stack lifecycle events (Create, Update, Delete). On Delete,
+  # the Lambda empties the bucket so CloudFormation can delete it.
+  #
+  # Custom Resource lifecycle:
+  #
+  #   Stack CREATE  → Lambda called with RequestType: "Create"
+  #                   (we do nothing on create)
+  #
+  #   Stack UPDATE  → Lambda called with RequestType: "Update"
+  #                   (we do nothing on update)
+  #
+  #   Stack DELETE  → Lambda called with RequestType: "Delete"
+  #                   (we empty the S3 bucket)
+  #
+  # The Lambda MUST send a response to the pre-signed URL provided
+  # by CloudFormation. If it doesn't respond within 1 hour, the
+  # stack operation times out and fails.
+
+  # ── IAM Role for the cleanup Lambda ────────────────────────────
+  BucketCleanerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'book-store-bucket-cleaner-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        # Basic Lambda execution: write to CloudWatch Logs
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: S3CleanupPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Allow listing and deleting objects in the target bucket
+              - Effect: Allow
+                Action:
+                  - 's3:ListBucket'
+                  - 's3:ListBucketVersions'
+                  - 's3:DeleteObject'
+                  - 's3:DeleteObjectVersion'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${BucketToClean}'
+                  - !Sub 'arn:aws:s3:::${BucketToClean}/*'
+
+  # ── Lambda Function: empties an S3 bucket ──────────────────────
+  BucketCleanerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'book-store-bucket-cleaner-${Environment}'
+      Description: >-
+        Custom resource handler that empties an S3 bucket before
+        CloudFormation deletes it. Called automatically during
+        stack deletion.
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 300
+      Role: !GetAtt BucketCleanerRole.Arn
+
+      # Inline code — the Lambda function is embedded in the template.
+      # For production, use a deployment package in S3 instead.
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def handler(event, context):
+              """
+              Custom resource handler for emptying S3 buckets.
+
+              CloudFormation sends three RequestTypes:
+                - Create: stack is being created (we do nothing)
+                - Update: stack is being updated (we do nothing)
+                - Delete: stack is being deleted (we empty the bucket)
+
+              IMPORTANT: We MUST call cfnresponse.send() to signal
+              CloudFormation that we're done. If we don't, the stack
+              operation hangs for 1 hour and then fails.
+              """
+              try:
+                  bucket_name = event['ResourceProperties'].get('BucketName', '')
+                  request_type = event['RequestType']
+
+                  logger.info(f"RequestType: {request_type}, Bucket: {bucket_name}")
+
+                  if request_type == 'Delete' and bucket_name:
+                      s3 = boto3.resource('s3')
+                      bucket = s3.Bucket(bucket_name)
+
+                      # Delete all object versions (for versioned buckets)
+                      bucket.object_versions.all().delete()
+                      logger.info(f"Emptied bucket: {bucket_name}")
+
+                  # Signal SUCCESS to CloudFormation
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                      'Message': f'{request_type} completed for {bucket_name}'
+                  })
+
+              except Exception as e:
+                  logger.error(f"Error: {str(e)}")
+                  # Signal FAILED — stack operation will fail
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {
+                      'Error': str(e)
+                  })
+
+  # ── Custom Resource: triggers the Lambda ───────────────────────
+  #
+  # AWS::CloudFormation::CustomResource (or Custom::BucketCleaner)
+  # tells CloudFormation to invoke a Lambda function during stack
+  # lifecycle events.
+  #
+  # ServiceToken: ARN of the Lambda function to invoke.
+  # Any additional properties (BucketName) are passed to the Lambda
+  # in event['ResourceProperties'].
+
+  BucketCleanup:
+    Type: AWS::CloudFormation::CustomResource
+    # You can also use:  Type: Custom::BucketCleaner
+    # Custom::<name> is an alias for AWS::CloudFormation::CustomResource
+    Properties:
+      # ServiceToken is REQUIRED — it's the ARN of the Lambda function.
+      ServiceToken: !GetAtt BucketCleanerFunction.Arn
+
+      # Custom properties — passed to the Lambda in ResourceProperties.
+      BucketName: !Ref BucketToClean
+
+    # DependsOn ensures the Lambda and its role exist before
+    # CloudFormation tries to invoke it.
+    DependsOn:
+      - BucketCleanerFunction
+      - BucketCleanerRole
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  CleanupLambdaArn:
+    Description: >-
+      ARN of the bucket cleaner Lambda. Can be reused by other
+      stacks as a custom resource ServiceToken.
+    Value: !GetAtt BucketCleanerFunction.Arn
+
+  RetainedBucketName:
+    Description: >-
+      Name of the retained bucket. This bucket survives stack
+      deletion due to DeletionPolicy: Retain.
+    Value: !Ref RetainedBucket
+
+  # ── Cleanup Checklist (in comments) ────────────────────────────
+  #
+  # To fully clean up all Book Store stacks:
+  #
+  #   # 1. Disable termination protection on production stacks
+  #   aws cloudformation update-termination-protection \
+  #     --no-enable-termination-protection \
+  #     --stack-name book-store-vpc-prod
+  #
+  #   # 2. Delete stacks in reverse dependency order
+  #   for stack in \
+  #     book-store-waf-dev \
+  #     book-store-cloudfront-dev \
+  #     book-store-route53-dev \
+  #     book-store-ecs-dev \
+  #     book-store-alb-dev \
+  #     book-store-cloudwatch-dev \
+  #     book-store-sns-dev \
+  #     book-store-sqs-dev \
+  #     book-store-lambda-dev \
+  #     book-store-apigateway-dev \
+  #     book-store-secrets-dev \
+  #     book-store-dynamodb-dev \
+  #     book-store-ecr-dev \
+  #     book-store-s3-dev \
+  #     book-store-vpc-dev; do
+  #
+  #     echo "Deleting $stack..."
+  #     aws cloudformation delete-stack --stack-name $stack
+  #     aws cloudformation wait stack-delete-complete --stack-name $stack
+  #     echo "$stack deleted."
+  #   done
+  #
+  #   # 3. Check for retained resources (DeletionPolicy: Retain)
+  #   aws s3 ls | grep book-store-retained
+  #   # Manually delete if no longer needed:
+  #   aws s3 rb s3://book-store-retained-123456789012-dev --force
+  #
+  #   # 4. Check for orphaned resources
+  #   aws ec2 describe-nat-gateways --filter Name=state,Values=available
+  #   # NAT Gateways cost ~$32/month — delete if not needed!

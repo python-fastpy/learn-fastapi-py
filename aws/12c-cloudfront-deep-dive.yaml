@@ -1,0 +1,718 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — CloudFront Deep Dive (Advanced)
+# ══════════════════════════════════════════════════════════════════
+# Companion to: 12-cloudfront-deep-dive.py (console walkthrough)
+# Navigation:  ← prev: 11c-route53-cloudfront-acm.yaml
+#
+# This template demonstrates advanced CloudFront features:
+#   - Multiple origins (S3 + ALB)
+#   - Multiple cache behaviors (different rules per path)
+#   - Origin Access Control (OAC) for private S3
+#   - Cache policies and origin request policies
+#   - Response headers policy (CORS, security headers)
+#   - CloudFront function (URL rewriting)
+#   - WAF WebACL association
+#
+#   Client Request
+#     │
+#     ▼
+#   CloudFront (400+ edge locations)
+#     │
+#     ├── /api/*     → ALB Origin (no caching, all methods)
+#     │                 Cache Policy: CachingDisabled
+#     │                 Origin Request: AllViewerExceptHostHeader
+#     │
+#     ├── /static/*  → S3 Origin (aggressive caching, 86400s TTL)
+#     │                 OAC: S3 is private, only CF can read
+#     │                 Cache Policy: custom (24h TTL)
+#     │
+#     └── Default    → ALB Origin (moderate caching)
+#
+# BEHAVIOR PRECEDENCE:
+#   CloudFront evaluates cache behaviors by path pattern SPECIFICITY,
+#   not by order in the template. More specific paths match first.
+#   The default behavior (no path pattern) is the catch-all.
+#
+#   Request: /api/v1/books
+#     → matches /api/* behavior → forwarded to ALB, no cache
+#   Request: /static/logo.png
+#     → matches /static/* behavior → served from S3, cached 24h
+#   Request: /about
+#     → no specific match → default behavior → ALB
+#
+# LAMBDA@EDGE vs CLOUDFRONT FUNCTIONS:
+#   ┌──────────────────────┬─────────────────────────────────┐
+#   │ CloudFront Functions │ Lambda@Edge                      │
+#   ├──────────────────────┼─────────────────────────────────┤
+#   │ JavaScript only      │ Node.js or Python               │
+#   │ Sub-millisecond      │ 5-30 ms                         │
+#   │ Max 10 KB code       │ Max 1-50 MB (varies by trigger) │
+#   │ No network access    │ Full network access              │
+#   │ No file system       │ /tmp storage (512 MB)           │
+#   │ viewer-request &     │ All 4 triggers (viewer-request, │
+#   │ viewer-response only │ viewer-response, origin-request, │
+#   │                      │ origin-response)                 │
+#   │ 1/10 the cost        │ More expensive                   │
+#   │ ~2M req/sec          │ ~10K req/sec per region           │
+#   └──────────────────────┴─────────────────────────────────┘
+#   Use CF Functions for: URL rewrites, redirects, header manipulation
+#   Use Lambda@Edge for: auth, A/B testing, origin selection, image resize
+#
+# DEPLOY:
+#   aws cloudformation create-stack \
+#     --stack-name book-store-cdn \
+#     --template-body file://12c-cloudfront-deep-dive.yaml \
+#     --parameters \
+#       ParameterKey=DomainName,ParameterValue=books.example.com \
+#       ParameterKey=ALBDnsName,ParameterValue=alb-123.eu-west-1.elb.amazonaws.com \
+#       ParameterKey=StaticBucketName,ParameterValue=book-store-static-assets \
+#       ParameterKey=CertificateArn,ParameterValue=arn:aws:acm:us-east-1:123:certificate/abc \
+#     --capabilities CAPABILITY_IAM
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Advanced CloudFront distribution with multiple origins (S3 + ALB),
+  cache behaviors, OAC, cache/origin-request policies,
+  response headers policy, CloudFront function, and WAF.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  DomainName:
+    Type: String
+    Description: Custom domain for the distribution (e.g., books.example.com)
+
+  CertificateArn:
+    Type: String
+    Description: >-
+      ACM certificate ARN (MUST be in us-east-1 for CloudFront).
+
+  ALBDnsName:
+    Type: String
+    Description: DNS name of the ALB (API origin)
+
+  StaticBucketName:
+    Type: String
+    Description: >-
+      Name of the S3 bucket for static assets.
+      This bucket should already exist (or create it in this template).
+
+  # ── WAF ──────────────────────────────────────────────────────
+  # WAF (Web Application Firewall) protects against common exploits:
+  # SQL injection, XSS, rate limiting, geo-blocking, bot detection.
+  # The WebACL must be in us-east-1 for CloudFront (global scope).
+  WafWebAclArn:
+    Type: String
+    Default: ''
+    Description: >-
+      ARN of a WAF WebACL to associate with CloudFront.
+      Leave empty to skip WAF. Must be a CLOUDFRONT-scoped WebACL
+      (created in us-east-1 with scope CLOUDFRONT, not REGIONAL).
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+
+# ══════════════════════════════════════════════════════════════════
+# CONDITIONS
+# ══════════════════════════════════════════════════════════════════
+
+Conditions:
+  HasWaf: !Not [!Equals [!Ref WafWebAclArn, '']]
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ════════════════════════════════════════════════════════════════
+  # S3 BUCKET FOR STATIC ASSETS
+  # ════════════════════════════════════════════════════════════════
+
+  # The bucket is PRIVATE — no public access. Only CloudFront
+  # can read from it via OAC (Origin Access Control).
+  StaticAssetsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref StaticBucketName
+      # ── Block ALL Public Access ──────────────────────────────
+      # This is critical. The bucket should NEVER be public.
+      # CloudFront accesses it via OAC (signed requests).
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # ── Encryption ──────────────────────────────────────────
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── S3 Bucket Policy ────────────────────────────────────────
+  # Grants CloudFront (via OAC) permission to read objects.
+  # The Condition key ensures only THIS distribution can access
+  # the bucket, not any CloudFront distribution.
+  StaticBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StaticAssetsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${StaticAssetsBucket.Arn}/*'
+            # ── Condition ──────────────────────────────────────
+            # StringEquals on aws:SourceArn ensures only THIS
+            # CloudFront distribution can access the bucket.
+            # Without this, ANY CloudFront distribution could read it.
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+
+  # ════════════════════════════════════════════════════════════════
+  # ORIGIN ACCESS CONTROL (OAC)
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is OAC? ─────────────────────────────────────────────
+  # Origin Access Control is the modern way to restrict S3 access
+  # to CloudFront only. It replaces OAI (Origin Access Identity).
+  #
+  # OAC vs OAI:
+  #   OAI (legacy):  Creates a special CloudFront identity.
+  #                  Doesn't support KMS encryption, SSE-C, PUT requests.
+  #   OAC (modern):  Uses IAM-based signing. Supports everything.
+  #                  AWS recommends OAC for all new distributions.
+  #
+  # How it works:
+  #   1. CloudFront sends a request to S3 with a Sigv4 signature
+  #   2. S3 checks the bucket policy for cloudfront.amazonaws.com
+  #   3. S3 checks the condition (aws:SourceArn) matches the distribution
+  #   4. If both pass, S3 returns the object
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-s3-oac'
+        Description: OAC for S3 static assets bucket
+        # ── Origin Type ────────────────────────────────────────
+        # s3:              S3 bucket origins
+        # mediastore:      MediaStore container origins
+        # mediapackagev2:  MediaPackage v2 origins
+        # lambda:          Lambda function URL origins
+        OriginAccessControlOriginType: s3
+        # ── Signing Behavior ───────────────────────────────────
+        # always:  Sign ALL requests to this origin (RECOMMENDED)
+        # never:   Don't sign (origin must be public)
+        # no-override: Sign only if the viewer request isn't signed
+        SigningBehavior: always
+        # ── Signing Protocol ───────────────────────────────────
+        # sigv4: AWS Signature Version 4 (only option currently)
+        SigningProtocol: sigv4
+
+  # ════════════════════════════════════════════════════════════════
+  # CACHE POLICY (for S3 static assets)
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is a Cache Policy? ──────────────────────────────────
+  # Cache policies control WHAT CloudFront uses as the cache key
+  # and HOW LONG it caches responses.
+  #
+  # The cache key determines which requests get the SAME cached
+  # response. By default, the cache key is just the URL.
+  # Adding headers/cookies/query strings to the cache key means
+  # different values = different cache entries.
+  #
+  # AWS provides managed cache policies:
+  #   CachingDisabled (4135ea2d-...): No caching at all
+  #   CachingOptimized (658327ea-...): Long TTL, minimal cache key
+  #   CachingOptimizedForUncompressed: Same but no compression
+  #
+  # This custom policy is for static assets with aggressive caching.
+  StaticCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub '${AWS::StackName}-static-cache'
+        Comment: Aggressive caching for static assets (24h TTL)
+        # ── TTL Settings ──────────────────────────────────────
+        # DefaultTTL: used when origin doesn't send Cache-Control header
+        # MinTTL:     minimum cache time (overrides origin Cache-Control max-age if lower)
+        # MaxTTL:     maximum cache time (caps origin Cache-Control max-age)
+        DefaultTTL: 86400     # 24 hours
+        MinTTL: 3600          # 1 hour minimum
+        MaxTTL: 2592000       # 30 days maximum
+        # ── Cache Key Parameters ───────────────────────────────
+        # These determine WHAT makes two requests "different" for caching.
+        # For static assets, only the URL matters — no headers, cookies,
+        # or query strings affect the response.
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          HeadersConfig:
+            HeaderBehavior: none       # Don't include headers in cache key
+          CookiesConfig:
+            CookieBehavior: none       # Don't include cookies in cache key
+          QueryStringsConfig:
+            QueryStringBehavior: none  # Don't include query strings in cache key
+
+  # ════════════════════════════════════════════════════════════════
+  # ORIGIN REQUEST POLICY (for ALB)
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is an Origin Request Policy? ────────────────────────
+  # Controls which headers, cookies, and query strings CloudFront
+  # FORWARDS to the origin. This is SEPARATE from the cache key.
+  #
+  # Why separate? You might want to:
+  #   - NOT include Authorization header in cache key (same page for all users)
+  #   - BUT still FORWARD it to the origin (so the origin can authenticate)
+  #
+  # AWS managed policies:
+  #   AllViewer (216adef6-...): Forward all viewer headers
+  #   AllViewerExceptHostHeader (b689b0a8-...): Forward all except Host
+  #   AllViewerAndCloudFrontHeaders: Forward viewer + CF headers
+  #   CORS-S3Origin: Forward CORS headers to S3
+  ALBOriginRequestPolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    Properties:
+      OriginRequestPolicyConfig:
+        Name: !Sub '${AWS::StackName}-alb-origin-request'
+        Comment: Forward all viewer data to ALB origin
+        HeadersConfig:
+          # ── allViewerAndCloudFrontHeaders ────────────────────
+          # Forwards ALL headers from the viewer plus CloudFront
+          # headers (e.g., CloudFront-Viewer-Country).
+          # Other options:
+          #   none:         Forward no headers
+          #   whitelist:    Forward specific headers only
+          #   allViewer:    Forward all viewer headers
+          HeaderBehavior: allViewerAndCloudFrontHeaders-AllowList
+          Headers:
+            # CloudFront adds these headers automatically.
+            # Useful for geo-based content or analytics.
+            - CloudFront-Viewer-Country
+            - CloudFront-Viewer-City
+        CookiesConfig:
+          CookieBehavior: all    # Forward ALL cookies to ALB
+        QueryStringsConfig:
+          QueryStringBehavior: all   # Forward ALL query strings to ALB
+
+  # ════════════════════════════════════════════════════════════════
+  # RESPONSE HEADERS POLICY (Security + CORS)
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is a Response Headers Policy? ───────────────────────
+  # Controls which headers CloudFront ADDS to responses before
+  # sending them to viewers. Used for:
+  #   - Security headers (HSTS, CSP, X-Frame-Options)
+  #   - CORS headers (Access-Control-Allow-Origin)
+  #   - Custom headers
+  #
+  # AWS managed policies:
+  #   CORS-with-preflight: Add CORS headers with preflight support
+  #   SecurityHeadersPolicy: Add common security headers
+  #   CORS-and-SecurityHeaders: Both CORS and security headers
+  ResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub '${AWS::StackName}-response-headers'
+        Comment: Security and CORS response headers
+
+        # ── Security Headers ──────────────────────────────────
+        # These headers protect against common web vulnerabilities.
+        SecurityHeadersConfig:
+          # ── Strict-Transport-Security (HSTS) ─────────────────
+          # Tells browsers to ONLY use HTTPS for this domain.
+          # max-age=31536000 = 1 year. includeSubDomains applies to all subdomains.
+          # After the first visit, the browser refuses HTTP connections.
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true     # Override any HSTS header from origin
+          # ── Content-Type-Options ─────────────────────────────
+          # Prevents browsers from MIME-sniffing (guessing content type).
+          # Without this, browsers might treat a text file as JavaScript.
+          ContentTypeOptions:
+            Override: true     # Adds "X-Content-Type-Options: nosniff"
+          # ── Frame-Options ────────────────────────────────────
+          # Controls whether the page can be embedded in iframes.
+          # DENY:      Never allow iframing (strongest)
+          # SAMEORIGIN: Only allow same-origin iframes
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          # ── XSS Protection ──────────────────────────────────
+          # Enables the browser's built-in XSS filter.
+          # Modern browsers are phasing this out in favor of CSP,
+          # but it still helps with older browsers.
+          XSSProtection:
+            ModeBlock: true    # Block the page if XSS is detected
+            Protection: true   # Enable XSS filtering
+            Override: true
+          # ── Referrer Policy ──────────────────────────────────
+          # Controls how much referrer info is sent with requests.
+          # strict-origin-when-cross-origin: Send full referrer
+          # for same-origin, only origin for cross-origin.
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+
+        # ── CORS Headers ──────────────────────────────────────
+        # Cross-Origin Resource Sharing. Controls which domains
+        # can make requests to your API from JavaScript.
+        CorsConfig:
+          AccessControlAllowOrigins:
+            Items:
+              - !Sub 'https://${DomainName}'
+              - 'https://localhost:3000'    # local development
+          AccessControlAllowHeaders:
+            Items:
+              - Authorization
+              - Content-Type
+              - X-Tenant-ID
+              - X-Application-ID
+          AccessControlAllowMethods:
+            Items:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
+          AccessControlAllowCredentials: false
+          AccessControlMaxAgeSec: 3600
+          OriginOverride: true
+
+  # ════════════════════════════════════════════════════════════════
+  # CLOUDFRONT FUNCTION (URL Rewriting)
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is a CloudFront Function? ───────────────────────────
+  # Lightweight JavaScript functions that run at the edge.
+  # Execute in sub-milliseconds. Cost: $0.10 per million invocations.
+  #
+  # Use cases:
+  #   - URL rewrites (add /index.html for SPA routing)
+  #   - Redirects (www → non-www, old paths → new paths)
+  #   - Header manipulation (add/remove headers)
+  #   - Simple auth (basic auth, token validation)
+  #
+  # Triggers:
+  #   viewer-request:  Before CloudFront checks cache
+  #   viewer-response: After cache hit or origin response
+  #
+  # This function adds /index.html to requests for SPA routing:
+  #   /about  → /about/index.html  (so S3 serves the right file)
+  #   /       → /index.html
+  URLRewriteFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub '${AWS::StackName}-url-rewrite'
+      # ── Auto-publish ─────────────────────────────────────────
+      # true = publish immediately (LIVE stage)
+      # false = create in DEVELOPMENT stage (test first)
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Rewrite URLs for SPA routing (add /index.html)
+        Runtime: cloudfront-js-2.0    # CloudFront JavaScript runtime v2
+      # ── Function Code ───────────────────────────────────────
+      # The JavaScript function. Must export a handler function.
+      # The event object has: request, response (viewer-response only).
+      # The request object has: uri, querystring, headers, cookies, method.
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+
+          // If URI ends with '/' → add index.html
+          if (uri.endsWith('/')) {
+            request.uri += 'index.html';
+          }
+          // If URI doesn't have a file extension → add /index.html
+          // This handles SPA routes like /about, /dashboard
+          else if (!uri.includes('.')) {
+            request.uri += '/index.html';
+          }
+
+          return request;
+        }
+
+  # ════════════════════════════════════════════════════════════════
+  # CLOUDFRONT DISTRIBUTION
+  # ════════════════════════════════════════════════════════════════
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'Advanced CDN for ${DomainName}'
+        Aliases:
+          - !Ref DomainName
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+
+        # ── WAF Association ────────────────────────────────────
+        # Associates a WAF WebACL to filter malicious requests.
+        # The WebACL is evaluated BEFORE CloudFront processes the request.
+        # If WAF blocks it, CloudFront returns 403 Forbidden.
+        WebACLId: !If [HasWaf, !Ref WafWebAclArn, !Ref 'AWS::NoValue']
+
+        # ── Origins ────────────────────────────────────────────
+        # Multiple origins: one for API (ALB), one for static (S3).
+        Origins:
+          # ── ALB Origin (API) ─────────────────────────────────
+          - Id: ALBOrigin
+            DomainName: !Ref ALBDnsName
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPSPort: 443
+              OriginSSLProtocols:
+                - TLSv1.2
+            # ── Custom Origin Headers ──────────────────────────
+            # Headers added to EVERY request from CF to origin.
+            # Useful for:
+            #   - Shared secret (ALB verifies X-CF-Secret to ensure
+            #     requests come from CloudFront, not directly)
+            #   - Passing the original host header
+            OriginCustomHeaders:
+              - HeaderName: X-Forwarded-Host
+                HeaderValue: !Ref DomainName
+
+          # ── S3 Origin (Static Assets) ────────────────────────
+          - Id: S3Origin
+            # S3 origin domain name format for OAC:
+            # <bucket-name>.s3.<region>.amazonaws.com
+            # NOTE: Do NOT use the S3 website endpoint for OAC.
+            DomainName: !GetAtt StaticAssetsBucket.RegionalDomainName
+            S3OriginConfig:
+              # ── Origin Access Identity ───────────────────────
+              # Empty string because we use OAC (not legacy OAI).
+              # If using OAI, you'd put the OAI ID here.
+              OriginAccessIdentity: ''
+            # ── OAC Association ────────────────────────────────
+            # Links this origin to the OAC we created above.
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+
+        # ── Cache Behaviors ────────────────────────────────────
+        # Each behavior matches a URL path pattern and defines
+        # how CloudFront handles those requests.
+        #
+        # PRECEDENCE: More specific patterns match first.
+        #   /api/v1/* matches before /api/*
+        #   /static/images/* matches before /static/*
+        #   Default behavior is the catch-all (no pattern).
+
+        CacheBehaviors:
+          # ── /api/* → ALB, No Caching ─────────────────────────
+          # API requests should NOT be cached (each request may
+          # return different data based on auth, time, etc.).
+          - PathPattern: '/api/*'
+            TargetOriginId: ALBOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - PATCH
+              - POST
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+            # ── Managed Cache Policy: CachingDisabled ──────────
+            # AWS managed policy ID that disables all caching.
+            # CloudFront forwards every request to the origin.
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            # ── Origin Request Policy ──────────────────────────
+            # Use our custom policy to forward all viewer data.
+            OriginRequestPolicyId: !Ref ALBOriginRequestPolicy
+            # ── Response Headers Policy ────────────────────────
+            ResponseHeadersPolicyId: !Ref ResponseHeadersPolicy
+            Compress: true
+
+          # ── /static/* → S3, Aggressive Caching ───────────────
+          # Static assets (images, CSS, JS) rarely change.
+          # Cache them for 24 hours at the edge.
+          - PathPattern: '/static/*'
+            TargetOriginId: S3Origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            # Use our custom cache policy with 24h TTL.
+            CachePolicyId: !Ref StaticCachePolicy
+            ResponseHeadersPolicyId: !Ref ResponseHeadersPolicy
+            Compress: true
+            # ── CloudFront Function Association ─────────────────
+            # Attach our URL rewrite function to viewer-request.
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt URLRewriteFunction.FunctionARN
+
+        # ── Default Cache Behavior ─────────────────────────────
+        # Catch-all for requests not matching /api/* or /static/*.
+        DefaultCacheBehavior:
+          TargetOriginId: ALBOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - PATCH
+            - POST
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          # Use CachingDisabled for the default (API-like behavior).
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: !Ref ALBOriginRequestPolicy
+          ResponseHeadersPolicyId: !Ref ResponseHeadersPolicy
+          Compress: true
+
+        # ── Custom Error Responses ─────────────────────────────
+        # Override error pages from the origin. Useful for SPAs:
+        # when S3 returns 404 (page not found), serve index.html
+        # instead (let the SPA router handle it).
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  DistributionId:
+    Description: >-
+      CloudFront distribution ID. Use for cache invalidation:
+      aws cloudfront create-invalidation --distribution-id <ID> --paths "/static/*"
+    Value: !Ref Distribution
+    Export:
+      Name: !Sub '${AWS::StackName}-DistributionId'
+
+  DistributionDomainName:
+    Description: CloudFront domain name (e.g., d1234.cloudfront.net)
+    Value: !GetAtt Distribution.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-DistributionDomainName'
+
+  StaticBucketName:
+    Description: >-
+      S3 bucket for static assets. Upload files with:
+      aws s3 sync ./static s3://<bucket-name>/static/
+    Value: !Ref StaticAssetsBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-StaticBucketName'
+
+  StaticBucketArn:
+    Description: ARN of the static assets S3 bucket
+    Value: !GetAtt StaticAssetsBucket.Arn
+
+  OACId:
+    Description: Origin Access Control ID
+    Value: !Ref OriginAccessControl
+
+  CachePolicyId:
+    Description: Custom cache policy ID for static assets
+    Value: !Ref StaticCachePolicy
+
+  OriginRequestPolicyId:
+    Description: Custom origin request policy ID for ALB
+    Value: !Ref ALBOriginRequestPolicy
+
+  ResponseHeadersPolicyId:
+    Description: Response headers policy ID (CORS + security)
+    Value: !Ref ResponseHeadersPolicy
+
+  URLRewriteFunctionArn:
+    Description: ARN of the CloudFront URL rewrite function
+    Value: !GetAtt URLRewriteFunction.FunctionARN
+
+# ══════════════════════════════════════════════════════════════════
+# KEY CONCEPTS RECAP
+# ══════════════════════════════════════════════════════════════════
+#
+# MULTIPLE ORIGINS:
+#   One distribution can have many origins (S3, ALB, API GW, custom).
+#   Each cache behavior routes a path pattern to an origin.
+#
+# CACHE BEHAVIORS (path-based routing):
+#   /api/*    → ALB, no caching (CachingDisabled policy)
+#   /static/* → S3, aggressive caching (custom 24h TTL)
+#   default   → ALB, catch-all
+#   Precedence: more specific patterns match first.
+#
+# OAC (Origin Access Control):
+#   Modern way to restrict S3 access to CloudFront only.
+#   Replaces OAI (Origin Access Identity).
+#   Uses SigV4 signing + bucket policy condition.
+#
+# CACHE POLICY vs ORIGIN REQUEST POLICY:
+#   Cache Policy:          WHAT is the cache key + TTL settings
+#   Origin Request Policy: WHAT to forward to origin (not in cache key)
+#   They're separate because you might forward headers to origin
+#   but NOT use them as cache key differentiators.
+#
+# RESPONSE HEADERS POLICY:
+#   Headers CloudFront ADDS to responses (CORS, security headers).
+#   Override: true means CF headers replace origin headers.
+#
+# CLOUDFRONT FUNCTIONS vs LAMBDA@EDGE:
+#   CF Functions: fast, cheap, simple (URL rewrites, redirects)
+#   Lambda@Edge: powerful, slower, expensive (auth, image processing)
+#   CF Functions: viewer-request/response only
+#   Lambda@Edge: all 4 triggers (viewer + origin request/response)
+#
+# ORIGIN GROUPS (not shown, but important):
+#   An origin group has a primary + failover origin.
+#   If primary returns 5XX, CloudFront automatically tries failover.
+#   Use for high availability (e.g., primary S3 in us-east-1,
+#   failover S3 in eu-west-1).
+#
+# WAF:
+#   Web Application Firewall. Rules evaluate BEFORE CloudFront.
+#   Must be CLOUDFRONT-scoped (us-east-1) for CloudFront associations.
+#   Blocks SQL injection, XSS, rate limiting, geo-blocking.
+#
+# CACHE INVALIDATION:
+#   CloudFront caches content at edge locations. To force refresh:
+#   aws cloudfront create-invalidation --distribution-id <ID> --paths "/*"
+#   First 1,000 invalidation paths/month are free. Then $0.005 each.
+# ══════════════════════════════════════════════════════════════════

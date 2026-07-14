@@ -1,0 +1,500 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — SQS (Step 17)
+# ══════════════════════════════════════════════════════════════════
+# Navigation:  Python lesson: 17-sqs.py
+#
+# This template creates SQS resources:
+#   - Standard queue with visibility timeout and message retention
+#   - Dead letter queue (DLQ) with redrive policy
+#   - FIFO queue with content-based deduplication
+#   - Queue policy allowing SNS topic to send messages
+#   - Lambda event source mapping (SQS → Lambda trigger)
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#     --stack-name book-store-sqs-dev \
+#     --template-body file://17c-sqs.yaml \
+#     --parameters ParameterKey=Environment,ParameterValue=dev
+#
+# ── Standard vs FIFO ───────────────────────────────────────────
+#
+#   ┌──────────────────┬─────────────────────┬────────────────────┐
+#   │                  │ Standard            │ FIFO               │
+#   ├──────────────────┼─────────────────────┼────────────────────┤
+#   │ Delivery         │ At-least-once       │ Exactly-once       │
+#   │                  │ (possible dupes)    │ (deduplication)    │
+#   │ Ordering         │ Best-effort         │ Strict (per group) │
+#   │ Throughput       │ Unlimited           │ 300 msg/sec (3000  │
+#   │                  │                     │ with batching)     │
+#   │ Name             │ my-queue            │ my-queue.fifo      │
+#   │ Use when         │ High throughput,    │ Order matters,     │
+#   │                  │ dupes are OK        │ no duplicates      │
+#   └──────────────────┴─────────────────────┴────────────────────┘
+#
+#   Standard is the right choice 90% of the time. Only use FIFO
+#   when message ordering or deduplication is critical (financial
+#   transactions, sequential workflow steps).
+#
+# ── Visibility Timeout ──────────────────────────────────────────
+#
+# When a consumer receives a message, it becomes INVISIBLE to other
+# consumers for the visibility timeout duration (default: 30 seconds).
+#
+#   Message lifecycle:
+#
+#   ┌──────────┐   receive   ┌───────────┐   timeout   ┌──────────┐
+#   │ visible  │────────────►│ invisible │────────────►│ visible  │
+#   │ (queued) │             │ (locked)  │  (30 sec)   │ (retry)  │
+#   └──────────┘             └─────┬─────┘             └──────────┘
+#                                  │ consumer deletes
+#                                  ▼
+#                            (gone forever)
+#
+# Set visibility timeout GREATER than your processing time.
+# If processing takes 60 seconds, set timeout to 90+ seconds.
+# If timeout is too short, the message reappears and gets processed
+# twice (causing duplicate work).
+#
+# ── Long Polling (WaitTimeSeconds) ──────────────────────────────
+#
+# Short polling (default): consumer asks "any messages?" and SQS
+#   responds immediately with whatever is available (possibly empty).
+#   Results in many empty responses and wasted API calls.
+#
+# Long polling: consumer asks "any messages?" and SQS WAITS up to
+#   WaitTimeSeconds for a message to arrive before responding.
+#   Reduces empty responses and API costs.
+#
+#   WaitTimeSeconds: 0  → short polling (default, wasteful)
+#   WaitTimeSeconds: 20 → long polling (recommended, max is 20)
+#
+#   With Lambda triggers, long polling is handled automatically.
+#   You only need to set WaitTimeSeconds when polling manually
+#   (e.g., from an ECS consumer using the ReceiveMessage API).
+#
+# ── Dead Letter Queue (DLQ) Purpose ────────────────────────────
+#
+# When a message fails processing repeatedly, it goes to the DLQ.
+# The DLQ is a separate SQS queue that captures "poison" messages.
+#
+# Why? Without a DLQ, a bad message loops forever:
+#   receive → fail → reappear → receive → fail → ...
+#
+# With a DLQ (maxReceiveCount: 3):
+#   receive → fail (1) → reappear → fail (2) → reappear → fail (3)
+#   → message moves to DLQ → stays there for investigation
+#
+# DLQ best practices:
+#   - Set a LONGER retention on the DLQ (14 days) than the main queue
+#   - Monitor the DLQ — if messages appear, something is broken
+#   - Create a CloudWatch alarm: ApproximateNumberOfMessagesVisible > 0
+#   - Replay DLQ messages after fixing the bug:
+#     aws sqs start-message-move-task \
+#       --source-arn <dlq-arn> \
+#       --destination-arn <main-queue-arn>
+#
+# ── Batch Size for Lambda Triggers ──────────────────────────────
+#
+# When Lambda is triggered by SQS, it receives messages in batches.
+#
+#   BatchSize: how many messages per Lambda invocation (1-10000)
+#     - Standard queue: 1-10000 (default: 10)
+#     - FIFO queue: 1-10 (max 10)
+#
+#   MaximumBatchingWindowInSeconds: wait up to N seconds to fill
+#     the batch before invoking Lambda (0-300, default: 0).
+#     Higher = fewer Lambda invocations = lower cost.
+#     Lower = lower latency.
+#
+#   Example:
+#     BatchSize: 10, MaximumBatchingWindowInSeconds: 5
+#     → Lambda waits up to 5 seconds to collect up to 10 messages,
+#       then invokes with whatever it has.
+#
+# ── Message Ordering (FIFO) ─────────────────────────────────────
+#
+# FIFO queues guarantee ordering WITHIN a message group.
+# Messages with the same MessageGroupId are processed in order.
+# Different groups are processed in parallel.
+#
+#   Example:
+#     Group "order-123": msg1, msg2, msg3 → processed in order
+#     Group "order-456": msg4, msg5       → processed in parallel
+#
+# Each message group has one "in-flight" message at a time.
+# This limits throughput per group but guarantees ordering.
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  SQS — standard queue, FIFO queue, dead letter queue, queue policy,
+  and Lambda event source mapping for the Book Store API (Step 17).
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+    Description: Deployment environment.
+
+  # ── SNS Topic ARN ──────────────────────────────────────────────
+  # The SNS topic that publishes messages to this queue.
+  # In production, import from the SNS stack:
+  #   !ImportValue dev-AlertsTopicArn
+  SnsTopicArn:
+    Type: String
+    Default: 'arn:aws:sns:eu-west-1:123456789012:book-store-alerts-dev'
+    Description: >-
+      ARN of the SNS topic allowed to send messages to the main queue.
+      Used in the queue policy.
+
+  # ── Lambda Function ARN ────────────────────────────────────────
+  # The Lambda function that processes messages from the queue.
+  ProcessorLambdaArn:
+    Type: String
+    Default: 'arn:aws:lambda:eu-west-1:123456789012:function:book-store-processor'
+    Description: ARN of the Lambda function triggered by queue messages.
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ────────────────────────────────────────────────────────────────
+  # 1. DEAD LETTER QUEUE (DLQ)
+  # ────────────────────────────────────────────────────────────────
+  #
+  # Define the DLQ FIRST because the main queue references it in
+  # its RedrivePolicy. CloudFormation resolves dependencies
+  # automatically, but defining it first is clearer.
+  #
+  # The DLQ has a longer retention period (14 days) than the main
+  # queue (4 days) — you need time to investigate failed messages.
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      # Queue name for identification in the console.
+      QueueName: !Sub 'book-store-events-dlq-${Environment}'
+
+      # MessageRetentionPeriod: how long messages stay in the DLQ
+      # before being automatically deleted.
+      # Default: 345600 seconds (4 days)
+      # Max: 1209600 seconds (14 days)
+      # Set to 14 days — you need time to notice and investigate.
+      MessageRetentionPeriod: 1209600    # 14 days in seconds
+
+      # VisibilityTimeout for the DLQ itself.
+      # Messages in the DLQ are typically inspected manually or
+      # replayed, so a longer timeout is appropriate.
+      VisibilityTimeout: 60
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: QueueType
+          Value: DLQ
+
+  # ────────────────────────────────────────────────────────────────
+  # 2. STANDARD QUEUE (main processing queue)
+  # ────────────────────────────────────────────────────────────────
+  #
+  # This is the main queue where messages arrive from SNS or
+  # direct publishers. A Lambda function polls this queue and
+  # processes each message.
+
+  MainQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'book-store-events-${Environment}'
+
+      # ── Visibility Timeout ─────────────────────────────────
+      # How long a message is invisible after being received.
+      # Set this to AT LEAST your Lambda timeout + buffer.
+      #
+      # If Lambda timeout = 30s, set visibility timeout = 60s.
+      # If visibility timeout < Lambda timeout, the message
+      # reappears and gets processed twice.
+      #
+      # Default: 30 seconds. Max: 43200 seconds (12 hours).
+      VisibilityTimeout: 30
+
+      # ── Message Retention Period ───────────────────────────
+      # How long unprocessed messages stay in the queue.
+      # After this period, messages are automatically deleted.
+      #
+      # Default: 345600 seconds (4 days).
+      # Min: 60 seconds. Max: 1209600 seconds (14 days).
+      MessageRetentionPeriod: 345600     # 4 days in seconds
+
+      # ── Receive Wait Time (Long Polling) ───────────────────
+      # When a consumer calls ReceiveMessage, SQS waits this many
+      # seconds for messages to arrive before returning empty.
+      #
+      # 0 = short polling (immediate response, possibly empty)
+      # 1-20 = long polling (wait up to N seconds, reduces costs)
+      #
+      # 20 seconds is the recommended value for long polling.
+      # Lambda event source mappings handle this automatically,
+      # but set it here for any non-Lambda consumers.
+      ReceiveMessageWaitTimeSeconds: 20
+
+      # ── Maximum Message Size ───────────────────────────────
+      # Default and max: 262144 bytes (256 KB).
+      # For larger messages, store the payload in S3 and put
+      # the S3 reference in the SQS message (claim-check pattern).
+      # MaximumMessageSize: 262144
+
+      # ── Delay Seconds ──────────────────────────────────────
+      # Delay delivery of new messages by N seconds (0-900).
+      # Messages are invisible for this duration after being sent.
+      # Use case: "process this order in 5 minutes" (DelaySeconds: 300).
+      # Default: 0 (no delay).
+      # DelaySeconds: 0
+
+      # ── Redrive Policy (connect to DLQ) ────────────────────
+      # After maxReceiveCount failed processing attempts, the
+      # message is moved to the dead letter queue.
+      #
+      # maxReceiveCount: 3 means:
+      #   Attempt 1: receive → process → fail → message reappears
+      #   Attempt 2: receive → process → fail → message reappears
+      #   Attempt 3: receive → process → fail → moved to DLQ
+      #
+      # Lower values (2-3) catch poison messages faster.
+      # Higher values (5-10) allow more retry opportunities.
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: QueueType
+          Value: Standard
+
+  # ────────────────────────────────────────────────────────────────
+  # 3. FIFO QUEUE (with content-based deduplication)
+  # ────────────────────────────────────────────────────────────────
+  #
+  # FIFO queues guarantee strict ordering and exactly-once delivery.
+  # Use for workflows where message order matters (e.g., order
+  # processing: created → paid → shipped must be in sequence).
+  #
+  # FIFO queue names MUST end with .fifo
+  #
+  # FIFO queues have lower throughput than standard queues:
+  #   Without batching: 300 messages/second
+  #   With batching: 3000 messages/second
+  #   With high-throughput mode: 30000 messages/second
+
+  FifoQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      # FIFO queue names must end with .fifo
+      QueueName: !Sub 'book-store-orders-${Environment}.fifo'
+
+      # FifoQueue: must be true for FIFO behavior.
+      FifoQueue: true
+
+      # ContentBasedDeduplication: automatically deduplicate messages
+      # based on their content (SHA-256 hash of the body).
+      # If two identical messages are sent within 5 minutes, the
+      # second is rejected (not duplicated).
+      #
+      # Alternative: the producer provides a MessageDeduplicationId
+      # for each message. This gives you explicit control.
+      ContentBasedDeduplication: true
+
+      # DeduplicationScope: scope of deduplication.
+      #   queue → deduplicate across the entire queue
+      #   messageGroup → deduplicate only within a message group
+      # Default: queue
+      # DeduplicationScope: queue
+
+      # FifoThroughputLimit: throttling scope.
+      #   perQueue → throughput limit applies to the entire queue
+      #   perMessageGroupId → each message group gets its own limit
+      # Use perMessageGroupId for higher total throughput.
+      # FifoThroughputLimit: perQueue
+
+      # Standard settings still apply to FIFO queues
+      VisibilityTimeout: 30
+      MessageRetentionPeriod: 345600
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: QueueType
+          Value: FIFO
+
+  # ────────────────────────────────────────────────────────────────
+  # 4. QUEUE POLICY (allow SNS to send messages)
+  # ────────────────────────────────────────────────────────────────
+  #
+  # By default, only the queue owner can send messages.
+  # This policy allows the SNS topic to publish messages to the
+  # queue — required for the SNS → SQS fanout pattern.
+  #
+  # Without this policy, SNS subscription to the queue will succeed
+  # but message delivery will fail silently.
+
+  MainQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      # Queues: list of queue URLs to attach the policy to.
+      # A single policy can cover multiple queues.
+      Queues:
+        - !Ref MainQueue
+        # !Ref on an SQS Queue returns the queue URL (not the ARN).
+        # e.g., https://sqs.eu-west-1.amazonaws.com/123456789012/book-store-events-dev
+
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Allow the SNS topic to send messages to this queue.
+          - Sid: AllowSNSPublish
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: 'sqs:SendMessage'
+            Resource: !GetAtt MainQueue.Arn
+            Condition:
+              # Only allow messages from our specific SNS topic.
+              # Without this, ANY SNS topic could send messages here.
+              ArnEquals:
+                'aws:SourceArn': !Ref SnsTopicArn
+
+  # ────────────────────────────────────────────────────────────────
+  # 5. LAMBDA EVENT SOURCE MAPPING (SQS → Lambda trigger)
+  # ────────────────────────────────────────────────────────────────
+  #
+  # Connects the SQS queue to a Lambda function. Lambda polls the
+  # queue automatically and invokes the function with batches of
+  # messages.
+  #
+  # This replaces the need for a consumer process that calls
+  # ReceiveMessage in a loop. Lambda handles polling, scaling,
+  # batch management, and error handling.
+  #
+  # Error handling:
+  #   If the Lambda function throws an error, the entire batch
+  #   is returned to the queue (visibility timeout resets).
+  #   After maxReceiveCount attempts, failed messages go to the DLQ.
+  #
+  #   To report PARTIAL failures (some messages succeed, some fail),
+  #   set FunctionResponseTypes to [ReportBatchItemFailures] and
+  #   return { "batchItemFailures": [{ "itemIdentifier": "msg-id" }] }
+  #   from your Lambda function.
+
+  SqsLambdaEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      # EventSourceArn: the SQS queue to poll.
+      EventSourceArn: !GetAtt MainQueue.Arn
+
+      # FunctionName: the Lambda function to invoke.
+      # Can be a function ARN, name, or alias ARN.
+      FunctionName: !Ref ProcessorLambdaArn
+
+      # BatchSize: max messages per Lambda invocation.
+      # Standard queue: 1-10000 (default: 10)
+      # FIFO queue: 1-10
+      # Higher = fewer invocations = lower cost (but higher latency).
+      BatchSize: 10
+
+      # MaximumBatchingWindowInSeconds: wait up to N seconds to fill
+      # the batch before invoking Lambda.
+      # 0 = invoke immediately with whatever is available (default).
+      # Higher = fewer invocations, better batching efficiency.
+      # Use 5-60 seconds for cost optimization on high-volume queues.
+      MaximumBatchingWindowInSeconds: 5
+
+      # Enabled: set to false to pause processing without deleting
+      # the mapping. Useful for maintenance or incident response.
+      Enabled: true
+
+      # FunctionResponseTypes: enable partial batch failure reporting.
+      # Without this, if Lambda throws an error, ALL messages in the
+      # batch return to the queue (even ones that succeeded).
+      # With ReportBatchItemFailures, only failed messages retry.
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
+
+      # ScalingConfig: controls Lambda concurrency for this trigger.
+      # MaximumConcurrency: max concurrent Lambda instances (2-1000).
+      # Default: no limit (Lambda scales to match queue depth).
+      # Set this to prevent the queue consumer from overwhelming
+      # downstream services (databases, APIs).
+      ScalingConfig:
+        MaximumConcurrency: 10
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  # ── Main Queue URL ─────────────────────────────────────────────
+  # The URL is used to send and receive messages via the SDK:
+  #   sqs.send_message(QueueUrl="<this-url>", MessageBody="...")
+  #   sqs.receive_message(QueueUrl="<this-url>")
+  MainQueueUrl:
+    Description: >-
+      URL of the main SQS queue. Use with sqs:SendMessage and
+      sqs:ReceiveMessage API calls.
+    Value: !Ref MainQueue
+    # !Ref on an SQS Queue returns the queue URL.
+    Export:
+      Name: !Sub '${Environment}-BookStoreQueueUrl'
+
+  # ── Main Queue ARN ─────────────────────────────────────────────
+  # The ARN is used in IAM policies and SNS subscription endpoints.
+  MainQueueArn:
+    Description: >-
+      ARN of the main SQS queue. Use in IAM policies and as an
+      SNS subscription endpoint.
+    Value: !GetAtt MainQueue.Arn
+    Export:
+      Name: !Sub '${Environment}-BookStoreQueueArn'
+
+  # ── DLQ URL ────────────────────────────────────────────────────
+  DlqUrl:
+    Description: >-
+      URL of the dead letter queue. Monitor this queue for failed
+      messages. Create a CloudWatch alarm on
+      ApproximateNumberOfMessagesVisible > 0.
+    Value: !Ref DeadLetterQueue
+    Export:
+      Name: !Sub '${Environment}-BookStoreDlqUrl'
+
+  # ── DLQ ARN ────────────────────────────────────────────────────
+  DlqArn:
+    Description: >-
+      ARN of the dead letter queue. Use in IAM policies or as a
+      redrive target for SNS subscription DLQs.
+    Value: !GetAtt DeadLetterQueue.Arn
+    Export:
+      Name: !Sub '${Environment}-BookStoreDlqArn'
+
+  # ── FIFO Queue URL ────────────────────────────────────────────
+  FifoQueueUrl:
+    Description: >-
+      URL of the FIFO queue for ordered message processing.
+      Include MessageGroupId when sending messages.
+    Value: !Ref FifoQueue
+    Export:
+      Name: !Sub '${Environment}-BookStoreOrdersQueueUrl'

@@ -1,0 +1,624 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — ECS + Fargate (Step 7)
+# ══════════════════════════════════════════════════════════════════
+# Companion to: 08-ecs-fargate.py (console walkthrough)
+# Navigation:  ← prev: 07c-ecr.yaml  |  next: 09c-alb.yaml →
+#
+# This template creates the full ECS Fargate stack:
+#   Cluster → Task Definition → Service → Auto-Scaling
+#
+# ECS HIERARCHY:
+#   Cluster    = logical grouping (like a "project")
+#   Service    = keeps N tasks running, connects to ALB
+#   Task Def   = blueprint (image, CPU, RAM, env vars, ports)
+#   Task       = running instance of a Task Definition
+#
+#   ┌─────────────────────────────────────────────────────────┐
+#   │ ECS Cluster: book-store-cluster                         │
+#   │                                                         │
+#   │  ┌──────────────────────────────────────────────────┐   │
+#   │  │ Service: book-store-service (desired: 2)          │   │
+#   │  │                                                    │   │
+#   │  │  ┌─────────────┐  ┌─────────────┐                │   │
+#   │  │  │ Task 1      │  │ Task 2      │                │   │
+#   │  │  │ (container) │  │ (container) │                │   │
+#   │  │  └─────────────┘  └─────────────┘                │   │
+#   │  └──────────────────────────────────────────────────┘   │
+#   └─────────────────────────────────────────────────────────┘
+#
+# FARGATE vs EC2 LAUNCH TYPE:
+#   ┌──────────────┬────────────────────────────────────────────┐
+#   │ Fargate      │ Serverless. AWS manages the servers.       │
+#   │              │ You pick CPU + RAM. Pay per second.        │
+#   │              │ No patching, no SSH. Simpler but costlier. │
+#   ├──────────────┼────────────────────────────────────────────┤
+#   │ EC2          │ You manage EC2 instances. Cheaper for      │
+#   │              │ steady workloads. You patch, scale, SSH.   │
+#   │              │ More control, more work.                   │
+#   └──────────────┴────────────────────────────────────────────┘
+#
+# TWO IAM ROLES (confusing but important):
+#   ┌──────────────────┬───────────────────────────────────────┐
+#   │ Execution Role   │ Used BY ECS to pull images, write     │
+#   │                  │ logs. AWS needs this to set up the    │
+#   │                  │ container. Like a "setup" role.       │
+#   ├──────────────────┼───────────────────────────────────────┤
+#   │ Task Role        │ Used BY your app code inside the      │
+#   │                  │ container. If your app calls S3 or    │
+#   │                  │ DynamoDB, it uses this role.           │
+#   │                  │ Like a "runtime" role.                 │
+#   └──────────────────┴───────────────────────────────────────┘
+#
+# DEPLOY:
+#   aws cloudformation create-stack \
+#     --stack-name book-store-ecs \
+#     --template-body file://08c-ecs-fargate.yaml \
+#     --parameters \
+#       ParameterKey=VpcId,ParameterValue=vpc-abc123 \
+#       ParameterKey=PrivateSubnetIds,ParameterValue="subnet-1\,subnet-2" \
+#       ParameterKey=ContainerImage,ParameterValue=123456789.dkr.ecr.eu-west-1.amazonaws.com/book-store-api:latest \
+#     --capabilities CAPABILITY_NAMED_IAM
+#
+# COST:
+#   Fargate pricing (eu-west-1): ~$0.04/vCPU/hour + ~$0.004/GB/hour
+#   This template (0.25 vCPU, 0.5 GB, 2 tasks): ~$0.75/day
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  ECS Fargate stack for the Book Store API.
+  Creates cluster, task definition, service, auto-scaling,
+  security group, and IAM roles.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  # ── Network Parameters ───────────────────────────────────────
+  # These come from your VPC stack (02-vpc.py / a VPC template).
+  # In real deployments, you'd use !ImportValue from the VPC stack.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where ECS tasks will run
+
+  PrivateSubnetIds:
+    # List<AWS::EC2::Subnet::Id> validates that each entry is a real subnet.
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >-
+      Private subnets for ECS tasks (at least 2 for high availability).
+      Tasks run in private subnets and receive traffic via ALB.
+
+  # ── ALB Integration ──────────────────────────────────────────
+  ALBSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group of the ALB (tasks allow inbound from this)
+
+  TargetGroupArn:
+    Type: String
+    Description: >-
+      ARN of the ALB target group to register ECS tasks with.
+      Created in the ALB template (09c-alb.yaml).
+
+  # ── Container Parameters ─────────────────────────────────────
+  ContainerImage:
+    Type: String
+    Description: >-
+      Full ECR image URI with tag.
+      Example: 123456789.dkr.ecr.eu-west-1.amazonaws.com/book-store-api:v1
+
+  ContainerPort:
+    Type: Number
+    Default: 8000
+    Description: Port your container listens on (FastAPI default is 8000)
+
+  # ── Compute Parameters ───────────────────────────────────────
+  # Fargate has specific allowed CPU/Memory combinations:
+  #   ┌─────────┬──────────────────────────────────────────┐
+  #   │ CPU     │ Memory options                            │
+  #   ├─────────┼──────────────────────────────────────────┤
+  #   │ 256     │ 512, 1024, 2048                          │
+  #   │ 512     │ 1024, 2048, 3072, 4096                   │
+  #   │ 1024    │ 2048, 3072, 4096, 5120, 6144, 7168, 8192│
+  #   │ 2048    │ 4096 ... 16384 (in 1024 increments)      │
+  #   │ 4096    │ 8192 ... 30720 (in 1024 increments)      │
+  #   │ 8192    │ 16384 ... 61440 (in 4096 increments)     │
+  #   │ 16384   │ 32768 ... 122880 (in 8192 increments)    │
+  #   └─────────┴──────────────────────────────────────────┘
+  #   (Values are in "CPU units" where 1024 = 1 vCPU)
+  TaskCpu:
+    Type: String
+    Default: '256'
+    AllowedValues: ['256', '512', '1024', '2048', '4096']
+    Description: CPU units for the task (256 = 0.25 vCPU)
+
+  TaskMemory:
+    Type: String
+    Default: '512'
+    AllowedValues: ['512', '1024', '2048', '3072', '4096']
+    Description: Memory in MiB for the task
+
+  DesiredCount:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 10
+    Description: Number of tasks to keep running
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+    Description: Deployment environment
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ════════════════════════════════════════════════════════════════
+  # IAM ROLES
+  # ════════════════════════════════════════════════════════════════
+
+  # ── Task Execution Role ──────────────────────────────────────
+  # This role is used BY THE ECS SERVICE ITSELF (not your app).
+  # ECS needs it to:
+  #   - Pull Docker images from ECR
+  #   - Send container logs to CloudWatch
+  #   - Retrieve secrets from Secrets Manager or SSM (if configured)
+  #
+  # "AssumeRolePolicyDocument" answers: WHO can assume this role?
+  # Here, the ECS Tasks service (ecs-tasks.amazonaws.com) can.
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-execution-role'
+      # ── Trust Policy (who can assume this role) ──────────────
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              # Service principals identify AWS services.
+              # ecs-tasks.amazonaws.com = the ECS task runner.
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      # ── Managed Policies ─────────────────────────────────────
+      # AWS provides pre-built policies for common use cases.
+      # AmazonECSTaskExecutionRolePolicy grants:
+      #   ecr:GetAuthorizationToken, ecr:BatchCheckLayerAvailability,
+      #   ecr:GetDownloadUrlForLayer, ecr:BatchGetImage,
+      #   logs:CreateLogStream, logs:PutLogEvents
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── Task Role ────────────────────────────────────────────────
+  # This role is used BY YOUR APPLICATION CODE inside the container.
+  # If your FastAPI app calls S3, DynamoDB, SQS, etc., those
+  # permissions go here — NOT on the execution role.
+  #
+  # The execution role is for "container plumbing."
+  # The task role is for "application logic."
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-task-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      # ── Inline Policy ───────────────────────────────────────
+      # Inline policies are embedded directly in the role.
+      # Use for app-specific permissions. Managed policies are
+      # for shared/reusable permissions.
+      Policies:
+        - PolicyName: AppPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Example: let the app read from a DynamoDB table.
+              # Adjust these for your actual app needs.
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/book-store-*'
+              # Example: let the app read secrets.
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:book-store-*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ════════════════════════════════════════════════════════════════
+  # ECS CLUSTER
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is a Cluster? ───────────────────────────────────────
+  # A cluster is a logical grouping for services and tasks.
+  # One cluster can run multiple services (one per microservice).
+  # It doesn't create any compute — it's just a namespace.
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${AWS::StackName}-cluster'
+      # ── Container Insights ───────────────────────────────────
+      # Enables detailed CloudWatch metrics for your containers:
+      #   CPU utilization, memory utilization, network I/O,
+      #   storage I/O, task count, service count.
+      # Cost: ~$0.01/metric/month. Worth it for debugging.
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ════════════════════════════════════════════════════════════════
+  # CLOUDWATCH LOG GROUP
+  # ════════════════════════════════════════════════════════════════
+
+  # Container stdout/stderr goes here. Without this, your logs
+  # vanish when the container stops.
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}'
+      # Retention prevents infinite log storage costs.
+      # Options: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180,
+      #          365, 400, 545, 731, 1096, 1827, 2192, 2557,
+      #          2922, 3288, 3653, or 0 (never expire)
+      RetentionInDays: 7
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ════════════════════════════════════════════════════════════════
+  # TASK DEFINITION
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is a Task Definition? ───────────────────────────────
+  # A blueprint for running containers. Specifies:
+  #   - Which Docker image to use
+  #   - How much CPU and memory
+  #   - Environment variables
+  #   - Port mappings
+  #   - Logging configuration
+  #   - IAM roles
+  #
+  # A Task Definition can have MULTIPLE container definitions
+  # (sidecar pattern: main app + logging agent + proxy).
+  # But for most apps, one container is enough.
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}-task'
+      # ── Launch Type Requirements ─────────────────────────────
+      # RequiresCompatibilities tells ECS this is Fargate-only.
+      RequiresCompatibilities:
+        - FARGATE
+      # ── Network Mode ─────────────────────────────────────────
+      # Fargate REQUIRES awsvpc mode. Each task gets its own
+      # Elastic Network Interface (ENI) with a private IP.
+      # This is why target groups use "ip" type, not "instance".
+      NetworkMode: awsvpc
+      # ── Compute ──────────────────────────────────────────────
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      # ── IAM Roles ────────────────────────────────────────────
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      # ── Runtime Platform ─────────────────────────────────────
+      # Specify the OS and CPU architecture.
+      # ARM64 is cheaper than X86_64 on Fargate (~20% less).
+      # But your Docker image must be built for ARM64.
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+
+      # ── Container Definitions ────────────────────────────────
+      # Array of containers in this task. Most tasks have just one.
+      ContainerDefinitions:
+        - Name: app
+          # ── Image ────────────────────────────────────────────
+          # Full ECR URI. Use a specific tag (v1.2.3), not "latest".
+          # "latest" makes rollbacks impossible — you don't know
+          # what code is running.
+          Image: !Ref ContainerImage
+
+          # ── Essential ────────────────────────────────────────
+          # If an "essential" container stops, the ENTIRE task stops.
+          # Sidecar containers set this to false.
+          Essential: true
+
+          # ── Port Mappings ────────────────────────────────────
+          # Fargate with awsvpc: containerPort = hostPort (always).
+          # You only specify containerPort.
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+
+          # ── Environment Variables ────────────────────────────
+          # Hardcoded env vars. For secrets, use "Secrets" with
+          # Secrets Manager or SSM Parameter Store instead.
+          Environment:
+            - Name: ENVIRONMENT
+              Value: !Ref Environment
+            - Name: PORT
+              Value: !Sub '${ContainerPort}'
+            - Name: LOG_LEVEL
+              Value: info
+
+          # ── Health Check ─────────────────────────────────────
+          # ECS-level health check (separate from ALB health check).
+          # If this fails, ECS marks the task as unhealthy and the
+          # service replaces it.
+          #
+          # CMD = shell command to run inside the container.
+          # curl checks the /health endpoint. Exit code 0 = healthy.
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - !Sub 'curl -f http://localhost:${ContainerPort}/health || exit 1'
+            Interval: 30       # seconds between checks
+            Timeout: 5         # seconds to wait for response
+            Retries: 3         # failures before marking unhealthy
+            StartPeriod: 60    # grace period on startup (container boot time)
+
+          # ── Logging ──────────────────────────────────────────
+          # "awslogs" driver sends stdout/stderr to CloudWatch.
+          # This is how you see your app logs.
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              # awslogs-group: which CloudWatch log group to write to
+              awslogs-group: !Ref LogGroup
+              # awslogs-region: CloudWatch region
+              awslogs-region: !Ref AWS::Region
+              # awslogs-stream-prefix: makes log streams easier to find
+              # Format: prefix/container-name/task-id
+              awslogs-stream-prefix: ecs
+
+  # ════════════════════════════════════════════════════════════════
+  # SECURITY GROUP FOR ECS TASKS
+  # ════════════════════════════════════════════════════════════════
+
+  # Each Fargate task gets its own ENI, so it needs a security group.
+  # We only allow inbound traffic from the ALB (not from the internet).
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS Fargate tasks
+      GroupName: !Sub '${AWS::StackName}-task-sg'
+      VpcId: !Ref VpcId
+      # ── Inbound Rules ───────────────────────────────────────
+      SecurityGroupIngress:
+        - Description: Allow inbound from ALB only
+          IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          # SourceSecurityGroupId means "allow traffic from any
+          # resource in this security group" — which is the ALB.
+          # This is more secure than allowing 0.0.0.0/0.
+          SourceSecurityGroupId: !Ref ALBSecurityGroupId
+      # ── Outbound Rules ──────────────────────────────────────
+      # Allow all outbound (so the container can call external APIs,
+      # pull from ECR, send logs to CloudWatch, etc.)
+      SecurityGroupEgress:
+        - Description: Allow all outbound traffic
+          IpProtocol: '-1'          # -1 means all protocols
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-task-sg'
+
+  # ════════════════════════════════════════════════════════════════
+  # ECS SERVICE
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is a Service? ───────────────────────────────────────
+  # A service ensures N copies of your task are always running.
+  # If a task crashes, the service starts a new one.
+  # If attached to an ALB, the service registers/deregisters tasks.
+  ECSService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${AWS::StackName}-service'
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+
+      # ── Network Configuration ────────────────────────────────
+      # Fargate requires explicit network config because each task
+      # gets its own ENI. Tasks go in PRIVATE subnets (no public IP).
+      # They reach the internet via NAT Gateway (for ECR pulls, etc.).
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # DISABLED = no public IP. Tasks are in private subnets.
+          # ENABLED  = public IP. Only if tasks are in public subnets
+          #            and you don't want a NAT Gateway (cost savings).
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+
+      # ── Load Balancer Integration ────────────────────────────
+      # Connects the service to an ALB target group.
+      # The service auto-registers task IPs with the target group.
+      LoadBalancers:
+        - ContainerName: app           # must match ContainerDefinitions[].Name
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref TargetGroupArn
+
+      # ── Deployment Configuration ─────────────────────────────
+      # Controls how updates roll out (rolling deployment).
+      #
+      # MinimumHealthyPercent: 100 = keep all old tasks running while
+      #   new ones start. Zero downtime, but needs 2x resources briefly.
+      # MaximumPercent: 200 = can have up to 2x desired count during deploy.
+      #
+      # Example with DesiredCount=2:
+      #   Step 1: 2 old tasks running (100%)
+      #   Step 2: Start 2 new tasks (now 4 total = 200%)
+      #   Step 3: New tasks pass health checks
+      #   Step 4: Drain and stop 2 old tasks
+      #   Step 5: 2 new tasks running (100%)
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      # ── Health Check Grace Period ────────────────────────────
+      # Seconds to wait before ECS starts checking ALB health.
+      # Gives your app time to start up. If too low, ECS will
+      # kill healthy tasks that are just slow to boot.
+      HealthCheckGracePeriodSeconds: 60
+
+  # ════════════════════════════════════════════════════════════════
+  # AUTO-SCALING
+  # ════════════════════════════════════════════════════════════════
+
+  # ECS auto-scaling uses Application Auto Scaling (same service
+  # that scales DynamoDB, Lambda concurrency, etc.).
+  #
+  # Three policy types:
+  #   Target Tracking:  "Keep CPU at 70%" — simplest, recommended
+  #   Step Scaling:     "If CPU > 80% add 2, if > 90% add 4" — granular
+  #   Scheduled:        "Scale to 10 at 9am, back to 2 at 6pm" — predictable
+
+  # ── Scalable Target ──────────────────────────────────────────
+  # Registers the ECS service as something that CAN be scaled.
+  # Min/Max set the boundaries.
+  ScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      # ServiceNamespace identifies which AWS service to scale.
+      ServiceNamespace: ecs
+      # ResourceId format for ECS: service/<cluster>/<service>
+      ResourceId: !Sub 'service/${ECSCluster}/${ECSService.Name}'
+      # ScalableDimension tells auto-scaling WHAT to change.
+      # For ECS, it's the desired count of tasks.
+      ScalableDimension: ecs:service:DesiredCount
+      MinCapacity: 1
+      MaxCapacity: 10
+      # RoleARN: auto-scaling needs permission to update the service.
+      # The service-linked role is created automatically.
+      RoleARN: !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService'
+
+  # ── Target Tracking Policy ───────────────────────────────────
+  # "Keep average CPU utilization at 70%."
+  # If CPU > 70%, add tasks. If CPU < 70%, remove tasks.
+  # Has a cooldown to prevent flapping (scaling up and down rapidly).
+  ScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${AWS::StackName}-cpu-scaling'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        # ── Predefined Metric ──────────────────────────────────
+        # AWS provides built-in metrics for common use cases.
+        # ECSServiceAverageCPUUtilization = average CPU across all tasks.
+        # Other options:
+        #   ECSServiceAverageMemoryUtilization
+        #   ALBRequestCountPerTarget (scale based on requests per task)
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        # ── Target Value ───────────────────────────────────────
+        # The CPU percentage to maintain. 70% is a good default:
+        #   Too low (50%) → wastes money on idle tasks
+        #   Too high (90%) → no headroom for traffic spikes
+        TargetValue: 70.0
+        # ── Cooldowns ──────────────────────────────────────────
+        # ScaleInCooldown: seconds to wait after scaling IN (removing tasks)
+        #   before allowing another scale-in. Prevents flapping.
+        ScaleInCooldown: 300
+        # ScaleOutCooldown: seconds to wait after scaling OUT (adding tasks)
+        #   before allowing another scale-out.
+        ScaleOutCooldown: 60
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  ClusterName:
+    Description: Name of the ECS cluster
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterName'
+
+  ClusterArn:
+    Description: ARN of the ECS cluster
+    Value: !GetAtt ECSCluster.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterArn'
+
+  ServiceName:
+    Description: Name of the ECS service
+    Value: !GetAtt ECSService.Name
+    Export:
+      Name: !Sub '${AWS::StackName}-ServiceName'
+
+  ServiceArn:
+    Description: ARN of the ECS service (used by auto-scaling, CI/CD)
+    Value: !Ref ECSService
+
+  TaskDefinitionArn:
+    Description: ARN of the task definition (includes revision number)
+    Value: !Ref TaskDefinition
+
+  TaskSecurityGroupId:
+    Description: Security group ID for ECS tasks
+    Value: !Ref TaskSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskSecurityGroupId'
+
+  LogGroupName:
+    Description: CloudWatch log group for container logs
+    Value: !Ref LogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LogGroupName'
+
+# ══════════════════════════════════════════════════════════════════
+# KEY CONCEPTS RECAP
+# ══════════════════════════════════════════════════════════════════
+#
+# CLUSTER vs SERVICE vs TASK:
+#   Cluster = namespace / grouping
+#   Service = ensures N tasks run, handles ALB registration
+#   Task    = one running container (instance of Task Definition)
+#
+# FARGATE vs EC2:
+#   Fargate = serverless, simpler, costlier
+#   EC2     = managed instances, cheaper for steady loads
+#
+# EXECUTION ROLE vs TASK ROLE:
+#   Execution Role = ECS plumbing (ECR pull, CloudWatch logs)
+#   Task Role      = your app's permissions (S3, DynamoDB, etc.)
+#
+# NETWORK MODE (awsvpc):
+#   Each task gets its own ENI + private IP
+#   Required for Fargate
+#   Tasks go in private subnets, ALB in public subnets
+#
+# AUTO-SCALING:
+#   ScalableTarget = "this thing CAN scale between min and max"
+#   ScalingPolicy  = "scale based on this metric at this target"
+#   Cooldowns      = prevent rapid scale up/down (flapping)
+#
+# DEPLOYMENT:
+#   MinimumHealthyPercent: 100 + MaximumPercent: 200
+#     = zero-downtime rolling deployment
+# ══════════════════════════════════════════════════════════════════

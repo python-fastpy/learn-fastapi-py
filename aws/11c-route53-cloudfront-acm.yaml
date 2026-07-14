@@ -1,0 +1,437 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — Route 53 + CloudFront + ACM (Step 10)
+# ══════════════════════════════════════════════════════════════════
+# Companion to: 11-route53-cloudfront-acm.py (console walkthrough)
+# Navigation:  ← prev: 10c-cloudwatch.yaml  |  next: 12c-cloudfront-deep-dive.yaml →
+#
+# This template wires together three services to give you:
+#   books.yourname.com → HTTPS → CDN → your ALB
+#
+#   ┌────────────────┐    ┌──────────────────┐    ┌──────────┐
+#   │ Route 53       │───►│ CloudFront       │───►│ ALB      │
+#   │ (DNS)          │    │ (CDN + SSL)      │    │ (origin) │
+#   │                │    │                  │    │          │
+#   │ books.example  │    │ 400+ edge locs   │    │ your app │
+#   │ .com → CF dist │    │ SSL termination  │    │          │
+#   └────────────────┘    └──────────────────┘    └──────────┘
+#
+# ACM (AWS Certificate Manager):
+#   Provides FREE SSL/TLS certificates. Auto-renews.
+#   Two validation methods:
+#     DNS:   Add a CNAME record (automated if using Route 53). PREFERRED.
+#     Email: AWS emails domain contacts. Manual. Annoying.
+#
+# IMPORTANT: For CloudFront, the ACM certificate MUST be in us-east-1,
+# regardless of where your ALB lives. CloudFront is a global service
+# and only reads certificates from us-east-1.
+#
+# DNS Record Types:
+#   ┌────────┬──────────────────────────────────────────────────┐
+#   │ A      │ Domain → IPv4 address                            │
+#   ├────────┼──────────────────────────────────────────────────┤
+#   │ AAAA   │ Domain → IPv6 address                            │
+#   ├────────┼──────────────────────────────────────────────────┤
+#   │ CNAME  │ Domain → another domain. CANNOT be at zone apex  │
+#   │        │ (example.com). Only subdomains (www.example.com).│
+#   ├────────┼──────────────────────────────────────────────────┤
+#   │ ALIAS  │ AWS-specific. Domain → AWS resource (ALB, CF, S3)│
+#   │        │ CAN be at zone apex. Free. No extra DNS hop.     │
+#   └────────┴──────────────────────────────────────────────────┘
+#
+#   ALIAS vs CNAME:
+#     ALIAS: AWS-only, free, works at apex, no extra DNS lookup
+#     CNAME: Standard DNS, costs per query, only subdomains
+#     → Always prefer ALIAS for AWS resources.
+#
+# DEPLOY:
+#   aws cloudformation create-stack \
+#     --stack-name book-store-dns \
+#     --template-body file://11c-route53-cloudfront-acm.yaml \
+#     --parameters \
+#       ParameterKey=DomainName,ParameterValue=books.example.com \
+#       ParameterKey=HostedZoneId,ParameterValue=Z1234567890 \
+#       ParameterKey=ALBDnsName,ParameterValue=alb-123.eu-west-1.elb.amazonaws.com \
+#       ParameterKey=ALBHostedZoneId,ParameterValue=Z32O12XQLNTSW2
+#
+# COST: Route 53 $0.50/hosted zone/month + $0.40/million queries.
+#       CloudFront $0.085/GB transferred (first 10TB).
+#       ACM certificates are FREE.
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  DNS, CDN, and SSL stack for the Book Store API.
+  Creates ACM certificate, CloudFront distribution,
+  and Route 53 DNS record.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  DomainName:
+    Type: String
+    Description: >-
+      The domain name for your API (e.g., books.example.com).
+      Must match your Route 53 hosted zone.
+    AllowedPattern: '^[a-zA-Z0-9][a-zA-Z0-9.-]+[a-zA-Z]{2,}$'
+
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: >-
+      The Route 53 Hosted Zone ID for your domain.
+      Find it in Route 53 console → Hosted zones.
+
+  # ── ALB Parameters ───────────────────────────────────────────
+  # These come from the ALB stack outputs (09c-alb.yaml).
+  ALBDnsName:
+    Type: String
+    Description: >-
+      DNS name of the ALB (CloudFront origin).
+      Example: book-store-alb-123.eu-west-1.elb.amazonaws.com
+
+  ALBHostedZoneId:
+    Type: String
+    Default: ''
+    Description: >-
+      Hosted zone ID of the ALB. Only needed if pointing Route 53
+      directly to ALB (without CloudFront). Leave empty when using
+      CloudFront.
+
+  UseCloudFront:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Whether to create a CloudFront distribution in front of the ALB.
+      Set to false to point Route 53 directly at the ALB.
+
+  PriceClass:
+    Type: String
+    Default: PriceClass_100
+    AllowedValues:
+      - PriceClass_100    # US, Canada, Europe only (cheapest)
+      - PriceClass_200    # + Asia, Africa, Middle East
+      - PriceClass_All    # All edge locations (most expensive)
+    Description: >-
+      CloudFront price class. Controls which edge locations are used.
+      PriceClass_100 is cheapest (US + Europe). Good for getting started.
+
+# ══════════════════════════════════════════════════════════════════
+# CONDITIONS
+# ══════════════════════════════════════════════════════════════════
+
+Conditions:
+  CreateCloudFront: !Equals [!Ref UseCloudFront, 'true']
+  DirectToALB: !Not [!Condition CreateCloudFront]
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ════════════════════════════════════════════════════════════════
+  # ACM CERTIFICATE
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is ACM? ─────────────────────────────────────────────
+  # AWS Certificate Manager provides FREE SSL/TLS certificates
+  # for use with AWS services (ALB, CloudFront, API Gateway).
+  #
+  # ACM certificates auto-renew, so you never have to worry about
+  # expiring certs — unlike self-managed certs from Let's Encrypt.
+  #
+  # IMPORTANT LIMITATION:
+  #   CloudFront certificates MUST be in us-east-1.
+  #   ALB certificates must be in the SAME REGION as the ALB.
+  #   If using CloudFront, create the cert in us-east-1.
+  #   If using ALB directly, create it in the ALB's region.
+  #
+  # NOTE: This template creates the cert in the stack's region.
+  # For CloudFront, you must deploy this stack in us-east-1 OR
+  # create the cert separately in us-east-1 and pass its ARN.
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      # ── Subject Alternative Names ───────────────────────────
+      # Additional domain names this cert is valid for.
+      # Wildcard (*.example.com) covers all subdomains.
+      SubjectAlternativeNames:
+        - !Sub '*.${DomainName}'
+      # ── Validation Method ───────────────────────────────────
+      # DNS:   Add a CNAME record to prove you own the domain.
+      #        If using Route 53, CloudFormation can do this
+      #        automatically with DomainValidationOptions.
+      # EMAIL: AWS sends an email to admin contacts. Manual.
+      #
+      # DNS validation is STRONGLY preferred:
+      #   - Automated (no human intervention)
+      #   - Allows auto-renewal (email validation certs can't auto-renew)
+      ValidationMethod: DNS
+      # ── Domain Validation Options ───────────────────────────
+      # Tells ACM which hosted zone to create the validation
+      # CNAME record in. This automates the validation process.
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Name
+          Value: !Ref DomainName
+
+  # ════════════════════════════════════════════════════════════════
+  # CLOUDFRONT DISTRIBUTION
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is CloudFront? ──────────────────────────────────────
+  # A Content Delivery Network (CDN) with 400+ edge locations.
+  # Caches your content close to users worldwide.
+  #
+  # Even for APIs (non-cacheable), CloudFront provides:
+  #   - SSL termination at the edge (faster TLS handshake)
+  #   - DDoS protection (AWS Shield Standard, free)
+  #   - WAF integration (firewall rules)
+  #   - HTTP/2 and HTTP/3 support
+  #   - Global anycast routing (users hit nearest edge)
+  #
+  # Edge Location:          Small cache, many locations (low latency)
+  # Regional Edge Cache:    Large cache, fewer locations (higher hit rate)
+  # Origin:                 Your ALB / S3 / API Gateway
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: CreateCloudFront
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'CDN for ${DomainName}'
+
+        # ── Aliases ────────────────────────────────────────────
+        # Custom domain names for this distribution.
+        # Without this, CloudFront only responds to its own
+        # domain (d1234.cloudfront.net).
+        Aliases:
+          - !Ref DomainName
+
+        # ── Viewer Certificate ─────────────────────────────────
+        # SSL certificate for HTTPS connections FROM users TO CloudFront.
+        # AcmCertificateArn: your ACM cert (must be in us-east-1)
+        # SslSupportMethod:
+        #   sni-only:         Free. Uses SNI (Server Name Indication).
+        #                     Works with all modern browsers.
+        #   vip:              $600/month. Dedicated IP. For old browsers.
+        # MinimumProtocolVersion: minimum TLS version.
+        #   TLSv1.2_2021 is recommended (blocks TLS 1.0 and 1.1).
+        ViewerCertificate:
+          AcmCertificateArn: !Ref Certificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+
+        # ── Origins ────────────────────────────────────────────
+        # Where CloudFront fetches content on a cache miss.
+        Origins:
+          - Id: ALBOrigin
+            DomainName: !Ref ALBDnsName
+            CustomOriginConfig:
+              # ── Origin Protocol Policy ───────────────────────
+              # How CloudFront connects to the origin:
+              #   https-only:  CloudFront → ALB over HTTPS
+              #   http-only:   CloudFront → ALB over HTTP
+              #   match-viewer: Same protocol as the viewer used
+              #
+              # https-only is recommended when your ALB has a cert.
+              OriginProtocolPolicy: https-only
+              HTTPSPort: 443
+              HTTPPort: 80
+              # ── Origin SSL Protocols ─────────────────────────
+              # TLS versions CloudFront uses to connect to origin.
+              OriginSSLProtocols:
+                - TLSv1.2
+
+        # ── Default Cache Behavior ─────────────────────────────
+        # How CloudFront handles requests that don't match any
+        # other cache behavior.
+        DefaultCacheBehavior:
+          TargetOriginId: ALBOrigin
+          # ── Viewer Protocol Policy ───────────────────────────
+          # How CloudFront handles HTTP vs HTTPS from viewers:
+          #   redirect-to-https: Redirect HTTP to HTTPS (RECOMMENDED)
+          #   https-only:        Block HTTP entirely
+          #   allow-all:         Allow both (not recommended)
+          ViewerProtocolPolicy: redirect-to-https
+          # ── Allowed Methods ──────────────────────────────────
+          # Which HTTP methods CloudFront forwards to the origin.
+          # For APIs, allow ALL methods (GET, POST, PUT, DELETE, etc.)
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - PATCH
+            - POST
+            - DELETE
+          # ── Cached Methods ───────────────────────────────────
+          # Which methods CloudFront caches responses for.
+          # Only GET and HEAD are cacheable.
+          CachedMethods:
+            - GET
+            - HEAD
+          # ── Forwarding ───────────────────────────────────────
+          # What CloudFront forwards to the origin.
+          # For APIs, forward EVERYTHING (headers, cookies, query strings)
+          # so the origin can make routing decisions.
+          ForwardedValues:
+            QueryString: true
+            Headers:
+              - '*'          # Forward ALL headers (disables caching)
+            Cookies:
+              Forward: all   # Forward ALL cookies
+          # ── Compression ──────────────────────────────────────
+          # Compress responses (gzip/brotli) between CloudFront and viewer.
+          Compress: true
+          # ── TTL (Time To Live) ───────────────────────────────
+          # How long CloudFront caches responses.
+          # For APIs: set to 0 (no caching). Origin controls freshness.
+          # For static assets: set higher (3600, 86400).
+          DefaultTTL: 0
+          MinTTL: 0
+          MaxTTL: 0
+
+        # ── Price Class ────────────────────────────────────────
+        # Controls which edge locations are used (cost vs coverage).
+        #   PriceClass_100: US, Canada, Europe (cheapest)
+        #   PriceClass_200: + Asia, Middle East, Africa
+        #   PriceClass_All: All 400+ locations (most expensive)
+        PriceClass: !Ref PriceClass
+
+        # ── HTTP Version ───────────────────────────────────────
+        HttpVersion: http2and3
+
+        # ── IPv6 ───────────────────────────────────────────────
+        IPV6Enabled: true
+
+      Tags:
+        - Key: Environment
+          Value: !Ref DomainName
+
+  # ════════════════════════════════════════════════════════════════
+  # ROUTE 53 DNS RECORD
+  # ════════════════════════════════════════════════════════════════
+
+  # ── DNS Record pointing to CloudFront or ALB ─────────────────
+  # Creates an A record (ALIAS) that points your domain to
+  # either CloudFront or the ALB directly.
+  #
+  # ALIAS records are AWS-specific. They look like A records to
+  # DNS clients, but internally they resolve to an AWS resource.
+  # Benefits over CNAME:
+  #   - Work at zone apex (example.com, not just sub.example.com)
+  #   - Free (no per-query charge)
+  #   - No extra DNS lookup (faster resolution)
+  #
+  # DNS PROPAGATION:
+  #   Route 53 changes take 0-60 seconds (fast because it's authoritative).
+  #   But client DNS caches honor TTL (Time To Live).
+  #   TTL 300 = clients cache for 5 minutes. Lower TTL = faster propagation.
+  DNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      # ── Alias Target ────────────────────────────────────────
+      # For CloudFront: use the distribution domain + Z2FDTNDATAQYW2
+      #   (Z2FDTNDATAQYW2 is CloudFront's FIXED hosted zone ID)
+      # For ALB: use the ALB DNS name + ALB's hosted zone ID
+      AliasTarget: !If
+        - CreateCloudFront
+        # ── Point to CloudFront ────────────────────────────────
+        - DNSName: !GetAtt CloudFrontDistribution.DomainName
+          # Z2FDTNDATAQYW2 is the hosted zone ID for ALL CloudFront
+          # distributions. It's a fixed constant — don't change it.
+          HostedZoneId: Z2FDTNDATAQYW2
+          EvaluateTargetHealth: false
+        # ── Point directly to ALB ──────────────────────────────
+        - DNSName: !Ref ALBDnsName
+          HostedZoneId: !Ref ALBHostedZoneId
+          # EvaluateTargetHealth: true means Route 53 will check if
+          # the ALB is healthy before returning its IP. If unhealthy,
+          # Route 53 can failover to another record (if configured).
+          EvaluateTargetHealth: true
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  CertificateArn:
+    Description: ARN of the ACM certificate
+    Value: !Ref Certificate
+    Export:
+      Name: !Sub '${AWS::StackName}-CertificateArn'
+
+  CloudFrontDomainName:
+    Condition: CreateCloudFront
+    Description: >-
+      CloudFront distribution domain name (e.g., d1234.cloudfront.net).
+      Your Route 53 ALIAS record points to this.
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDomainName'
+
+  CloudFrontDistributionId:
+    Condition: CreateCloudFront
+    Description: >-
+      CloudFront distribution ID. Use for cache invalidation:
+      aws cloudfront create-invalidation --distribution-id <ID> --paths "/*"
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub '${AWS::StackName}-DistributionId'
+
+  SiteUrl:
+    Description: The HTTPS URL for your site
+    Value: !Sub 'https://${DomainName}'
+
+  DNSRecordName:
+    Description: The DNS record that was created
+    Value: !Ref DNSRecord
+
+# ══════════════════════════════════════════════════════════════════
+# KEY CONCEPTS RECAP
+# ══════════════════════════════════════════════════════════════════
+#
+# ACM:
+#   Free SSL certificates. DNS validation preferred (automated).
+#   CloudFront certs MUST be in us-east-1.
+#   ALB certs must be in the ALB's region.
+#   Auto-renewal only with DNS-validated certs.
+#
+# CLOUDFRONT:
+#   CDN with 400+ edge locations. Even for APIs, provides:
+#   SSL termination, DDoS protection, HTTP/2+3, WAF integration.
+#   PriceClass controls cost vs global coverage.
+#
+# ROUTE 53:
+#   AWS DNS service. ALIAS records preferred for AWS resources:
+#   free, work at zone apex, no extra DNS lookup.
+#   Z2FDTNDATAQYW2 = CloudFront's fixed hosted zone ID.
+#
+# ALIAS vs CNAME:
+#   ALIAS: AWS-only, free, apex OK, instant. PREFERRED.
+#   CNAME: Standard, per-query cost, subdomains only.
+#
+# DNS PROPAGATION:
+#   Route 53 changes: near-instant (authoritative).
+#   Client caching: depends on TTL (default 300s = 5 min).
+#
+# EDGE vs REGIONAL:
+#   Edge = CloudFront (content close to users)
+#   Regional = ALB in a specific AWS region
+#   Use CloudFront even for APIs if you have global users.
+#
+# OAC (Origin Access Control):
+#   For S3 origins — restricts S3 to CloudFront-only access.
+#   See 12c-cloudfront-deep-dive.yaml for S3 + OAC example.
+# ══════════════════════════════════════════════════════════════════

@@ -1,0 +1,330 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — S3 (Step 2)
+# ══════════════════════════════════════════════════════════════════
+# Navigation:  <- prev: 02c-vpc.yaml  |  next: 04c-ec2.yaml ->
+# Companion:  03-s3.py (console walkthrough)
+#
+# This template creates the same S3 bucket that 03-s3.py builds
+# via the console. Every console setting maps to a YAML property.
+#
+# What you get:
+#   - S3 bucket with versioning enabled
+#   - Server-side encryption (SSE-S3, free)
+#   - All public access blocked
+#   - Lifecycle rules (Standard -> IA -> Glacier -> delete)
+#   - Bucket policy for CloudFront OAC (placeholder)
+#   - CORS configuration (commented out, uncomment if needed)
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#       --stack-name book-store-s3-dev \
+#       --template-body file://aws/03c-s3.yaml \
+#       --parameters ParameterKey=Environment,ParameterValue=dev \
+#                    ParameterKey=BucketNameSuffix,ParameterValue=covers \
+#       --region eu-west-1
+#
+# Cost: ~$0.023/GB/month for Standard storage. Almost free for small projects.
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >-
+  S3 bucket with versioning, encryption, lifecycle rules, and
+  CloudFront OAC bucket policy. Companion to learn-fastapi-py/aws/03-s3.py.
+
+
+# ═════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ═════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - qa
+      - uat
+      - prod
+    Description: Deployment environment for resource naming.
+
+  BucketNameSuffix:
+    Type: String
+    Default: covers
+    Description: >-
+      Suffix for the bucket name. S3 bucket names must be GLOBALLY
+      unique across ALL AWS accounts worldwide. We use the pattern:
+      book-store-{suffix}-{account-id}-{environment}
+      The account ID ensures uniqueness without you having to guess.
+    MinLength: 1
+    MaxLength: 30
+    AllowedPattern: '[a-z0-9-]+'
+    ConstraintDescription: >-
+      Lowercase letters, numbers, and hyphens only.
+
+  CloudFrontDistId:
+    Type: String
+    Default: 'PLACEHOLDER'
+    Description: >-
+      CloudFront distribution ID for the bucket policy. Set to
+      PLACEHOLDER initially — update after creating the CloudFront
+      distribution in a later stack. The bucket policy grants
+      CloudFront permission to read objects from this bucket.
+
+
+# ═════════════════════════════════════════════════════════════════
+# RESOURCES
+# ═════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ── S3 BUCKET ─────────────────────────────────────────────────
+  # S3 = Simple Storage Service. Stores any file (objects) in
+  # buckets. Unlimited storage, highly durable (99.999999999%).
+  #
+  # Objects are files identified by key (path): "covers/abc123.jpg"
+  # Prefixes look like folders but S3 is actually flat storage.
+  #
+  # Console equivalent: S3 -> Create bucket -> fill in the form
+  CoverImagesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+
+      # ── Bucket Name ──────────────────────────────────────────
+      # Globally unique across ALL AWS accounts. If someone else
+      # already has this name, creation fails. Using ${AWS::AccountId}
+      # makes collisions nearly impossible.
+      BucketName: !Sub 'book-store-${BucketNameSuffix}-${AWS::AccountId}-${Environment}'
+
+      # ── Versioning ───────────────────────────────────────────
+      # Keeps every version of every object. If you overwrite
+      # "covers/abc123.jpg", the old version is preserved.
+      # You can restore accidentally deleted or overwritten files.
+      #
+      # Console equivalent: Bucket Versioning -> Enable
+      VersioningConfiguration:
+        Status: Enabled
+
+      # ── Encryption ───────────────────────────────────────────
+      # Server-side encryption with S3-managed keys (SSE-S3).
+      # Every object is encrypted at rest. Free. No key management.
+      # AES256 = the encryption algorithm AWS uses.
+      #
+      # Alternatives:
+      #   SSE-KMS (aws:kms) — you control the key in KMS ($1/mo + API calls)
+      #   SSE-C             — you provide the key with each request (rare)
+      #
+      # Console equivalent: Default encryption -> SSE-S3
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+      # ── Block Public Access ──────────────────────────────────
+      # Prevents ANY public access to the bucket, regardless of
+      # bucket policies or ACLs. Four separate controls:
+      #
+      #   BlockPublicAcls:       block PUT calls that include public ACLs
+      #   IgnorePublicAcls:      ignore any existing public ACLs
+      #   BlockPublicPolicy:     reject policies that grant public access
+      #   RestrictPublicBuckets: restrict cross-account access for public policies
+      #
+      # All four = true means the bucket is completely private.
+      # Users access files through CloudFront (CDN), not directly from S3.
+      #
+      # Console equivalent: Block Public Access -> Block ALL (checked)
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+      # ── Ownership Controls ───────────────────────────────────
+      # BucketOwnerEnforced disables ACLs entirely. All access is
+      # controlled through bucket policies and IAM policies.
+      # ACLs are legacy — AWS recommends disabling them.
+      #
+      # Console equivalent: Object Ownership -> ACLs disabled
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+      # ── Lifecycle Rules ──────────────────────────────────────
+      # Automatically move objects to cheaper storage classes
+      # or delete them after a set number of days.
+      #
+      # Our strategy:
+      #   Day 0-29:   Standard         ($0.023/GB) — frequent access
+      #   Day 30-89:  Standard-IA      ($0.0125/GB) — infrequent access
+      #   Day 90-364: Glacier Instant   ($0.004/GB) — archive, ms retrieval
+      #   Day 365+:   Deleted          (free) — cleanup old data
+      #
+      # This saves money for files that are accessed less over time
+      # (e.g., old book cover images that nobody views anymore).
+      #
+      # Console equivalent: Management tab -> Create lifecycle rule
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionToInfrequentAccess
+            Status: Enabled
+            Transitions:
+              # After 30 days, move to Infrequent Access.
+              # Cheaper storage, but $0.01/1000 retrieval fee.
+              # Good for files accessed less than once a month.
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
+              # After 90 days, move to Glacier Instant Retrieval.
+              # Very cheap storage, millisecond retrieval, higher fees.
+              # Good for files rarely accessed but needed quickly.
+              - StorageClass: GLACIER_IR
+                TransitionInDays: 90
+            # After 365 days, delete the object entirely.
+            ExpirationInDays: 365
+
+      # ── CORS Configuration (commented) ───────────────────────
+      # Uncomment if your frontend needs to upload/download files
+      # directly from the browser to S3 (e.g., drag-drop image upload).
+      # CORS headers tell the browser it's OK to make requests to
+      # this S3 bucket from a different domain.
+      #
+      # CorsConfiguration:
+      #   CorsRules:
+      #     - AllowedOrigins:
+      #         - 'https://your-frontend.example.com'
+      #       AllowedMethods:
+      #         - GET
+      #         - PUT
+      #       AllowedHeaders:
+      #         - '*'
+      #       MaxAge: 3600     # browser caches CORS preflight for 1 hour
+
+      # ── Tags ─────────────────────────────────────────────────
+      # Tags help you track costs, filter resources, and organize.
+      # Always tag with at least Project and Environment.
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+
+  # ── BUCKET POLICY ─────────────────────────────────────────────
+  # Bucket policies are JSON/YAML documents that define WHO can
+  # do WHAT on this bucket. Like IAM policies but attached to the
+  # bucket instead of a user/role.
+  #
+  # This policy allows CloudFront to read objects from the bucket.
+  # CloudFront Origin Access Control (OAC) is the modern way to
+  # let CloudFront access S3 without making the bucket public.
+  #
+  # Console equivalent: Bucket -> Permissions -> Bucket policy -> paste JSON
+  CoverImagesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      # !Ref on a bucket resource returns the bucket name.
+      Bucket: !Ref CoverImagesBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Statement 1: Allow CloudFront to read objects
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: 's3:GetObject'
+            # Resource = which objects. /* means all objects in bucket.
+            # !Sub with ${Resource.Attribute} lets you reference
+            # another resource's attributes inline.
+            Resource: !Sub '${CoverImagesBucket.Arn}/*'
+            # Condition: ONLY allow if the request comes from YOUR
+            # specific CloudFront distribution (prevents other
+            # distributions from reading your bucket).
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub >-
+                  arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistId}
+
+          # Statement 2: Deny unencrypted uploads (defense in depth)
+          - Sid: DenyUnencryptedUploads
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:PutObject'
+            Resource: !Sub '${CoverImagesBucket.Arn}/*'
+            Condition:
+              StringNotEquals:
+                's3:x-amz-server-side-encryption': 'AES256'
+
+
+# ═════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ═════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  BucketName:
+    Description: >-
+      Name of the S3 bucket. Use this when uploading files:
+      aws s3 cp image.jpg s3://<bucket-name>/covers/
+    Value: !Ref CoverImagesBucket
+    Export:
+      Name: !Sub '${Environment}-CoverImagesBucketName'
+
+  BucketArn:
+    Description: >-
+      ARN of the S3 bucket. Use in IAM policies to grant access:
+      arn:aws:s3:::book-store-covers-060725138335-dev
+    Value: !GetAtt CoverImagesBucket.Arn
+    Export:
+      Name: !Sub '${Environment}-CoverImagesBucketArn'
+
+  BucketDomainName:
+    Description: >-
+      S3 domain name for this bucket. Use as CloudFront origin:
+      book-store-covers-060725138335-dev.s3.amazonaws.com
+    Value: !GetAtt CoverImagesBucket.DomainName
+    Export:
+      Name: !Sub '${Environment}-CoverImagesBucketDomain'
+
+  BucketRegionalDomainName:
+    Description: >-
+      Regional domain name (preferred for CloudFront origins):
+      book-store-covers-060725138335-dev.s3.eu-west-1.amazonaws.com
+    Value: !GetAtt CoverImagesBucket.RegionalDomainName
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║   CONSOLE <-> CLOUDFORMATION MAPPING                        ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# ┌──────────────────────────────┬────────────────────────────────┐
+# | Console Setting              | CloudFormation Property         |
+# +──────────────────────────────+────────────────────────────────+
+# | Bucket name                  | BucketName                      |
+# | Region                       | --region flag (CLI)             |
+# | ACLs disabled                | OwnershipControls ->            |
+# |                              |   BucketOwnerEnforced           |
+# | Block ALL public access      | PublicAccessBlockConfiguration  |
+# |                              |   (all four: true)              |
+# | Bucket Versioning: Enable    | VersioningConfiguration ->      |
+# |                              |   Status: Enabled               |
+# | Encryption: SSE-S3           | BucketEncryption ->             |
+# |                              |   SSEAlgorithm: AES256          |
+# | Lifecycle rule               | LifecycleConfiguration ->       |
+# |                              |   Rules -> Transitions          |
+# | Bucket policy (JSON)         | AWS::S3::BucketPolicy resource  |
+# └──────────────────────────────┴────────────────────────────────┘
+#
+# ── Storage Classes Reference ─────────────────────────────────
+#
+# ┌──────────────────────┬───────────┬────────────────────────┐
+# | Class                | Cost/GB   | Use Case               |
+# +──────────────────────+───────────+────────────────────────+
+# | STANDARD             | $0.023    | Frequent access        |
+# | STANDARD_IA          | $0.0125   | Monthly access         |
+# | ONEZONE_IA           | $0.010    | Non-critical, monthly  |
+# | GLACIER_IR           | $0.004    | Quarterly, ms access   |
+# | GLACIER              | $0.004    | Annual, min-hr access  |
+# | DEEP_ARCHIVE         | $0.00099  | Compliance, 12hr       |
+# └──────────────────────┴───────────┴────────────────────────┘

@@ -1,0 +1,459 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — DynamoDB (Step 15)
+# ══════════════════════════════════════════════════════════════════
+# Navigation:  Python lesson: 15-dynamodb.py
+#
+# This template creates a DynamoDB table with:
+#   - On-demand (PAY_PER_REQUEST) billing
+#   - Composite primary key (PK + SK) for single-table design
+#   - Global Secondary Index (GSI1)
+#   - Local Secondary Index (LSI1)
+#   - Point-in-time recovery (PITR)
+#   - TTL attribute (expireAt)
+#   - DynamoDB Streams (NEW_AND_OLD_IMAGES)
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#     --stack-name book-store-dynamodb-dev \
+#     --template-body file://15c-dynamodb.yaml \
+#     --parameters ParameterKey=Environment,ParameterValue=dev
+#
+# ── Single-Table Design ────────────────────────────────────────
+#
+# In DynamoDB, the best practice is to store MULTIPLE entity types
+# in a SINGLE table. This is the opposite of relational databases
+# where each entity gets its own table.
+#
+# Why? DynamoDB charges per request, not per table. And the most
+# efficient access pattern is to fetch related items in ONE query.
+#
+#   Single-table example (books + reviews in one table):
+#
+#     PK              SK                  Data
+#     ─────────────── ─────────────────── ─────────────────────
+#     BOOK#book-001   METADATA            {title: "1984", author: "Orwell"}
+#     BOOK#book-001   REVIEW#rev-001      {stars: 5, text: "Amazing"}
+#     BOOK#book-001   REVIEW#rev-002      {stars: 4, text: "Great read"}
+#     BOOK#book-002   METADATA            {title: "Dune", author: "Herbert"}
+#     USER#user-001   PROFILE             {name: "Alice", email: "..."}
+#     USER#user-001   ORDER#ord-001       {total: 29.99, status: "shipped"}
+#
+#   Query: get book + all reviews in ONE request:
+#     KeyConditionExpression: PK = "BOOK#book-001"
+#     → Returns the METADATA item + all REVIEW# items
+#
+#   Query: get only reviews:
+#     KeyConditionExpression: PK = "BOOK#book-001" AND begins_with(SK, "REVIEW#")
+#
+# ── Partition Key vs Sort Key ───────────────────────────────────
+#
+#   Partition Key (PK):
+#     - Determines WHICH partition stores the item
+#     - DynamoDB hashes this value to distribute data
+#     - High cardinality = good distribution = good performance
+#     - Cannot query with < > between — only exact match (=)
+#
+#   Sort Key (SK):
+#     - Determines ORDER within a partition
+#     - Enables range queries: begins_with, between, <, >, <=, >=
+#     - Items with the same PK are stored together, sorted by SK
+#     - Together with PK, forms the unique item identifier
+#
+# ── GSI vs LSI ──────────────────────────────────────────────────
+#
+#   ┌──────────────────────┬──────────────────────────────────────┐
+#   │ Global Secondary     │ Local Secondary                      │
+#   │ Index (GSI)          │ Index (LSI)                          │
+#   ├──────────────────────┼──────────────────────────────────────┤
+#   │ Different PK + SK    │ SAME PK, different SK                │
+#   │ Can be added anytime │ Must be created with the table       │
+#   │ Has own capacity     │ Shares table's capacity              │
+#   │ Eventually consistent│ Supports strong consistency          │
+#   │ Max 20 per table     │ Max 5 per table                      │
+#   │ Separate throughput  │ Counts toward table's throughput     │
+#   │ Can project any attr │ Limited to 10GB per partition key     │
+#   └──────────────────────┴──────────────────────────────────────┘
+#
+#   GSI use case: "Get all items by a different access pattern"
+#     Table PK=UserId, SK=OrderId
+#     GSI:  PK=Status, SK=OrderDate
+#     → Query GSI: "All PENDING orders sorted by date"
+#
+#   LSI use case: "Same partition, different sort order"
+#     Table PK=UserId, SK=OrderId
+#     LSI:  PK=UserId, SK=OrderDate
+#     → Query LSI: "All orders for user-001 sorted by date"
+#
+# ── Capacity Modes ──────────────────────────────────────────────
+#
+#   ┌──────────────────────┬──────────────────────────────────────┐
+#   │ On-Demand             │ Provisioned                         │
+#   │ (PAY_PER_REQUEST)     │                                     │
+#   ├──────────────────────┼──────────────────────────────────────┤
+#   │ Pay per read/write    │ Pay for reserved capacity            │
+#   │ No capacity planning  │ Set ReadCapacityUnits (RCU)          │
+#   │ Scales instantly      │ Set WriteCapacityUnits (WCU)         │
+#   │ 2.5x more expensive   │ Cheaper for steady workloads         │
+#   │ per request            │ Auto-scaling available               │
+#   │ Good for: variable,   │ Good for: predictable, steady       │
+#   │ unpredictable traffic │ traffic with known patterns          │
+#   └──────────────────────┴──────────────────────────────────────┘
+#
+#   Start with on-demand. Switch to provisioned when you understand
+#   your traffic patterns and want to optimize costs.
+#
+# ── TTL (Time to Live) ──────────────────────────────────────────
+#
+#   TTL automatically deletes items after a specified time.
+#   Set a Unix epoch timestamp on each item; DynamoDB deletes items
+#   whose timestamp has passed (within ~48 hours of expiry).
+#
+#   Use cases:
+#     - Session data (expire after 24 hours)
+#     - Temporary tokens (expire after 1 hour)
+#     - Audit logs (expire after 90 days)
+#
+#   The TTL attribute (e.g., expireAt) must be a Number type
+#   containing a Unix epoch timestamp (seconds since 1970-01-01).
+#
+#   Example item:
+#     { PK: "SESSION#abc", SK: "DATA", expireAt: 1720000000 }
+#     → Automatically deleted around July 3, 2024
+#
+# ── DynamoDB Streams ────────────────────────────────────────────
+#
+#   Streams capture a time-ordered sequence of item-level changes
+#   (inserts, updates, deletes) in real-time.
+#
+#   Stream view types:
+#     KEYS_ONLY         → only the key attributes of the modified item
+#     NEW_IMAGE          → the entire item after modification
+#     OLD_IMAGE          → the entire item before modification
+#     NEW_AND_OLD_IMAGES → both before and after (most common)
+#
+#   Common patterns:
+#     - Trigger a Lambda on every table change (event-driven)
+#     - Replicate data to another table or region
+#     - Build real-time analytics or search indexes
+#     - Audit trail: log every change to S3
+#
+# ── DAX (DynamoDB Accelerator) ──────────────────────────────────
+#
+#   DAX is an in-memory cache for DynamoDB. Sits between your app
+#   and the table. Reduces read latency from ~5ms to ~400 microseconds.
+#
+#   Not created in this template (costs ~$0.20/hr for the smallest
+#   node), but referenced for awareness:
+#
+#     Type: AWS::DAX::Cluster
+#     Properties:
+#       ClusterName: book-store-cache
+#       NodeType: dax.t3.small
+#       ReplicationFactor: 3
+#       IAMRoleARN: !GetAtt DaxRole.Arn
+#       SubnetGroupName: !Ref DaxSubnetGroup
+#
+#   Your app uses the DAX SDK instead of the DynamoDB SDK:
+#     import amazondax
+#     client = amazondax.AmazonDaxClient(endpoint_url="dax://cache.abc123.dax-clusters.eu-west-1.amazonaws.com:8111")
+#     client.get_item(TableName="books", Key={"PK": {"S": "BOOK#001"}})
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  DynamoDB table with single-table design, GSI, LSI, PITR,
+  TTL, and Streams for the Book Store API (Step 15).
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+    Description: Deployment environment for naming and tagging.
+
+  TableNamePrefix:
+    Type: String
+    Default: 'book-store'
+    Description: >-
+      Prefix for the table name. Combined with environment:
+      book-store-dev, book-store-prod, etc.
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ────────────────────────────────────────────────────────────────
+  # DYNAMODB TABLE
+  # ────────────────────────────────────────────────────────────────
+  #
+  # This table uses single-table design with generic key names
+  # (PK, SK, GSI1PK, GSI1SK, LSI1SK) so it can store multiple
+  # entity types in the same table.
+  #
+  # Access patterns enabled by this schema:
+  #
+  #   Base table (PK + SK):
+  #     Get book by ID:        PK="BOOK#001", SK="METADATA"
+  #     Get book reviews:      PK="BOOK#001", SK begins_with "REVIEW#"
+  #     Get user profile:      PK="USER#001", SK="PROFILE"
+  #     Get user orders:       PK="USER#001", SK begins_with "ORDER#"
+  #
+  #   GSI1 (GSI1PK + GSI1SK):
+  #     Books by genre:        GSI1PK="GENRE#fiction", GSI1SK="2024-01-15"
+  #     Orders by status:      GSI1PK="STATUS#pending", GSI1SK="2024-01-15"
+  #
+  #   LSI1 (PK + LSI1SK):
+  #     Book reviews by date:  PK="BOOK#001", LSI1SK="2024-01-15"
+  #     User orders by date:   PK="USER#001", LSI1SK="2024-03-20"
+
+  BookStoreTable:
+    Type: AWS::DynamoDB::Table
+    # DeletionPolicy: Retain is recommended for production tables
+    # to prevent accidental data loss during stack deletion.
+    # For dev/qa, Delete is fine (data is expendable).
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      # Table name includes environment for isolation.
+      # dev: book-store-dev, prod: book-store-prod
+      TableName: !Sub '${TableNamePrefix}-${Environment}'
+
+      # ── Billing Mode ─────────────────────────────────────────
+      # PAY_PER_REQUEST = on-demand pricing.
+      # No capacity planning needed. You pay per read/write request.
+      # Great for variable or unpredictable workloads.
+      #
+      # Alternative: PROVISIONED (with ReadCapacityUnits/WriteCapacityUnits)
+      # Use when you have predictable, steady traffic and want lower costs.
+      #
+      # To switch to provisioned, replace BillingMode and add:
+      #   ProvisionedThroughput:
+      #     ReadCapacityUnits: 5
+      #     WriteCapacityUnits: 5
+      BillingMode: PAY_PER_REQUEST
+
+      # ── Key Schema ───────────────────────────────────────────
+      # Defines the primary key: Partition Key (HASH) + Sort Key (RANGE).
+      # Both must also appear in AttributeDefinitions below.
+      #
+      # HASH  = Partition Key → distributes data across partitions
+      # RANGE = Sort Key → orders items within a partition
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH       # Partition key
+        - AttributeName: SK
+          KeyType: RANGE      # Sort key
+
+      # ── Attribute Definitions ────────────────────────────────
+      # ONLY define attributes used in key schemas (table keys,
+      # GSI keys, LSI keys). DynamoDB is schemaless — other
+      # attributes don't need to be declared here.
+      #
+      # Types: S (String), N (Number), B (Binary)
+      AttributeDefinitions:
+        # Primary key attributes
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        # GSI1 key attributes
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+        # LSI1 sort key attribute (LSI uses the table's PK)
+        - AttributeName: LSI1SK
+          AttributeType: S
+
+      # ── Global Secondary Index (GSI1) ────────────────────────
+      # A GSI has a DIFFERENT partition key than the table.
+      # Think of it as a "view" of the data organized by a
+      # different access pattern.
+      #
+      # GSI1 enables queries like:
+      #   "Get all books in the 'fiction' genre sorted by date"
+      #   GSI1PK = "GENRE#fiction", GSI1SK between "2024-01-01" and "2024-12-31"
+      #
+      # GSIs are eventually consistent by default (no strong reads).
+      # They have their own capacity (on-demand inherits from table).
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH       # GSI partition key
+            - AttributeName: GSI1SK
+              KeyType: RANGE      # GSI sort key
+          # Projection: which attributes are copied to the index.
+          #   ALL        → all attributes (most flexible, most storage)
+          #   KEYS_ONLY  → only key attributes (cheapest storage)
+          #   INCLUDE    → key attributes + specified non-key attributes
+          Projection:
+            ProjectionType: ALL
+            # If using INCLUDE:
+            # ProjectionType: INCLUDE
+            # NonKeyAttributes:
+            #   - title
+            #   - author
+            #   - price
+
+      # ── Local Secondary Index (LSI1) ─────────────────────────
+      # An LSI uses the SAME partition key as the table but a
+      # DIFFERENT sort key. Enables alternative sort orders
+      # within the same partition.
+      #
+      # LSI1 enables queries like:
+      #   "Get all reviews for book-001 sorted by date"
+      #   PK = "BOOK#001", LSI1SK between "2024-01-01" and "2024-06-01"
+      #
+      # IMPORTANT: LSIs must be created with the table. You cannot
+      # add an LSI after the table exists — plan your access
+      # patterns before creating the table.
+      #
+      # LSIs support strongly consistent reads (unlike GSIs).
+      # But they share the table's provisioned capacity.
+      LocalSecondaryIndexes:
+        - IndexName: LSI1
+          KeySchema:
+            - AttributeName: PK
+              KeyType: HASH       # Same PK as the table
+            - AttributeName: LSI1SK
+              KeyType: RANGE      # Different sort key
+          Projection:
+            ProjectionType: ALL
+
+      # ── Point-in-Time Recovery (PITR) ────────────────────────
+      # Enables continuous backups. You can restore the table to
+      # any point in time within the last 35 days.
+      #
+      # Recovery creates a NEW table with the restored data.
+      # Original table is not affected.
+      #
+      # Cost: ~$0.20 per GB per month. Worth it for any table
+      # with data you can't afford to lose.
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+      # ── TTL (Time to Live) ───────────────────────────────────
+      # Automatically deletes items whose expireAt timestamp
+      # has passed. Items are typically deleted within 48 hours
+      # of expiry (not instant — background process).
+      #
+      # The attribute must be a Number type containing a Unix
+      # epoch timestamp (seconds since 1970-01-01 00:00:00 UTC).
+      #
+      # Expired items still appear in queries until actually
+      # deleted. Filter them out: FilterExpression = "expireAt > :now"
+      #
+      # TTL deletes are free (no write capacity consumed) and
+      # appear in DynamoDB Streams (with userIdentity: dynamodb.amazonaws.com).
+      TimeToLiveSpecification:
+        AttributeName: expireAt
+        Enabled: true
+
+      # ── DynamoDB Streams ─────────────────────────────────────
+      # Captures item-level changes in real-time, ordered by time.
+      # Changes are retained in the stream for 24 hours.
+      #
+      # View types:
+      #   KEYS_ONLY          → just the key attributes
+      #   NEW_IMAGE           → item after the change
+      #   OLD_IMAGE           → item before the change
+      #   NEW_AND_OLD_IMAGES  → both (most useful for auditing)
+      #
+      # Common stream consumers:
+      #   Lambda → process changes in real-time
+      #   Kinesis Data Streams → higher throughput, longer retention
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+
+      # ── Tags ─────────────────────────────────────────────────
+      # Tags help with cost allocation, access control, and
+      # resource organization in the AWS console.
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: TableDesign
+          Value: single-table
+
+      # ── Server-Side Encryption ───────────────────────────────
+      # DynamoDB encrypts all data at rest by default using an
+      # AWS-owned key (free). You can optionally use a customer-
+      # managed KMS key for tighter control.
+      #
+      # SSESpecification:
+      #   SSEEnabled: true
+      #   SSEType: KMS
+      #   KMSMasterKeyId: !Ref MyCustomKey
+      #
+      # The default (AWS-owned key) is sufficient for most use cases.
+      # Customer-managed keys add cost ($1/month + API call charges)
+      # but enable key rotation control and cross-account access.
+
+      # ── Contributor Insights ─────────────────────────────────
+      # Identifies frequently accessed (hot) keys and throttled keys.
+      # Useful for debugging performance issues.
+      # Cost: $0.000278 per 100 contributor writes.
+      #
+      # ContributorInsightsSpecification:
+      #   Enabled: true
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  # ── Table Name ─────────────────────────────────────────────────
+  # Used by application code to reference the table:
+  #   dynamodb.Table(os.environ["TABLE_NAME"])
+  TableName:
+    Description: >-
+      Name of the DynamoDB table. Pass as TABLE_NAME environment
+      variable to ECS tasks or Lambda functions.
+    Value: !Ref BookStoreTable
+    # !Ref on a DynamoDB Table returns the table name.
+    Export:
+      Name: !Sub '${Environment}-BookStoreTableName'
+
+  # ── Table ARN ──────────────────────────────────────────────────
+  # Used in IAM policies to grant read/write access:
+  #   Resource: <this-arn>
+  #   Resource: <this-arn>/index/*  (for GSI/LSI access)
+  TableArn:
+    Description: >-
+      ARN of the DynamoDB table. Use in IAM policies.
+      For index access, append /index/* to the ARN.
+    Value: !GetAtt BookStoreTable.Arn
+    Export:
+      Name: !Sub '${Environment}-BookStoreTableArn'
+
+  # ── Stream ARN ─────────────────────────────────────────────────
+  # Used to configure Lambda event source mappings that process
+  # stream records (real-time change notifications).
+  #
+  # Lambda event source mapping example:
+  #   Type: AWS::Lambda::EventSourceMapping
+  #   Properties:
+  #     EventSourceArn: !ImportValue dev-BookStoreStreamArn
+  #     FunctionName: !Ref MyStreamProcessor
+  #     StartingPosition: LATEST
+  #     BatchSize: 100
+  StreamArn:
+    Description: >-
+      ARN of the DynamoDB Stream. Use as EventSourceArn for
+      Lambda functions that process table changes.
+    Value: !GetAtt BookStoreTable.StreamArn
+    Export:
+      Name: !Sub '${Environment}-BookStoreStreamArn'

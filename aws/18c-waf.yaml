@@ -1,0 +1,632 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — WAF (Step 18)
+# ══════════════════════════════════════════════════════════════════
+# Navigation:  Python lesson: 18-waf.py
+#
+# This template creates WAF resources:
+#   - WebACL (REGIONAL scope, for ALB)
+#   - AWS Managed Rule Groups (Common, SQLi, KnownBadInputs)
+#   - Custom rate-limiting rule (2000 req/5min per IP)
+#   - IP set for allow/blocklist
+#   - Custom rule blocking specific user-agent strings
+#   - WebACL association with ALB
+#   - Logging configuration (CloudWatch Logs)
+#
+# Deploy:
+#   aws cloudformation create-stack \
+#     --stack-name book-store-waf-dev \
+#     --template-body file://18c-waf.yaml \
+#     --parameters ParameterKey=Environment,ParameterValue=dev \
+#                  ParameterKey=AlbArn,ParameterValue=<your-alb-arn>
+#
+# ── Scope: REGIONAL vs CLOUDFRONT ──────────────────────────────
+#
+# WAF WebACLs have two scopes:
+#
+#   REGIONAL:
+#     - Protects ALBs, API Gateways, AppSync, Cognito User Pools
+#     - Created in the SAME region as the resource
+#     - Use for: most application architectures
+#
+#   CLOUDFRONT:
+#     - Protects CloudFront distributions ONLY
+#     - Must be created in us-east-1 (N. Virginia)
+#     - Use for: static sites, CDN-fronted APIs
+#
+# You cannot mix scopes — a REGIONAL WebACL cannot protect a
+# CloudFront distribution, and vice versa.
+#
+# ── Rule Groups ─────────────────────────────────────────────────
+#
+# Rules in a WebACL are evaluated in PRIORITY ORDER (lowest first).
+# First matching rule wins — subsequent rules are skipped.
+#
+# Rule types:
+#
+#   AWS Managed Rule Groups:
+#     Pre-built by AWS. Cover common attacks (OWASP Top 10).
+#     Updated automatically by AWS as new threats emerge.
+#     Free to use (included in WAF pricing).
+#
+#   Marketplace Rule Groups:
+#     Purchased from AWS Marketplace vendors (F5, Imperva, etc.).
+#     Specialized rules (bot detection, fraud prevention).
+#     Additional cost.
+#
+#   Custom Rules:
+#     Written by you for application-specific protection.
+#     Match on: IP, headers, body, query string, URI, method.
+#     Can be rate-based (throttle by IP or custom key).
+#
+# ── Action Types ────────────────────────────────────────────────
+#
+#   Allow  → request passes through to the application
+#   Block  → request is rejected with 403 Forbidden
+#   Count  → request is allowed but logged (testing mode)
+#   CAPTCHA → client must solve a CAPTCHA challenge
+#
+#   For managed rule groups, you can OVERRIDE the group action:
+#     OverrideAction: Count → lets requests through but logs matches
+#     OverrideAction: None  → use the group's own action (default)
+#
+#   Use Count mode when first deploying rules to see what they
+#   would block WITHOUT actually blocking. Switch to Block after
+#   confirming no false positives.
+#
+# ── Rule Priority ───────────────────────────────────────────────
+#
+# Priority determines evaluation order. Lower number = checked first.
+# First matching rule stops evaluation.
+#
+# Recommended priority structure:
+#   0-99:    IP allow/block lists (let known-good IPs through first)
+#   100-199: Rate limiting (stop DDoS before rule evaluation)
+#   200-299: Custom rules (application-specific)
+#   300-399: AWS Managed rules (general protection)
+#   400-499: Catch-all / logging rules
+#
+# ── Rate-Based Rules ───────────────────────────────────────────
+#
+# Rate-based rules count requests from a single IP (or custom key)
+# within a 5-minute window. If the count exceeds the limit, the
+# rule action triggers (typically Block).
+#
+# After the request rate drops below the limit, the IP is
+# automatically unblocked.
+#
+# Use cases:
+#   - API rate limiting (prevent abuse)
+#   - DDoS mitigation (block flood attacks)
+#   - Login brute-force protection
+#
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  WAF — WebACL with managed rules, rate limiting, IP sets, custom
+  rules, ALB association, and CloudWatch logging for the Book
+  Store API (Step 18).
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+    Description: Deployment environment.
+
+  # ── ALB ARN ────────────────────────────────────────────────────
+  # The ARN of the Application Load Balancer to protect.
+  # In production, import from the ALB stack:
+  #   !ImportValue dev-BookStoreAlbArn
+  AlbArn:
+    Type: String
+    Default: 'arn:aws:elasticloadbalancing:eu-west-1:123456789012:loadbalancer/app/book-store-alb/1234567890abcdef'
+    Description: >-
+      ARN of the ALB to associate with the WebACL. All traffic
+      through this ALB will be inspected by WAF rules.
+
+  # ── Rate Limit ─────────────────────────────────────────────────
+  RateLimit:
+    Type: Number
+    Default: 2000
+    MinValue: 100
+    MaxValue: 20000000
+    Description: >-
+      Maximum requests per 5-minute window per IP address.
+      2000 = ~6.7 requests/second sustained. Adjust based on
+      expected legitimate traffic patterns.
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ────────────────────────────────────────────────────────────────
+  # 1. IP SET (allow/blocklist)
+  # ────────────────────────────────────────────────────────────────
+  #
+  # An IP set is a named collection of IP addresses or CIDR ranges.
+  # Referenced in WebACL rules to allow or block traffic from
+  # specific IPs.
+  #
+  # Use cases:
+  #   - Allow list: corporate office IPs, partner IPs
+  #   - Block list: known attackers, scraper IPs
+  #   - Testing: restrict access to your team during development
+  #
+  # You can update the IP set without modifying the WebACL.
+  # Changes propagate in about 1 minute.
+
+  BlockedIpSet:
+    Type: AWS::WAFv2::IPSet
+    Properties:
+      Name: !Sub 'book-store-blocked-ips-${Environment}'
+      Description: >-
+        IP addresses to block. Add known attacker IPs, abusive
+        scrapers, or other unwanted traffic sources here.
+      Scope: REGIONAL
+      # Scope must match the WebACL scope:
+      #   REGIONAL → for ALB, API Gateway, AppSync
+      #   CLOUDFRONT → for CloudFront distributions (us-east-1 only)
+
+      # IPAddressVersion: IPv4 or IPv6.
+      # Create separate IP sets for IPv4 and IPv6.
+      IPAddressVersion: IPV4
+
+      # Addresses: list of CIDR blocks to include.
+      # Use /32 for single IPs, /24 for ranges, etc.
+      # These are placeholder examples — replace with actual IPs.
+      Addresses:
+        - '192.0.2.0/24'      # Example: known bad range (TEST-NET-1)
+        - '198.51.100.0/24'   # Example: another bad range (TEST-NET-2)
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ────────────────────────────────────────────────────────────────
+  # 2. WebACL (Web Access Control List)
+  # ────────────────────────────────────────────────────────────────
+  #
+  # The WebACL is the top-level WAF resource. It contains:
+  #   - An ordered list of rules (evaluated by priority, lowest first)
+  #   - A default action (Allow or Block if no rules match)
+  #   - Association with AWS resources (ALB, API Gateway, etc.)
+  #
+  # Architecture:
+  #
+  #   Client → ALB → WebACL evaluates rules → Allow/Block → App
+  #
+  #   Rule Priority 0: IP blocklist        → Block bad IPs
+  #   Rule Priority 1: Rate limiter        → Block flood attacks
+  #   Rule Priority 2: Block bad UA        → Block scrapers
+  #   Rule Priority 3: Common Rule Set     → Block OWASP Top 10
+  #   Rule Priority 4: SQLi Rule Set       → Block SQL injection
+  #   Rule Priority 5: Bad Inputs Rule Set → Block Log4j, etc.
+  #   Default Action: Allow                → let everything else through
+
+  BookStoreWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub 'book-store-webacl-${Environment}'
+      Description: >-
+        WAF WebACL protecting the Book Store ALB. Includes AWS
+        managed rules, rate limiting, IP blocking, and custom rules.
+
+      # Scope: REGIONAL for ALB/API Gateway, CLOUDFRONT for CF.
+      Scope: REGIONAL
+
+      # DefaultAction: what happens when NO rules match a request.
+      # Allow: let unmatched requests through (most common — rules block bad traffic).
+      # Block: block unmatched requests (allowlist mode — only explicitly allowed traffic).
+      DefaultAction:
+        Allow: {}
+
+      # VisibilityConfig: CloudWatch metrics and sampling for the WebACL.
+      # This is REQUIRED on the WebACL and on every rule.
+      VisibilityConfig:
+        # SampledRequestsEnabled: log a sample of requests matching
+        # this rule. Useful for debugging and tuning.
+        SampledRequestsEnabled: true
+
+        # CloudWatchMetricsEnabled: publish metrics to CloudWatch.
+        # Creates metrics like AllowedRequests, BlockedRequests, CountedRequests.
+        CloudWatchMetricsEnabled: true
+
+        # MetricName: the CloudWatch metric name for this WebACL.
+        # Appears under the AWS/WAFV2 namespace.
+        MetricName: !Sub 'BookStoreWebACL${Environment}'
+
+      # ── Rules ──────────────────────────────────────────────
+      # Rules are evaluated in PRIORITY ORDER (lowest first).
+      # First matching rule wins — no further rules are checked.
+
+      Rules:
+
+        # ── Rule 0: IP Blocklist ─────────────────────────────
+        # Priority 0 = checked first. Block known-bad IPs
+        # immediately, before any other rule evaluation.
+        - Name: BlockBadIPs
+          Priority: 0
+
+          # Action: what to do when this rule matches.
+          # Block returns 403 Forbidden to the client.
+          Action:
+            Block: {}
+
+          Statement:
+            # IPSetReferenceStatement: match against the IP set.
+            IPSetReferenceStatement:
+              Arn: !GetAtt BlockedIpSet.Arn
+
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub 'BlockBadIPs${Environment}'
+
+        # ── Rule 1: Rate Limiting (per IP) ───────────────────
+        # Counts requests from each IP over a 5-minute window.
+        # If an IP exceeds the limit, subsequent requests are
+        # blocked until the rate drops below the threshold.
+        #
+        # This protects against:
+        #   - DDoS attacks (flood of requests from one IP)
+        #   - API abuse (scraping, brute-force login)
+        #   - Cost protection (prevent runaway Lambda/ECS costs)
+        - Name: RateLimitPerIP
+          Priority: 1
+
+          Action:
+            Block: {}
+
+          Statement:
+            RateBasedStatement:
+              # Limit: max requests per 5-minute window.
+              # 2000 = about 6.7 requests/second sustained.
+              # Adjust based on your expected legitimate traffic.
+              Limit: !Ref RateLimit
+
+              # AggregateKeyType: how to count requests.
+              # IP → count by source IP address
+              # FORWARDED_IP → count by X-Forwarded-For header
+              #   (use when behind a proxy/CDN)
+              AggregateKeyType: IP
+
+              # EvaluationWindowSec: the time window for counting.
+              # Default: 300 (5 minutes). Options: 60, 120, 300, 600.
+              # Shorter windows catch bursts faster but may trigger
+              # more false positives.
+              EvaluationWindowSec: 300
+
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub 'RateLimitPerIP${Environment}'
+
+        # ── Rule 2: Block Specific User-Agent ────────────────
+        # Block requests with known-bad User-Agent strings.
+        # Common targets: vulnerability scanners, scraper bots,
+        # and tools that identify themselves in the UA header.
+        #
+        # This is a simple custom rule matching a header value.
+        - Name: BlockBadUserAgent
+          Priority: 2
+
+          Action:
+            Block: {}
+
+          Statement:
+            # ByteMatchStatement: match a specific byte pattern
+            # in the request. Can match headers, body, URI, etc.
+            ByteMatchStatement:
+              # SearchString: the string to look for.
+              SearchString: 'BadBot'
+
+              # FieldToMatch: where in the request to look.
+              FieldToMatch:
+                SingleHeader:
+                  # Name: the header name (case-insensitive).
+                  Name: user-agent
+
+              # TextTransformations: transform the field value
+              # before matching. Prevents evasion by encoding.
+              TextTransformations:
+                - Priority: 0
+                  Type: LOWERCASE
+                  # LOWERCASE normalizes "BadBot", "BADBOT", "badbot"
+                  # Other types: URL_DECODE, HTML_ENTITY_DECODE,
+                  # COMPRESS_WHITE_SPACE, BASE64_DECODE, NONE
+
+              # PositionalConstraint: where in the field to match.
+              # CONTAINS: anywhere in the string
+              # STARTS_WITH: at the beginning
+              # ENDS_WITH: at the end
+              # EXACTLY: exact full match
+              PositionalConstraint: CONTAINS
+
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub 'BlockBadUserAgent${Environment}'
+
+        # ── Rule 3: AWS Managed — Common Rule Set ────────────
+        # The Core Rule Set (CRS) covers the OWASP Top 10:
+        #   - Cross-site scripting (XSS)
+        #   - Path traversal attacks
+        #   - Remote file inclusion
+        #   - Protocol violations
+        #   - HTTP request smuggling
+        #
+        # This is the most important managed rule group.
+        # Enable it for every WebACL.
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 3
+
+          # OverrideAction: controls how the managed group's actions
+          # are applied.
+          #
+          #   None → use the group's actions as-is (Block/Allow)
+          #   Count → override all Block actions to Count (testing mode)
+          #
+          # Use Count when first deploying to see what would be blocked.
+          # Switch to None after confirming no false positives.
+          #
+          # NOTE: For managed rule groups, use OverrideAction (not Action).
+          # Action is for custom rules. OverrideAction is for rule groups.
+          OverrideAction:
+            None: {}
+
+          Statement:
+            ManagedRuleGroupStatement:
+              # VendorName: always "AWS" for AWS-managed rules.
+              VendorName: AWS
+              # Name: the rule group identifier.
+              Name: AWSManagedRulesCommonRuleSet
+
+              # ExcludedRules: disable specific rules within the group.
+              # Use this to handle false positives without disabling
+              # the entire group.
+              # ExcludedRules:
+              #   - Name: SizeRestrictions_BODY
+              #     # Disable if your API accepts large request bodies
+              #   - Name: NoUserAgent_HEADER
+              #     # Disable if your API has legitimate no-UA clients
+
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub 'AWSCommonRules${Environment}'
+
+        # ── Rule 4: AWS Managed — SQL Injection ──────────────
+        # Detects SQL injection patterns in:
+        #   - Query strings (?id=1' OR '1'='1)
+        #   - Request body (POST data)
+        #   - Headers (Cookie, Authorization)
+        #   - URI path
+        #
+        # Covers multiple SQL dialects: MySQL, PostgreSQL, MSSQL.
+        - Name: AWSManagedRulesSQLiRuleSet
+          Priority: 4
+
+          OverrideAction:
+            None: {}
+
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesSQLiRuleSet
+
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub 'AWSSQLiRules${Environment}'
+
+        # ── Rule 5: AWS Managed — Known Bad Inputs ───────────
+        # Blocks requests with known-bad payloads:
+        #   - Log4j / Log4Shell (CVE-2021-44228)
+        #   - Java deserialization exploits
+        #   - Known CVE exploit patterns
+        #   - Suspicious file extensions
+        #
+        # This group is updated by AWS as new CVEs are discovered.
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 5
+
+          OverrideAction:
+            None: {}
+
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub 'AWSBadInputRules${Environment}'
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ────────────────────────────────────────────────────────────────
+  # 3. WebACL ASSOCIATION (attach WebACL to ALB)
+  # ────────────────────────────────────────────────────────────────
+  #
+  # The association links the WebACL to an AWS resource.
+  # After association, ALL traffic through the ALB is inspected
+  # by the WebACL rules.
+  #
+  # One WebACL can be associated with multiple resources.
+  # One resource can have only ONE WebACL associated.
+  #
+  # Supported resources:
+  #   - ALB (Application Load Balancer)
+  #   - API Gateway (REST API stage)
+  #   - AppSync GraphQL API
+  #   - Cognito User Pool
+  #   - App Runner service
+  #   - Verified Access instance
+
+  WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      # WebACLArn: ARN of the WebACL to apply.
+      WebACLArn: !GetAtt BookStoreWebACL.Arn
+
+      # ResourceArn: ARN of the resource to protect.
+      # For ALB: arn:aws:elasticloadbalancing:<region>:<account>:loadbalancer/app/<name>/<id>
+      # For API Gateway: arn:aws:apigateway:<region>::/restapis/<id>/stages/<stage>
+      ResourceArn: !Ref AlbArn
+
+  # ────────────────────────────────────────────────────────────────
+  # 4. CLOUDWATCH LOG GROUP (for WAF logging)
+  # ────────────────────────────────────────────────────────────────
+  #
+  # WAF can log all inspected requests to CloudWatch Logs, S3, or
+  # Kinesis Data Firehose. Logging is essential for:
+  #   - Debugging false positives (why was a request blocked?)
+  #   - Security analysis (what attacks are targeting your app?)
+  #   - Compliance (audit trail of all traffic decisions)
+  #
+  # IMPORTANT: The log group name MUST start with "aws-waf-logs-"
+  # This is a WAF requirement — other prefixes will be rejected.
+
+  WafLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      # Log group name MUST start with "aws-waf-logs-"
+      LogGroupName: !Sub 'aws-waf-logs-book-store-${Environment}'
+
+      # RetentionInDays: how long to keep logs.
+      # WAF logs can be verbose — set retention based on your
+      # debugging and compliance needs.
+      # Options: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180,
+      #          365, 400, 545, 731, 1827, 2192, 2557, 2922, 3288, 3653
+      RetentionInDays: 30
+
+      Tags:
+        - Key: Project
+          Value: book-store
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ────────────────────────────────────────────────────────────────
+  # 5. WAF LOGGING CONFIGURATION
+  # ────────────────────────────────────────────────────────────────
+  #
+  # Connects the WebACL to the log destination.
+  # Each inspected request generates a JSON log entry with:
+  #   - Request details (URI, method, headers, source IP)
+  #   - Which rule matched (or "DEFAULT_ACTION" if none)
+  #   - The action taken (ALLOW, BLOCK, COUNT)
+  #   - Rate-based rule evaluation info
+  #   - Label information
+
+  WafLoggingConfiguration:
+    Type: AWS::WAFv2::LoggingConfiguration
+    Properties:
+      # ResourceArn: the WebACL to log.
+      ResourceArn: !GetAtt BookStoreWebACL.Arn
+
+      # LogDestinationConfigs: where to send logs.
+      # Must be a list with exactly ONE destination ARN.
+      # Supported: CloudWatch Logs, S3, Kinesis Data Firehose.
+      #
+      # For CloudWatch Logs, use the log group ARN.
+      # IMPORTANT: include ":*" at the end for CloudWatch Logs.
+      LogDestinationConfigs:
+        - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:aws-waf-logs-book-store-${Environment}:*'
+
+      # LoggingFilter: control which requests are logged.
+      # Without a filter, ALL requests are logged (can be expensive).
+      # Use filters to log only blocked or counted requests.
+      LoggingFilter:
+        DefaultBehavior: DROP
+        # DROP = don't log requests that don't match any filter below.
+        # KEEP = log everything that doesn't match a filter below.
+
+        Filters:
+          # Log all BLOCKED requests (for security analysis).
+          - Behavior: KEEP
+            Conditions:
+              - ActionCondition:
+                  Action: BLOCK
+            Requirement: MEETS_ANY
+            # MEETS_ANY: log if ANY condition matches.
+            # MEETS_ALL: log only if ALL conditions match.
+
+          # Also log COUNTED requests (for testing new rules).
+          - Behavior: KEEP
+            Conditions:
+              - ActionCondition:
+                  Action: COUNT
+            Requirement: MEETS_ANY
+
+      # RedactedFields: remove sensitive data from logs.
+      # Useful for compliance — avoid logging passwords, tokens, etc.
+      # RedactedFields:
+      #   - SingleHeader:
+      #       Name: authorization
+      #   - SingleHeader:
+      #       Name: cookie
+
+    DependsOn: WafLogGroup
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  # ── WebACL ARN ─────────────────────────────────────────────────
+  # Used for WebACL associations and logging configurations.
+  WebACLArn:
+    Description: >-
+      ARN of the WAF WebACL. Use to associate with additional
+      resources or configure logging.
+    Value: !GetAtt BookStoreWebACL.Arn
+    Export:
+      Name: !Sub '${Environment}-BookStoreWebACLArn'
+
+  # ── WebACL ID ──────────────────────────────────────────────────
+  # The unique identifier for the WebACL.
+  WebACLId:
+    Description: >-
+      ID of the WAF WebACL. Use with WAF API calls
+      (get-web-acl, update-web-acl, etc.).
+    Value: !GetAtt BookStoreWebACL.Id
+    Export:
+      Name: !Sub '${Environment}-BookStoreWebACLId'
+
+  # ── Blocked IP Set ARN ─────────────────────────────────────────
+  BlockedIpSetArn:
+    Description: >-
+      ARN of the blocked IP set. Update this IP set to add or
+      remove blocked IPs without modifying the WebACL.
+    Value: !GetAtt BlockedIpSet.Arn
+    Export:
+      Name: !Sub '${Environment}-BookStoreBlockedIpSetArn'
+
+  # ── WAF Log Group Name ─────────────────────────────────────────
+  WafLogGroupName:
+    Description: >-
+      Name of the CloudWatch log group for WAF logs.
+      Query with CloudWatch Logs Insights:
+        fields @timestamp, httpRequest.uri, action
+        | filter action = "BLOCK"
+        | sort @timestamp desc
+        | limit 100
+    Value: !Sub 'aws-waf-logs-book-store-${Environment}'
+    Export:
+      Name: !Sub '${Environment}-BookStoreWafLogGroupName'

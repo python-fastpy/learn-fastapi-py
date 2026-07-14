@@ -1,0 +1,574 @@
+# ══════════════════════════════════════════════════════════════════
+# CloudFormation — CloudWatch Monitoring (Step 9)
+# ══════════════════════════════════════════════════════════════════
+# Companion to: 10-cloudwatch.py (console walkthrough)
+# Navigation:  ← prev: 09c-alb.yaml  |  next: 11c-route53-cloudfront-acm.yaml →
+#
+# This template creates a complete monitoring stack:
+#   - Log group with retention
+#   - Metric filter (extract ERROR count from logs)
+#   - SNS topic for alarm notifications
+#   - CloudWatch alarms (error rate, CPU)
+#   - Composite alarm (CPU high AND errors high)
+#   - Dashboard with multiple widgets
+#
+# CloudWatch is the central nervous system of AWS monitoring:
+#
+#   ┌───────────┐    ┌──────────────┐    ┌───────────────┐
+#   │ ECS       │───►│ CloudWatch   │───►│ Alarms        │
+#   │ ALB       │    │ Metrics/Logs │    │ (thresholds)  │
+#   │ Lambda    │    └──────────────┘    └───────┬───────┘
+#   │ API GW    │                                │
+#   └───────────┘                                ▼
+#                                         ┌───────────────┐
+#                                         │ SNS Topic     │
+#                                         │ (email/Slack) │
+#                                         └───────────────┘
+#
+# ALARM STATES:
+#   ┌──────────────────────┬─────────────────────────────────┐
+#   │ OK                   │ Metric is within threshold.      │
+#   │                      │ Everything is fine.              │
+#   ├──────────────────────┼─────────────────────────────────┤
+#   │ ALARM                │ Metric breached threshold.       │
+#   │                      │ Action triggers (SNS, Lambda).   │
+#   ├──────────────────────┼─────────────────────────────────┤
+#   │ INSUFFICIENT_DATA    │ Not enough data to determine     │
+#   │                      │ state. Common when first created.│
+#   └──────────────────────┴─────────────────────────────────┘
+#
+# DEPLOY:
+#   aws cloudformation create-stack \
+#     --stack-name book-store-monitoring \
+#     --template-body file://10c-cloudwatch.yaml \
+#     --parameters \
+#       ParameterKey=AlarmEmail,ParameterValue=team@example.com \
+#       ParameterKey=ECSClusterName,ParameterValue=book-store-cluster \
+#       ParameterKey=ECSServiceName,ParameterValue=book-store-service
+#
+# COST: Dashboards $3/month. Alarms $0.10/alarm/month.
+#       Logs $0.50/GB ingested + $0.03/GB stored.
+# ══════════════════════════════════════════════════════════════════
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CloudWatch monitoring stack for the Book Store API.
+  Creates log groups, metric filters, alarms, SNS notifications,
+  and a dashboard.
+
+# ══════════════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  AlarmEmail:
+    Type: String
+    Description: >-
+      Email address to receive alarm notifications.
+      You must confirm the subscription (check your email after deploy).
+    AllowedPattern: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    ConstraintDescription: Must be a valid email address
+
+  ECSClusterName:
+    Type: String
+    Default: book-store-cluster
+    Description: Name of the ECS cluster to monitor
+
+  ECSServiceName:
+    Type: String
+    Default: book-store-service
+    Description: Name of the ECS service to monitor
+
+  ALBFullName:
+    Type: String
+    Default: ''
+    Description: >-
+      Full name of the ALB (from ALB ARN, the part after loadbalancer/).
+      Example: app/book-store-alb/1234567890abcdef
+      Leave empty to skip ALB dashboard widgets.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 7
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+    Description: >-
+      Number of days to retain logs. After this, logs are deleted.
+      Default "Never expire" is expensive. Set a retention policy.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, uat, prod]
+
+# ══════════════════════════════════════════════════════════════════
+# CONDITIONS
+# ══════════════════════════════════════════════════════════════════
+
+Conditions:
+  HasALB: !Not [!Equals [!Ref ALBFullName, '']]
+
+# ══════════════════════════════════════════════════════════════════
+# RESOURCES
+# ══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ════════════════════════════════════════════════════════════════
+  # LOG GROUP
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is a Log Group? ─────────────────────────────────────
+  # A log group is a container for log streams. Each container
+  # instance, Lambda invocation, etc. creates a log stream within
+  # the group.
+  #
+  # Log Group → Log Stream → Log Events (individual log lines)
+  #
+  # Naming conventions:
+  #   /aws/lambda/<function-name>     (Lambda)
+  #   /ecs/<service-name>             (ECS containers)
+  #   /aws/apigateway/<api-name>      (API Gateway)
+  AppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}'
+      # ── Retention ────────────────────────────────────────────
+      # By default, CloudWatch keeps logs FOREVER. This costs money.
+      # Set retention to auto-delete old logs.
+      # Common choices:
+      #   dev:  3-7 days (just need recent logs for debugging)
+      #   prod: 30-90 days (longer for investigations)
+      #   compliance: 365+ days (regulatory requirements)
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ════════════════════════════════════════════════════════════════
+  # METRIC FILTER
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is a Metric Filter? ─────────────────────────────────
+  # A metric filter scans log events for a pattern and creates a
+  # CloudWatch metric from matches. This turns unstructured logs
+  # into measurable data you can alarm on.
+  #
+  # Example: Count how many times "ERROR" appears in logs.
+  #   Log event: "2024-01-15 ERROR: Database connection failed"
+  #   → metric filter matches "ERROR" → increments metric by 1
+  #   → alarm triggers when count > 5 in 5 minutes
+  ErrorMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref AppLogGroup
+      # ── Filter Pattern ──────────────────────────────────────
+      # Pattern syntax:
+      #   "ERROR"                → matches literal string "ERROR"
+      #   [ip, id, user, ...]   → space-delimited log format
+      #   { $.level = "error" } → JSON log format
+      #
+      # Our FastAPI app logs are typically:
+      #   "2024-01-15 10:30:00 ERROR: Something failed"
+      # So we match the literal word "ERROR".
+      FilterPattern: 'ERROR'
+      # ── Metric Transformation ────────────────────────────────
+      # Defines the CloudWatch metric to create from matches.
+      MetricTransformations:
+        - MetricNamespace: !Sub '${AWS::StackName}/Application'
+          MetricName: ErrorCount
+          # MetricValue: what to add to the metric when a match occurs.
+          # "1" = count each match as 1 (simple counter).
+          MetricValue: '1'
+          # DefaultValue: value when NO matches occur in a period.
+          # Without this, the metric has NO data (not zero),
+          # which puts alarms in INSUFFICIENT_DATA state.
+          DefaultValue: 0
+
+  # ════════════════════════════════════════════════════════════════
+  # SNS TOPIC (Notification Channel)
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is SNS? ─────────────────────────────────────────────
+  # Simple Notification Service. A pub/sub messaging service.
+  # Alarms publish to an SNS topic, which fans out to subscribers.
+  #
+  # Subscriber types: Email, SMS, Lambda, SQS, HTTP endpoint.
+  # Here we use email. For Slack, you'd use Lambda or HTTP.
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-alarms'
+      DisplayName: !Sub '${AWS::StackName} Alarms'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── Email Subscription ──────────────────────────────────────
+  # After deployment, AWS sends a confirmation email.
+  # You MUST click the confirmation link or you won't get alerts.
+  AlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  # ════════════════════════════════════════════════════════════════
+  # CLOUDWATCH ALARMS
+  # ════════════════════════════════════════════════════════════════
+
+  # ── Alarm: Error Rate ────────────────────────────────────────
+  # Triggers when more than 5 errors occur in 5 minutes.
+  # This catches application-level issues (exceptions, failed
+  # database queries, bad API responses).
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-error-rate'
+      AlarmDescription: >-
+        Triggers when application error count exceeds 5 in 5 minutes.
+        Check CloudWatch logs for error details.
+      # ── Metric Reference ─────────────────────────────────────
+      # Points to the metric created by our MetricFilter above.
+      Namespace: !Sub '${AWS::StackName}/Application'
+      MetricName: ErrorCount
+      # ── Statistic ────────────────────────────────────────────
+      # How to aggregate datapoints within a period.
+      #   Sum:     Total count (good for error counts)
+      #   Average: Mean value (good for latency, CPU%)
+      #   Maximum: Highest value in period
+      #   Minimum: Lowest value in period
+      #   SampleCount: Number of datapoints
+      Statistic: Sum
+      # ── Period ───────────────────────────────────────────────
+      # Aggregation window in seconds. Must be a multiple of 60.
+      # 300 = 5 minutes. Each period produces one datapoint.
+      Period: 300
+      # ── Evaluation Periods ───────────────────────────────────
+      # Number of periods to evaluate. Combined with Period:
+      # 1 period x 300s = alarm if threshold breached in any 5-min window.
+      EvaluationPeriods: 1
+      # ── Threshold ────────────────────────────────────────────
+      Threshold: 5
+      # ── Comparison Operator ──────────────────────────────────
+      # GreaterThanThreshold:           > threshold
+      # GreaterThanOrEqualToThreshold:  >= threshold
+      # LessThanThreshold:              < threshold
+      # LessThanOrEqualToThreshold:     <= threshold
+      ComparisonOperator: GreaterThanThreshold
+      # ── Treat Missing Data ───────────────────────────────────
+      # What to do when there's no data for a period:
+      #   missing:        Keep current alarm state
+      #   notBreaching:   Treat as within threshold (GOOD for errors)
+      #   breaching:      Treat as breaching threshold
+      #   ignore:         Don't change state
+      TreatMissingData: notBreaching
+      # ── Alarm Actions ────────────────────────────────────────
+      # What to do when alarm transitions to ALARM state.
+      # Can trigger: SNS, Auto Scaling, EC2 actions, Lambda.
+      AlarmActions:
+        - !Ref AlarmTopic
+      # ── OK Actions ──────────────────────────────────────────
+      # What to do when alarm transitions back to OK state.
+      # Useful to get a "recovered" notification.
+      OKActions:
+        - !Ref AlarmTopic
+
+  # ── Alarm: High CPU ──────────────────────────────────────────
+  # Triggers when ECS service CPU > 80% for 5 minutes.
+  # This catches capacity issues (need more tasks or bigger tasks).
+  HighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-high-cpu'
+      AlarmDescription: ECS service CPU utilization is above 80%
+      # ── ECS Metrics ──────────────────────────────────────────
+      # ECS publishes metrics to the AWS/ECS namespace.
+      # Key metrics:
+      #   CPUUtilization:    % of allocated CPU used
+      #   MemoryUtilization: % of allocated memory used
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      # ── Dimensions ──────────────────────────────────────────
+      # Dimensions filter the metric to a specific resource.
+      # Without dimensions, you'd get CPU for ALL ECS services.
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSClusterName
+        - Name: ServiceName
+          Value: !Ref ECSServiceName
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: missing
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  # ════════════════════════════════════════════════════════════════
+  # COMPOSITE ALARM
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is a Composite Alarm? ───────────────────────────────
+  # A composite alarm triggers based on a COMBINATION of other alarms.
+  # This reduces noise — instead of getting separate alerts for
+  # "CPU high" and "errors high," you get one alert that says
+  # "CPU high AND errors high = something is seriously wrong."
+  #
+  # AlarmRule syntax:
+  #   ALARM("alarm-name")             → alarm is in ALARM state
+  #   OK("alarm-name")               → alarm is in OK state
+  #   INSUFFICIENT_DATA("alarm-name") → alarm has no data
+  #   AND / OR / NOT                  → boolean operators
+  #   ( )                            → grouping
+  CriticalAlarm:
+    Type: AWS::CloudWatch::CompositeAlarm
+    # DependsOn ensures the child alarms exist first.
+    DependsOn:
+      - ErrorAlarm
+      - HighCPUAlarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-critical'
+      AlarmDescription: >-
+        CRITICAL: Both CPU is high AND errors are occurring.
+        This indicates the service is overwhelmed.
+      # ── Alarm Rule ──────────────────────────────────────────
+      # Trigger only when BOTH child alarms are in ALARM state.
+      AlarmRule: !Sub |
+        ALARM("${ErrorAlarm}") AND ALARM("${HighCPUAlarm}")
+      AlarmActions:
+        - !Ref AlarmTopic
+      OKActions:
+        - !Ref AlarmTopic
+
+  # ════════════════════════════════════════════════════════════════
+  # CLOUDWATCH DASHBOARD
+  # ════════════════════════════════════════════════════════════════
+
+  # ── What is a Dashboard? ─────────────────────────────────────
+  # A dashboard is a custom page of CloudWatch widgets.
+  # Widgets display metrics as graphs, numbers, or text.
+  #
+  # DashboardBody is a JSON string defining the layout.
+  # The grid is 24 columns wide. You specify x, y, width, height
+  # for each widget.
+  #
+  # Widget types:
+  #   metric:  Graph (line, stacked area, bar, pie, number)
+  #   text:    Markdown text
+  #   log:     Log query results
+  #   alarm:   Alarm status summary
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${AWS::StackName}-dashboard'
+      # ── Dashboard Body ──────────────────────────────────────
+      # JSON defining all widgets. !Sub lets us inject parameters.
+      # Grid: 24 columns wide, unlimited rows.
+      # Each widget has: type, x, y, width, height, properties.
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0,
+              "y": 0,
+              "width": 24,
+              "height": 1,
+              "properties": {
+                "markdown": "# ${AWS::StackName} — Service Dashboard"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 1,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "ECS CPU Utilization",
+                "metrics": [
+                  [
+                    "AWS/ECS",
+                    "CPUUtilization",
+                    "ClusterName", "${ECSClusterName}",
+                    "ServiceName", "${ECSServiceName}",
+                    { "stat": "Average", "period": 300 }
+                  ]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "yAxis": {
+                  "left": { "min": 0, "max": 100, "label": "%" }
+                },
+                "annotations": {
+                  "horizontal": [
+                    { "value": 80, "label": "Alarm threshold", "color": "#d62728" }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 1,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "ECS Memory Utilization",
+                "metrics": [
+                  [
+                    "AWS/ECS",
+                    "MemoryUtilization",
+                    "ClusterName", "${ECSClusterName}",
+                    "ServiceName", "${ECSServiceName}",
+                    { "stat": "Average", "period": 300 }
+                  ]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "yAxis": {
+                  "left": { "min": 0, "max": 100, "label": "%" }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 7,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Application Errors (from logs)",
+                "metrics": [
+                  [
+                    "${AWS::StackName}/Application",
+                    "ErrorCount",
+                    { "stat": "Sum", "period": 300 }
+                  ]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "annotations": {
+                  "horizontal": [
+                    { "value": 5, "label": "Alarm threshold", "color": "#d62728" }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 7,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "ALB Request Count & 5XX Errors",
+                "metrics": [
+                  [
+                    "AWS/ApplicationELB",
+                    "RequestCount",
+                    "LoadBalancer", "${ALBFullName}",
+                    { "stat": "Sum", "period": 300, "label": "Total Requests" }
+                  ],
+                  [
+                    "AWS/ApplicationELB",
+                    "HTTPCode_ELB_5XX_Count",
+                    "LoadBalancer", "${ALBFullName}",
+                    { "stat": "Sum", "period": 300, "label": "5XX Errors", "color": "#d62728" }
+                  ]
+                ],
+                "view": "timeSeries",
+                "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "alarm",
+              "x": 0,
+              "y": 13,
+              "width": 24,
+              "height": 3,
+              "properties": {
+                "title": "Alarm Status",
+                "alarms": [
+                  "${ErrorAlarm.Arn}",
+                  "${HighCPUAlarm.Arn}",
+                  "${CriticalAlarm.Arn}"
+                ]
+              }
+            }
+          ]
+        }
+
+# ══════════════════════════════════════════════════════════════════
+# OUTPUTS
+# ══════════════════════════════════════════════════════════════════
+
+Outputs:
+
+  LogGroupName:
+    Description: Name of the CloudWatch log group
+    Value: !Ref AppLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LogGroupName'
+
+  LogGroupArn:
+    Description: ARN of the CloudWatch log group
+    Value: !GetAtt AppLogGroup.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LogGroupArn'
+
+  AlarmTopicArn:
+    Description: >-
+      ARN of the SNS topic for alarm notifications.
+      Subscribe additional endpoints (Slack webhook, PagerDuty, etc.).
+    Value: !Ref AlarmTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-AlarmTopicArn'
+
+  DashboardName:
+    Description: >-
+      Name of the CloudWatch dashboard.
+      View at: https://console.aws.amazon.com/cloudwatch/home#dashboards
+    Value: !Ref MonitoringDashboard
+
+  DashboardUrl:
+    Description: Direct URL to the CloudWatch dashboard
+    Value: !Sub >-
+      https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AWS::StackName}-dashboard
+
+# ══════════════════════════════════════════════════════════════════
+# KEY CONCEPTS RECAP
+# ══════════════════════════════════════════════════════════════════
+#
+# LOG GROUPS:
+#   Container for log streams. Set RetentionInDays to control cost.
+#   Without retention, logs accumulate forever.
+#
+# METRIC FILTERS:
+#   FilterPattern scans log events and creates CloudWatch metrics.
+#   Patterns: literal strings, JSON ($.field), space-delimited.
+#   DefaultValue: 0 prevents INSUFFICIENT_DATA when no matches.
+#
+# ALARMS:
+#   Three states: OK, ALARM, INSUFFICIENT_DATA.
+#   Key properties: Statistic, Period, EvaluationPeriods, Threshold.
+#   TreatMissingData controls behavior with no data.
+#   AlarmActions fire on ALARM; OKActions fire on recovery.
+#
+# COMPOSITE ALARMS:
+#   Combine multiple alarms with AND/OR/NOT logic.
+#   Reduces alert noise by requiring multiple conditions.
+#   Only fires when the AlarmRule expression is true.
+#
+# DASHBOARDS:
+#   JSON-based layout on a 24-column grid.
+#   Widget types: metric, text, log, alarm.
+#   Cost: $3/month per dashboard.
+#
+# SNS:
+#   Pub/sub notifications. Alarms publish → SNS fans out.
+#   Email subscriptions require confirmation click.
+# ══════════════════════════════════════════════════════════════════
