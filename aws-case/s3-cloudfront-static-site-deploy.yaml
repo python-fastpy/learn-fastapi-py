@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: S3 bucket for LEON Prompt Comparison static site.
+Description: S3 + CloudFront for LEON Prompt Comparison static site.
 
 Parameters:
 
@@ -10,6 +10,18 @@ Parameters:
       - ci
       - test
     Default: ci
+
+  DefaultRootObject:
+    Type: String
+    Description: Default page served at the root URL ("/").
+    Default: index.html
+
+  CacheTtlSeconds:
+    Type: Number
+    Description: CloudFront default cache TTL in seconds. 300 = 5 minutes.
+    Default: 300
+    MinValue: 0
+    MaxValue: 86400
 
   ApplicationAssetInsightIdTag:
     Type: String
@@ -30,6 +42,7 @@ Mappings:
 
 Resources:
 
+  # ── 1. S3 BUCKET ───────────────────────────────────────────────────────────
   PromptComparisonBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -67,23 +80,7 @@ Resources:
         - Key: tr:project-name
           Value: sphinx
 
-  # ── HOW TO UPDATE THIS STACK FROM THE CONSOLE ──────────────────────────────
-  #
-  #   1. Go to CloudFormation:
-  #      https://eu-west-1.console.aws.amazon.com/cloudformation
-  #   2. Select stack: a207920-leon-prompt-comparison
-  #   3. Click "Update" (top right)
-  #   4. Choose "Replace current template" → "Upload a template file"
-  #      → Choose file → select this YAML file → Next
-  #   5. Parameters page → review/keep existing values → Next
-  #   6. Configure stack options → Next
-  #   7. Review page → scroll to bottom →
-  #      ✅ Check "I acknowledge that AWS CloudFormation might create IAM resources"
-  #   8. Click "Submit"
-  #   9. Wait for status: UPDATE_COMPLETE
-  #      (watch the "Events" tab for per-resource progress)
-  # ───────────────────────────────────────────────────────────────────────────
-
+  # ── 2. S3 BUCKET POLICY (grants CloudFront OAC read access) ────────────────
   PromptComparisonBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -101,6 +98,171 @@ Resources:
               StringEquals:
                 AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${PromptComparisonDistribution}'
 
+  # ── 3. CLOUDFRONT ORIGIN ACCESS CONTROL (OAC) ─────────────────────────────
+  PromptComparisonOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-oac'
+        Description: !Sub 'OAC for LEON prompt comparison S3 bucket (${EnvironmentName})'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # ── 4. CLOUDFRONT CACHE POLICY ────────────────────────────────────────────
+  PromptComparisonCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-cache'
+        Comment: !Sub 'Short-TTL cache for prompt comparison (${EnvironmentName})'
+        DefaultTTL: !Ref CacheTtlSeconds
+        MinTTL: 0
+        MaxTTL: 86400
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          HeadersConfig:
+            HeaderBehavior: none
+          CookiesConfig:
+            CookieBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
+
+  # ── 5. CLOUDFRONT RESPONSE HEADERS POLICY ─────────────────────────────────
+  PromptComparisonResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-headers'
+        Comment: Security headers for prompt comparison
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+            Preload: true
+          ContentTypeOptions:
+            Override: true
+          XSSProtection:
+            ModeBlock: true
+            Override: true
+            Protection: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+
+  # ── 6. CLOUDFRONT DISTRIBUTION ────────────────────────────────────────────
+  PromptComparisonDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'LEON Prompt Comparison UI (${EnvironmentName})'
+        DefaultRootObject: !Ref DefaultRootObject
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt PromptComparisonBucket.RegionalDomainName
+            OriginAccessControlId: !Ref PromptComparisonOAC
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          CachePolicyId: !Ref PromptComparisonCachePolicy
+          ResponseHeadersPolicyId: !Ref PromptComparisonResponseHeadersPolicy
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+      Tags:
+        - Key: Name
+          Value: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-cf'
+        - Key: tr:application-asset-insight-id
+          Value: !Ref ApplicationAssetInsightIdTag
+        - Key: tr:resource-owner
+          Value: !Ref ResourceOwnerTag
+        - Key: tr:environment-type
+          Value: !FindInMap [EnvironmentTypeTag, !Ref EnvironmentName, Name]
+        - Key: tr:environment-name
+          Value: !Ref EnvironmentName
+        - Key: tr:project-name
+          Value: sphinx
+
+  # ── TROUBLESHOOTING: CloudFront URL returns "Access Denied" ─────────────────
+  #
+  #   1. Check stack status
+  #      CloudFormation → your stack → Status must be CREATE_COMPLETE or
+  #      UPDATE_COMPLETE. If it's ROLLBACK or FAILED, check the "Events" tab
+  #      for the error.
+  #
+  #   2. Check CloudFront deployment status
+  #      CloudFront → your distribution → Status must be "Deployed".
+  #      If it says "In Progress", wait 5-10 minutes — distribution is still
+  #      propagating to edge locations.
+  #
+  #   3. Check the S3 bucket policy exists
+  #      S3 → a207920-leon-<env>-prompt-comparison → Permissions tab →
+  #      Bucket policy. You should see the AllowCloudFrontOAC JSON policy.
+  #      If empty, the PromptComparisonBucketPolicy resource didn't deploy —
+  #      check the CloudFormation Events tab for errors.
+  #
+  #   4. Check index.html is uploaded
+  #      S3 → your bucket → Objects tab. You should see index.html listed.
+  #      If not, upload it:
+  #        aws s3 cp index.html \
+  #          s3://a207920-leon-<env>-prompt-comparison/index.html \
+  #          --content-type "text/html; charset=utf-8" \
+  #          --region eu-west-1 --profile 'mgmt\m6127854'
+  #      Or via console: S3 → bucket → Upload → Add files → select index.html
+  #
+  #   5. Check OAC is attached to the distribution
+  #      CloudFront → your distribution → Origins tab → click the S3 origin →
+  #      "Origin access" should show the OAC name, NOT "Public" or "OAI".
+  #
+  #   6. Still broken? Invalidate the cache and retry
+  #        aws cloudfront create-invalidation \
+  #          --distribution-id <DistributionId> --paths "/*" \
+  #          --profile 'mgmt\m6127854'
+  #      Or console: CloudFront → distribution → Invalidations → Create →
+  #      Path: /* → Create. Wait ~1-2 min for Status: Completed, then retry.
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # ── HOW TO UPDATE THIS STACK FROM THE CONSOLE ──────────────────────────────
+  #
+  #   1. Go to CloudFormation:
+  #      https://eu-west-1.console.aws.amazon.com/cloudformation
+  #   2. Select stack: a207920-leon-prompt-comparison
+  #   3. Click "Update" (top right)
+  #   4. Choose "Replace current template" → "Upload a template file"
+  #      → Choose file → select this YAML file → Next
+  #   5. Parameters page → review/keep existing values → Next
+  #   6. Configure stack options → Next
+  #   7. Review page → scroll to bottom →
+  #      ✅ Check "I acknowledge that AWS CloudFormation might create IAM resources"
+  #   8. Click "Submit"
+  #   9. Wait for status: UPDATE_COMPLETE
+  #      (watch the "Events" tab for per-resource progress)
+  # ───────────────────────────────────────────────────────────────────────────
+
 Outputs:
 
   BucketName:
@@ -110,3 +272,11 @@ Outputs:
   BucketArn:
     Description: S3 bucket ARN.
     Value: !GetAtt PromptComparisonBucket.Arn
+
+  DistributionId:
+    Description: CloudFront distribution ID (for cache invalidation).
+    Value: !Ref PromptComparisonDistribution
+
+  CloudFrontUrl:
+    Description: Full HTTPS URL to access the site.
+    Value: !Sub 'https://${PromptComparisonDistribution.DomainName}'
