@@ -1,0 +1,714 @@
+# =============================================================================
+# CloudFormation Template: S3 + CloudFront — Static Site Hosting
+# =============================================================================
+#
+# USE CASE:
+#   Host the LEON Prompt Comparison UI (a single generated index.html) on S3,
+#   fronted by CloudFront for HTTPS, caching, and edge delivery.
+#   The S3 bucket is PRIVATE — only CloudFront can read it via OAC.
+#
+# ACCOUNT:  060725138335 (tr-central-preprod)
+# REGION:   eu-west-1 (Ireland)
+# ASSET ID: 207920
+#
+# =============================================================================
+#
+#   ┌─────────┐      ┌──────────────┐  OAC  ┌────────────┐
+#   │  User   │─────▶│  CloudFront  │──────▶│  S3 Bucket │
+#   │ Browser │ HTTPS│ Distribution │ sigv4 │ (private)  │
+#   └─────────┘      └──────────────┘       └────────────┘
+#
+# =============================================================================
+#
+# KEY CONCEPTS
+# =============================================================================
+#
+# ── What is CloudFront? ─────────────────────────────────────────────────────
+#
+#   CloudFront is AWS's Content Delivery Network (CDN). It caches your
+#   content at 400+ edge locations worldwide so users get fast responses
+#   from the server nearest to them instead of fetching from S3 every time.
+#
+#   In this template it:
+#     - Serves the static HTML over HTTPS (S3 alone only does HTTP)
+#     - Caches index.html at the edge (5-min TTL by default)
+#     - Compresses responses (gzip/brotli) automatically
+#     - Adds security headers (HSTS, X-Frame-Options, etc.)
+#     - Handles error pages (403/404 → serve index.html for SPA routing)
+#
+# ── What is OAC (Origin Access Control)? ────────────────────────────────────
+#
+#   OAC is the mechanism that connects CloudFront to a PRIVATE S3 bucket.
+#
+#   The problem:
+#     You want users to access your site via CloudFront, but NOT directly
+#     via the S3 URL. If you make the bucket public, anyone can bypass
+#     CloudFront and hit S3 directly (no caching, no HTTPS, no headers).
+#
+#   The solution — OAC:
+#     - The S3 bucket stays fully private (Block all public access = ON)
+#     - CloudFront signs every request to S3 using SigV4 (AWS standard auth)
+#     - The S3 bucket policy only allows requests signed by YOUR CloudFront
+#       distribution (matched by the distribution's ARN)
+#     - Result: CloudFront can read → users cannot access S3 directly
+#
+#   Three pieces wire it together:
+#     1. OAC resource        → tells CloudFront "always sign requests to S3"
+#     2. Distribution config → references the OAC via OriginAccessControlId
+#     3. S3 bucket policy    → "allow s3:GetObject only if request came from
+#                               this specific CloudFront distribution ARN"
+#
+#   OAC vs OAI (legacy):
+#     OAI (Origin Access Identity) was the old way. AWS deprecated it because:
+#     - OAI didn't support SSE-KMS encrypted buckets
+#     - OAI used a custom signing mechanism, not standard SigV4
+#     - OAI couldn't be used with Lambda@Edge POST requests
+#     OAC fixes all of these. Always use OAC for new distributions.
+#
+# ── What is a Cache Policy? ─────────────────────────────────────────────────
+#
+#   Controls what CloudFront uses as cache keys and how long it caches.
+#
+#   Key settings:
+#     - Default TTL (300s here): how long CloudFront serves cached content
+#       before re-fetching from S3. Lower = fresher content, more S3 requests.
+#     - Min/Max TTL: bounds on caching. The actual TTL is determined by
+#       the object's Cache-Control header, clamped between Min and Max.
+#     - Gzip/Brotli: CloudFront compresses responses at the edge, reducing
+#       transfer size by 60-80% for HTML/JS/CSS.
+#     - Headers/Cookies/QueryStrings: what to include in the cache key.
+#       "None" means all requests to the same path get the same cached response.
+#
+# ── What is a Response Headers Policy? ──────────────────────────────────────
+#
+#   Automatically adds HTTP security headers to every response, without
+#   modifying your HTML or needing a server. Headers added here:
+#
+#     Strict-Transport-Security (HSTS):
+#       Forces browsers to always use HTTPS for this domain.
+#       max-age=31536000 = remember for 1 year.
+#
+#     X-Content-Type-Options: nosniff
+#       Prevents browsers from MIME-sniffing (guessing) the content type.
+#       Stops attacks where a malicious file is served as a different type.
+#
+#     X-XSS-Protection: 1; mode=block
+#       Legacy XSS filter. Modern browsers use CSP instead, but this
+#       provides a safety net for older browsers.
+#
+#     X-Frame-Options: DENY
+#       Prevents the page from being loaded in an iframe.
+#       Blocks clickjacking attacks.
+#
+#     Referrer-Policy: strict-origin-when-cross-origin
+#       Controls how much URL info is sent in the Referer header.
+#       Same-origin requests get the full URL; cross-origin gets origin only.
+#
+# ── What is S3 Bucket Versioning? ──────────────────────────────────────────
+#
+#   Keeps every version of every object ever uploaded to the bucket.
+#   If you upload a new index.html, the old one is kept as a "noncurrent"
+#   version. You can restore any previous version.
+#
+#   The LifecycleConfiguration here deletes noncurrent versions after 30
+#   days to avoid unbounded storage costs.
+#
+# ── What is DeletionPolicy: Retain? ────────────────────────────────────────
+#
+#   Tells CloudFormation: "If this stack is deleted, do NOT delete the S3
+#   bucket." This is a safety net — you won't accidentally lose data by
+#   deleting the stack. You must manually empty and delete the bucket.
+#
+# =============================================================================
+#
+# COMPLETE DEPLOYMENT GUIDE
+# =============================================================================
+#
+# ── PREREQUISITE: AWS Login ─────────────────────────────────────────────────
+#
+#   CLI:
+#     cloud-tool login -u 'mgmt\m6127854' -p '<password>' \
+#       --account-id '060725138335' \
+#       --role 'human-role/a207920-PowerUser2'
+#
+#   Console:
+#     1. Go to https://console.aws.amazon.com
+#     2. Sign in → Switch Role
+#        - Account: 060725138335
+#        - Role: a207920-PowerUser2
+#     3. Set region to eu-west-1 (Ireland) in the top-right dropdown
+#
+# ── STEP 1: Deploy the CloudFormation Stack ─────────────────────────────────
+#
+#   CLI:
+#     aws cloudformation deploy \
+#       --template-file aws-case/s3-cloudfront-static-site.yaml \
+#       --stack-name a207920-leon-prompt-comparison \
+#       --region eu-west-1 \
+#       --profile 'mgmt\m6127854' \
+#       --capabilities CAPABILITY_IAM \
+#       --parameter-overrides EnvironmentName=ci
+#
+#   Console:
+#     1. Go to CloudFormation → https://eu-west-1.console.aws.amazon.com/cloudformation
+#     2. Click "Create stack" → "With new resources (standard)"
+#     3. Template source: "Upload a template file"
+#        → Choose file → select this YAML file → Next
+#     4. Stack name: a207920-leon-prompt-comparison
+#     5. Parameters:
+#        - EnvironmentName: ci  (or "test" for QA)
+#        - CacheTtlSeconds: 300  (leave default)
+#        - DefaultRootObject: index.html  (leave default)
+#     6. Click Next
+#     7. Configure stack options page → scroll down → Next
+#     8. Review page → scroll to bottom →
+#        ✅ Check "I acknowledge that AWS CloudFormation might create IAM resources"
+#     9. Click "Submit"
+#     10. Wait for status: CREATE_COMPLETE (takes ~5-10 minutes,
+#         mostly CloudFront distribution provisioning)
+#
+#   What this creates:
+#     - S3 bucket (private, versioned, encrypted)
+#     - CloudFront Origin Access Control (OAC)
+#     - CloudFront distribution with HTTPS
+#     - S3 bucket policy granting CloudFront access
+#     - Cache policy (5-min default TTL)
+#     - Security response headers (HSTS, X-Frame-Options, etc.)
+#
+# ── STEP 2: Generate the Prompt Comparison HTML ─────────────────────────────
+#
+#   CLI (from the skills repo root):
+#     cd sphinx_leon-assistant-skills
+#     python prompt-comparison/generate.py
+#
+#   This reads .jinja prompt files from develop/qa/uat/prod branches via git
+#   and produces a single self-contained index.html at:
+#     sphinx_leon-assistant-skills/prompt-comparison/index.html
+#
+# ── STEP 3: Get the S3 Bucket Name from Stack Outputs ──────────────────────
+#
+#   CLI:
+#     aws cloudformation describe-stacks \
+#       --stack-name a207920-leon-prompt-comparison \
+#       --region eu-west-1 \
+#       --profile 'mgmt\m6127854' \
+#       --query "Stacks[0].Outputs" \
+#       --output table
+#
+#   Console:
+#     1. CloudFormation → Stacks → a207920-leon-prompt-comparison
+#     2. Click "Outputs" tab
+#     3. Note the values for:
+#        - BucketName       (e.g. a207920-leon-ci-prompt-comparison)
+#        - DistributionId   (e.g. E1ABC2DEF3GHIJ)
+#        - CloudFrontUrl    (e.g. https://d1234abcdef.cloudfront.net)
+#
+# ── STEP 4: Upload index.html to S3 ────────────────────────────────────────
+#
+#   CLI:
+#     aws s3 cp prompt-comparison/index.html \
+#       s3://a207920-leon-ci-prompt-comparison/index.html \
+#       --content-type "text/html; charset=utf-8" \
+#       --cache-control "max-age=300" \
+#       --region eu-west-1 \
+#       --profile 'mgmt\m6127854'
+#
+#   Console:
+#     1. Go to S3 → https://s3.console.aws.amazon.com/s3/buckets
+#     2. Click bucket: a207920-leon-ci-prompt-comparison
+#     3. Click "Upload"
+#     4. Click "Add files" → select prompt-comparison/index.html
+#     5. (Optional) Expand "Properties" section:
+#        - Content-Type: text/html
+#        - Cache-Control: max-age=300
+#     6. Click "Upload"
+#     7. Wait for "Upload succeeded" → Close
+#
+# ── STEP 5: Verify in Browser ──────────────────────────────────────────────
+#
+#   Open the CloudFrontUrl from Step 3 in your browser:
+#     https://d1234abcdef.cloudfront.net
+#
+#   You should see the Prompt Comparison UI with all prompts loaded.
+#
+#   If you get a 403 or blank page:
+#     - Wait 5-10 minutes for CloudFront distribution to fully deploy
+#       (Status must be "Deployed" in CloudFront console, not "In Progress")
+#     - Verify index.html exists in S3 bucket
+#     - Check the S3 bucket policy was created (Permissions tab)
+#
+# ── STEP 6: Re-deploy After Content Changes ────────────────────────────────
+#
+#   When prompts change and you need to update the comparison UI:
+#
+#   CLI:
+#     # 1. Regenerate
+#     python prompt-comparison/generate.py
+#
+#     # 2. Re-upload
+#     aws s3 cp prompt-comparison/index.html \
+#       s3://a207920-leon-ci-prompt-comparison/index.html \
+#       --content-type "text/html; charset=utf-8" \
+#       --cache-control "max-age=300" \
+#       --region eu-west-1 \
+#       --profile 'mgmt\m6127854'
+#
+#     # 3. Invalidate CloudFront cache (so users see the new version immediately)
+#     aws cloudfront create-invalidation \
+#       --distribution-id <DistributionId-from-outputs> \
+#       --paths "/*" \
+#       --profile 'mgmt\m6127854'
+#
+#   Console (invalidation):
+#     1. Go to CloudFront → select your distribution
+#     2. Click "Invalidations" tab
+#     3. Click "Create invalidation"
+#     4. Object paths: /*
+#     5. Click "Create invalidation"
+#     6. Wait for Status: Completed (~1-2 minutes)
+#
+# ── STEP 7: Delete Stack (if needed) ───────────────────────────────────────
+#
+#   ⚠️  The S3 bucket has DeletionPolicy: Retain, so deleting the stack
+#       will NOT delete the bucket (safety net). You must empty and delete
+#       the bucket manually afterwards.
+#
+#   CLI:
+#     # Delete the stack (keeps the S3 bucket)
+#     aws cloudformation delete-stack \
+#       --stack-name a207920-leon-prompt-comparison \
+#       --region eu-west-1 \
+#       --profile 'mgmt\m6127854'
+#
+#     # Then manually empty and delete the bucket
+#     aws s3 rm s3://a207920-leon-ci-prompt-comparison --recursive \
+#       --region eu-west-1 --profile 'mgmt\m6127854'
+#     aws s3 rb s3://a207920-leon-ci-prompt-comparison \
+#       --region eu-west-1 --profile 'mgmt\m6127854'
+#
+#   Console:
+#     1. CloudFormation → a207920-leon-prompt-comparison → Delete
+#     2. Confirm deletion → wait for DELETE_COMPLETE
+#     3. S3 → a207920-leon-ci-prompt-comparison → "Empty" → confirm
+#     4. Then "Delete" the bucket → confirm
+#
+# =============================================================================
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  S3 + CloudFront for LEON Prompt Comparison static site.
+  Private S3 bucket with CloudFront OAC, HTTPS, security headers.
+  Account: tr-central-preprod (060725138335). Asset: 207920.
+
+# =============================================================================
+# PARAMETERS
+# =============================================================================
+# Console: These appear as form fields when you create the stack.
+#   You can leave all defaults except EnvironmentName.
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+    Description: >
+      Deployment environment stage.
+      Console: Select from dropdown — 'ci' for dev, 'test' for QA.
+    AllowedValues:
+      - ci
+      - test
+    Default: ci
+
+  DefaultRootObject:
+    Type: String
+    Description: >
+      Default page served at the root URL ("/").
+      Console: Leave as 'index.html' — this is the generated prompt comparison page.
+    Default: index.html
+
+  CacheTtlSeconds:
+    Type: Number
+    Description: >
+      CloudFront default cache TTL in seconds. 300 = 5 minutes.
+      Console: Leave as 300 — low TTL so new uploads appear quickly.
+    Default: 300
+    MinValue: 0
+    MaxValue: 86400
+
+  ApplicationAssetInsightIdTag:
+    Type: String
+    Description: >
+      TR asset insight ID for tagging/billing.
+      Console: Leave as '207920'.
+    Default: '207920'
+
+  ResourceOwnerTag:
+    Type: String
+    Description: >
+      TR resource owner email for tagging.
+      Console: Leave default or enter your team's email.
+    Default: iridium@trten.onmicrosoft.com
+
+# =============================================================================
+# MAPPINGS
+# =============================================================================
+
+Mappings:
+  EnvironmentTypeTag:
+    ci:
+      Name: DEVELOPMENT
+    test:
+      Name: QUALITY ASSURANCE
+
+# =============================================================================
+# RESOURCES
+# =============================================================================
+
+Resources:
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 1. S3 BUCKET
+  # ──────────────────────────────────────────────────────────────────────────
+  # Stores the generated index.html. Private — no public access.
+  #
+  # Console equivalent (if creating manually):
+  #   S3 → Create bucket
+  #   - Name: a207920-leon-ci-prompt-comparison
+  #   - Region: eu-west-1
+  #   - "Block all public access" = ✅ ON (all four checkboxes checked)
+  #   - Bucket Versioning: Enabled
+  #   - Default encryption: SSE-S3 (AES-256)
+  #   - Add tags (see below)
+  #   - Create bucket
+  # ──────────────────────────────────────────────────────────────────────────
+  PromptComparisonBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison'
+        - Key: tr:application-asset-insight-id
+          Value: !Ref ApplicationAssetInsightIdTag
+        - Key: tr:resource-owner
+          Value: !Ref ResourceOwnerTag
+        - Key: tr:environment-type
+          Value: !FindInMap [EnvironmentTypeTag, !Ref EnvironmentName, Name]
+        - Key: tr:environment-name
+          Value: !Ref EnvironmentName
+        - Key: tr:project-name
+          Value: sphinx
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 2. S3 BUCKET POLICY
+  # ──────────────────────────────────────────────────────────────────────────
+  # Grants CloudFront OAC permission to read objects from the bucket.
+  # Without this, CloudFront gets 403 from S3.
+  #
+  # Console equivalent (if creating manually):
+  #   S3 → your bucket → Permissions tab → Bucket policy → Edit
+  #   Paste the JSON policy below (replacing the ARN placeholders).
+  #
+  #   If you created CloudFront via console, it shows a yellow banner:
+  #   "The S3 bucket policy needs to be updated" with a "Copy policy"
+  #   button — use that and paste it here.
+  # ──────────────────────────────────────────────────────────────────────────
+  PromptComparisonBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PromptComparisonBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${PromptComparisonBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${PromptComparisonDistribution}'
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 3. CLOUDFRONT ORIGIN ACCESS CONTROL (OAC)
+  # ──────────────────────────────────────────────────────────────────────────
+  # OAC replaces the legacy Origin Access Identity (OAI).
+  # It lets CloudFront sign S3 requests using SigV4 without making
+  # the bucket public.
+  #
+  # Console equivalent (if creating manually):
+  #   CloudFront → left sidebar → "Origin access"
+  #   → "Control settings" tab → "Create control setting"
+  #   - Name: a207920-leon-ci-prompt-comparison-oac
+  #   - Description: OAC for prompt comparison S3 bucket
+  #   - Signing behavior: Sign requests (recommended)
+  #   - Origin type: S3
+  #   → Create
+  # ──────────────────────────────────────────────────────────────────────────
+  PromptComparisonOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-oac'
+        Description: !Sub 'OAC for LEON prompt comparison S3 bucket (${EnvironmentName})'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 4. CLOUDFRONT CACHE POLICY
+  # ──────────────────────────────────────────────────────────────────────────
+  # Controls how long CloudFront caches the HTML before re-fetching from S3.
+  # Default TTL = 300s (5 min) — low so new uploads appear quickly.
+  #
+  # Console equivalent (if creating manually):
+  #   CloudFront → Policies (left sidebar) → Cache tab
+  #   → "Create cache policy"
+  #   - Name: a207920-leon-ci-prompt-comparison-cache
+  #   - Minimum TTL: 0
+  #   - Maximum TTL: 86400
+  #   - Default TTL: 300
+  #   - Gzip: ✅  Brotli: ✅
+  #   - Headers: None
+  #   - Cookies: None
+  #   - Query strings: None
+  #   → Create
+  # ──────────────────────────────────────────────────────────────────────────
+  PromptComparisonCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-cache'
+        Comment: !Sub 'Short-TTL cache for prompt comparison (${EnvironmentName})'
+        DefaultTTL: !Ref CacheTtlSeconds
+        MinTTL: 0
+        MaxTTL: 86400
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          HeadersConfig:
+            HeaderBehavior: none
+          CookiesConfig:
+            CookieBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 5. CLOUDFRONT RESPONSE HEADERS POLICY
+  # ──────────────────────────────────────────────────────────────────────────
+  # Adds security headers to every response served by CloudFront.
+  #
+  # Console equivalent (if creating manually):
+  #   CloudFront → Policies → Response headers tab
+  #   → "Create response headers policy"
+  #   - Name: a207920-leon-ci-prompt-comparison-headers
+  #   - Security headers section:
+  #     - Strict-Transport-Security: ✅ max-age=31536000, includeSubDomains, preload
+  #     - X-Content-Type-Options: ✅ nosniff
+  #     - X-XSS-Protection: ✅ 1; mode=block
+  #     - X-Frame-Options: ✅ DENY
+  #     - Referrer-Policy: ✅ strict-origin-when-cross-origin
+  #   → Create
+  # ──────────────────────────────────────────────────────────────────────────
+  PromptComparisonResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-headers'
+        Comment: Security headers for prompt comparison
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+            Preload: true
+          ContentTypeOptions:
+            Override: true
+          XSSProtection:
+            ModeBlock: true
+            Override: true
+            Protection: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 6. CLOUDFRONT DISTRIBUTION
+  # ──────────────────────────────────────────────────────────────────────────
+  # The CDN distribution that serves the static site to users.
+  # Connects to S3 via OAC, uses the cache policy and headers policy above.
+  #
+  # Console equivalent (if creating manually):
+  #   CloudFront → "Create distribution"
+  #
+  #   Origin settings:
+  #   - Origin domain: a207920-leon-ci-prompt-comparison.s3.eu-west-1.amazonaws.com
+  #     (select from dropdown — pick the S3 bucket, NOT the website endpoint)
+  #   - Origin access: "Origin access control settings (recommended)"
+  #     → Select the OAC created above
+  #   - Leave "Add custom header" empty
+  #
+  #   Default cache behavior:
+  #   - Viewer protocol policy: "Redirect HTTP to HTTPS"
+  #   - Allowed HTTP methods: GET, HEAD, OPTIONS
+  #   - Cache policy: select "a207920-leon-ci-prompt-comparison-cache" (custom)
+  #     OR use "CachingOptimized" (managed, 24hr TTL)
+  #   - Response headers policy: select "a207920-leon-ci-prompt-comparison-headers"
+  #   - Compress objects automatically: Yes
+  #
+  #   Settings:
+  #   - Price class: "Use only North America and Europe" (PriceClass_100)
+  #   - Default root object: index.html
+  #   - Description: LEON Prompt Comparison UI (ci)
+  #   - HTTP version: HTTP/2 and HTTP/3
+  #
+  #   Tags: (same as bucket)
+  #
+  #   → Create distribution
+  #
+  #   ⚠️ IMPORTANT: After creation, AWS shows a yellow banner:
+  #      "The S3 bucket policy needs to be updated"
+  #      Click "Copy policy" → go to S3 bucket → Permissions → Bucket policy
+  #      → Edit → paste → Save changes.
+  #      (CloudFormation handles this automatically via the BucketPolicy resource)
+  #
+  #   Wait ~5-10 minutes for Status to change from "In Progress" to "Deployed"
+  # ──────────────────────────────────────────────────────────────────────────
+  PromptComparisonDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'LEON Prompt Comparison UI (${EnvironmentName})'
+        DefaultRootObject: !Ref DefaultRootObject
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt PromptComparisonBucket.RegionalDomainName
+            OriginAccessControlId: !Ref PromptComparisonOAC
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          CachePolicyId: !Ref PromptComparisonCachePolicy
+          ResponseHeadersPolicyId: !Ref PromptComparisonResponseHeadersPolicy
+        CustomErrorResponses:
+          # SPA-style fallback: if S3 returns 403/404 (object not found),
+          # serve index.html with 200 so client-side hash routing works.
+          #
+          # Console: CloudFront → distribution → "Error pages" tab
+          #   → "Create custom error response"
+          #   - HTTP error code: 403 → Response page path: /index.html
+          #     → HTTP response code: 200 → Error caching min TTL: 10
+          #   - Repeat for 404
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+      Tags:
+        - Key: Name
+          Value: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-cf'
+        - Key: tr:application-asset-insight-id
+          Value: !Ref ApplicationAssetInsightIdTag
+        - Key: tr:resource-owner
+          Value: !Ref ResourceOwnerTag
+        - Key: tr:environment-type
+          Value: !FindInMap [EnvironmentTypeTag, !Ref EnvironmentName, Name]
+        - Key: tr:environment-name
+          Value: !Ref EnvironmentName
+        - Key: tr:project-name
+          Value: sphinx
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
+# After stack creation, these values appear in the "Outputs" tab.
+#
+# Console: CloudFormation → your stack → "Outputs" tab
+# CLI:     aws cloudformation describe-stacks --stack-name a207920-leon-prompt-comparison \
+#            --query "Stacks[0].Outputs" --output table
+
+Outputs:
+
+  BucketName:
+    Description: >
+      S3 bucket name. Upload index.html here after generating:
+        aws s3 cp prompt-comparison/index.html s3://<BucketName>/index.html \
+          --content-type "text/html; charset=utf-8" --cache-control "max-age=300" \
+          --region eu-west-1 --profile 'mgmt\m6127854'
+      Console: S3 → this bucket → Upload → select index.html → Upload
+    Value: !Ref PromptComparisonBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-bucket-name'
+
+  BucketArn:
+    Description: >
+      S3 bucket ARN. Use in IAM policies if setting up CI/CD auto-deploy.
+    Value: !GetAtt PromptComparisonBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-bucket-arn'
+
+  DistributionId:
+    Description: >
+      CloudFront distribution ID. Use to invalidate cache after re-uploading:
+        aws cloudfront create-invalidation \
+          --distribution-id <DistributionId> --paths "/*" \
+          --profile 'mgmt\m6127854'
+      Console: CloudFront → distribution → Invalidations → Create invalidation
+        → Path: /* → Create
+    Value: !Ref PromptComparisonDistribution
+    Export:
+      Name: !Sub '${AWS::StackName}-distribution-id'
+
+  DistributionDomainName:
+    Description: >
+      CloudFront domain name (e.g. d1234abcdef.cloudfront.net).
+      This is the auto-assigned domain. To use a custom domain, add an
+      Alias + ACM certificate to the distribution config.
+    Value: !GetAtt PromptComparisonDistribution.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-distribution-domain'
+
+  CloudFrontUrl:
+    Description: >
+      Full HTTPS URL — open this in a browser to access the prompt comparison UI.
+      Console: CloudFront → your distribution → copy "Distribution domain name"
+    Value: !Sub 'https://${PromptComparisonDistribution.DomainName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-url'
