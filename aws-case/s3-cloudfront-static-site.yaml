@@ -357,7 +357,7 @@ Description: >
 
 Parameters:                                  # Input variables — user provides values when creating/updating the stack
 
-  EnvironmentName:                           # Parameter: which environment to deploy to
+  EnvironmentName:                           # Parameter: which environment to deploy to (this name is user-defined — can be anything like Stage, Env, etc. — just match it in !Ref and !Sub)
     Type: String                             # Data type — accepts text input
     Description: >                           # > = YAML folded scalar — joins the following indented lines into one string
       Deployment environment stage.
