@@ -496,9 +496,80 @@ Resources:
   #     ]
   #   }
   #
-  #   If you created CloudFront via console, it shows a yellow banner:
-  #   "The S3 bucket policy needs to be updated" with a "Copy policy"
-  #   button — use that and paste it here.
+  #   HOW TO GET THE VALUES FOR THIS POLICY (when creating manually):
+  #
+  #   ── Getting the S3 Bucket ARN ──────────────────────────────────────────
+  #
+  #     Option A — From the S3 Console:
+  #       1. Go to S3 → https://s3.console.aws.amazon.com/s3/buckets
+  #       2. Click your bucket name (e.g. a207920-leon-ci-prompt-comparison)
+  #       3. Click "Properties" tab
+  #       4. At the very top, you see:
+  #          Amazon Resource Name (ARN): arn:aws:s3:::a207920-leon-ci-prompt-comparison
+  #       5. Click the copy icon next to it
+  #       6. In the policy, use this as Resource with /* appended:
+  #          "Resource": "arn:aws:s3:::a207920-leon-ci-prompt-comparison/*"
+  #
+  #     Option B — You already know it (it's always this pattern):
+  #       arn:aws:s3:::<bucket-name>/*
+  #       e.g. arn:aws:s3:::a207920-leon-ci-prompt-comparison/*
+  #
+  #   ── Getting the CloudFront Distribution ARN ────────────────────────────
+  #
+  #     Option A — From the CloudFront Console:
+  #       1. Go to CloudFront → https://console.aws.amazon.com/cloudfront
+  #       2. Click your distribution ID (e.g. E1ABC2DEF3GHIJ)
+  #       3. On the "General" tab, find:
+  #          ARN: arn:aws:cloudfront::060725138335:distribution/E1ABC2DEF3GHIJ
+  #       4. Click the copy icon
+  #       5. In the policy, use this as the Condition value:
+  #          "AWS:SourceArn": "arn:aws:cloudfront::060725138335:distribution/E1ABC2DEF3GHIJ"
+  #
+  #     Option B — Build it yourself:
+  #       arn:aws:cloudfront::<ACCOUNT_ID>:distribution/<DISTRIBUTION_ID>
+  #       - Account ID: shown in top-right corner of AWS Console (e.g. 060725138335)
+  #       - Distribution ID: shown in CloudFront → Distributions list (e.g. E1ABC2DEF3GHIJ)
+  #
+  #   ── Easiest Method: Use CloudFront's Auto-Generated Policy ─────────────
+  #
+  #     When you create a CloudFront distribution with OAC via the console,
+  #     AWS automatically generates the correct bucket policy for you:
+  #
+  #       1. Create the CloudFront distribution (see Section 6 below)
+  #          - Set origin to your S3 bucket
+  #          - Set "Origin access" to "Origin access control settings"
+  #          - Select or create an OAC
+  #       2. After creation, a yellow banner appears at the top:
+  #          ┌────────────────────────────────────────────────────────────┐
+  #          │ ⚠️ The S3 bucket policy needs to be updated.              │
+  #          │                                                           │
+  #          │ S3 bucket access — Needs to update the S3 bucket policy   │
+  #          │ to allow CloudFront service principal to access the S3    │
+  #          │ bucket.                                                   │
+  #          │                                                           │
+  #          │                              [Copy policy]                │
+  #          └────────────────────────────────────────────────────────────┘
+  #       3. Click "Copy policy" — this copies the COMPLETE JSON policy
+  #          with all ARNs already filled in
+  #       4. Go to S3 → your bucket → "Permissions" tab
+  #       5. Scroll to "Bucket policy" → click "Edit"
+  #       6. Paste the copied policy → click "Save changes"
+  #       7. Done — CloudFront can now read from S3
+  #
+  #   ── Complete Manual Steps (no CloudFormation) ──────────────────────────
+  #
+  #     If you're doing everything manually without CloudFormation:
+  #
+  #     Step 1: Create S3 Bucket (if not already created)
+  #     Step 2: Create CloudFront Distribution with OAC
+  #     Step 3: Copy the auto-generated policy from CloudFront banner
+  #             OR build it manually using the ARNs above
+  #     Step 4: Paste into S3 → Bucket → Permissions → Bucket policy → Edit
+  #     Step 5: Save — verify CloudFront can now serve your content
+  #
+  #   ⚠️  NOTE: With CloudFormation (this template), all of this is automatic.
+  #       The BucketPolicy resource below wires the ARNs using !Sub and !Ref,
+  #       so you never need to copy/paste anything manually.
   # ──────────────────────────────────────────────────────────────────────────
   PromptComparisonBucketPolicy:
     Type: AWS::S3::BucketPolicy             # AWS resource type — attaches an access policy to an S3 bucket
