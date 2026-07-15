@@ -355,58 +355,58 @@ Description: >
 # Console: These appear as form fields when you create the stack.
 #   You can leave all defaults except EnvironmentName.
 
-Parameters:
+Parameters:                                  # Input variables — user provides values when creating/updating the stack
 
-  EnvironmentName:
-    Type: String
-    Description: >
+  EnvironmentName:                           # Parameter: which environment to deploy to
+    Type: String                             # Data type — accepts text input
+    Description: >                           # > = YAML folded scalar — joins the following indented lines into one string
       Deployment environment stage.
       Console: Select from dropdown — 'ci' for dev, 'test' for QA.
-    AllowedValues:
-      - ci
-      - test
-    Default: ci
+    AllowedValues:                           # Restrict input to only these values — console shows a dropdown
+      - ci                                   # CI = development environment
+      - test                                 # Test = QA environment
+    Default: ci                              # Pre-filled value if user doesn't change it
 
-  DefaultRootObject:
+  DefaultRootObject:                         # Parameter: the default page served at "/"
     Type: String
     Description: >
       Default page served at the root URL ("/").
       Console: Leave as 'index.html' — this is the generated prompt comparison page.
-    Default: index.html
+    Default: index.html                      # CloudFront serves this file when user visits the root URL
 
-  CacheTtlSeconds:
-    Type: Number
+  CacheTtlSeconds:                           # Parameter: how long CloudFront caches before re-fetching from S3
+    Type: Number                             # Data type — accepts numeric input
     Description: >
       CloudFront default cache TTL in seconds. 300 = 5 minutes.
       Console: Leave as 300 — low TTL so new uploads appear quickly.
-    Default: 300
-    MinValue: 0
-    MaxValue: 86400
+    Default: 300                             # 5 minutes — balance between freshness and reducing S3 requests
+    MinValue: 0                              # Minimum allowed — 0 means no caching (always fetch from S3)
+    MaxValue: 86400                          # Maximum allowed — 86400 seconds = 24 hours
 
-  ApplicationAssetInsightIdTag:
+  ApplicationAssetInsightIdTag:              # Parameter: TR asset ID used for billing/tracking
     Type: String
     Description: >
       TR asset insight ID for tagging/billing.
       Console: Leave as '207920'.
-    Default: '207920'
+    Default: '207920'                        # Thomson Reuters asset insight ID for this project
 
-  ResourceOwnerTag:
+  ResourceOwnerTag:                          # Parameter: email of the team responsible for these resources
     Type: String
     Description: >
       TR resource owner email for tagging.
       Console: Leave default or enter your team's email.
-    Default: iridium@trten.onmicrosoft.com
+    Default: iridium@trten.onmicrosoft.com   # Iridium team email — shown in AWS resource tags for ownership
 
 # =============================================================================
 # MAPPINGS
 # =============================================================================
 
-Mappings:
-  EnvironmentTypeTag:
-    ci:
-      Name: DEVELOPMENT
-    test:
-      Name: QUALITY ASSURANCE
+Mappings:                                    # Static lookup tables — used by !FindInMap to convert values
+  EnvironmentTypeTag:                        # Maps environment short names to TR-standard environment type labels
+    ci:                                      # When EnvironmentName = "ci"...
+      Name: DEVELOPMENT                      # ...the environment type tag is "DEVELOPMENT"
+    test:                                    # When EnvironmentName = "test"...
+      Name: QUALITY ASSURANCE                # ...the environment type tag is "QUALITY ASSURANCE"
 
 # =============================================================================
 # RESOURCES
@@ -430,40 +430,40 @@ Resources:
   #   - Create bucket
   # ──────────────────────────────────────────────────────────────────────────
   PromptComparisonBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+    Type: AWS::S3::Bucket                # The AWS resource type — creates an S3 bucket
+    DeletionPolicy: Retain               # If the stack is deleted, KEEP the bucket (safety net — won't lose data)
+    UpdateReplacePolicy: Retain          # If CloudFormation needs to replace the bucket (e.g. name change), keep the old one
     Properties:
-      BucketName: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison'
-      BucketEncryption:
+      BucketName: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison'  # !Sub = string substitution — injects the EnvironmentName parameter value
+      BucketEncryption:                  # Encrypt all objects stored in the bucket at rest
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+              SSEAlgorithm: AES256       # Use S3-managed AES-256 encryption (free, automatic, no KMS key needed)
+      PublicAccessBlockConfiguration:    # Lock down public access — 4 independent guards, ALL set to true
+        BlockPublicAcls: true            # Reject any PUT that tries to add a public ACL to an object
+        BlockPublicPolicy: true          # Reject any bucket policy that would grant public access
+        IgnorePublicAcls: true           # Even if a public ACL exists, S3 ignores it
+        RestrictPublicBuckets: true      # Restricts access to the bucket to only AWS service principals and authorized users
       VersioningConfiguration:
-        Status: Enabled
-      LifecycleConfiguration:
+        Status: Enabled                  # Keep every version of every uploaded object — lets you rollback to a previous index.html
+      LifecycleConfiguration:            # Automatic cleanup rules to manage storage costs
         Rules:
-          - Id: DeleteOldVersions
-            Status: Enabled
+          - Id: DeleteOldVersions        # Rule name (for identification in console)
+            Status: Enabled              # Rule is active
             NoncurrentVersionExpiration:
-              NoncurrentDays: 30
-      Tags:
-        - Key: Name
+              NoncurrentDays: 30         # Delete old versions after 30 days — keeps costs down while allowing rollback window
+      Tags:                              # Metadata tags for billing, ownership, and organization
+        - Key: Name                      # Human-readable name (shows in S3 console)
           Value: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison'
-        - Key: tr:application-asset-insight-id
-          Value: !Ref ApplicationAssetInsightIdTag
-        - Key: tr:resource-owner
+        - Key: tr:application-asset-insight-id  # TR billing/asset tracking ID
+          Value: !Ref ApplicationAssetInsightIdTag                # !Ref = reference — pulls the parameter value
+        - Key: tr:resource-owner         # Team email responsible for this resource
           Value: !Ref ResourceOwnerTag
-        - Key: tr:environment-type
-          Value: !FindInMap [EnvironmentTypeTag, !Ref EnvironmentName, Name]
-        - Key: tr:environment-name
+        - Key: tr:environment-type       # DEVELOPMENT or QUALITY ASSURANCE
+          Value: !FindInMap [EnvironmentTypeTag, !Ref EnvironmentName, Name]  # !FindInMap = lookup from the Mappings section
+        - Key: tr:environment-name       # Raw environment name (ci or test)
           Value: !Ref EnvironmentName
-        - Key: tr:project-name
+        - Key: tr:project-name           # Project name for grouping resources
           Value: sphinx
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -481,21 +481,21 @@ Resources:
   #   button — use that and paste it here.
   # ──────────────────────────────────────────────────────────────────────────
   PromptComparisonBucketPolicy:
-    Type: AWS::S3::BucketPolicy
+    Type: AWS::S3::BucketPolicy             # AWS resource type — attaches an access policy to an S3 bucket
     Properties:
-      Bucket: !Ref PromptComparisonBucket
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: AllowCloudFrontOAC
-            Effect: Allow
-            Principal:
-              Service: cloudfront.amazonaws.com
-            Action: s3:GetObject
-            Resource: !Sub '${PromptComparisonBucket.Arn}/*'
-            Condition:
-              StringEquals:
-                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${PromptComparisonDistribution}'
+      Bucket: !Ref PromptComparisonBucket    # !Ref = reference — points to the bucket resource defined above
+      PolicyDocument:                        # The IAM policy document (JSON-like structure in YAML)
+        Version: '2012-10-17'                # IAM policy language version (always this date — it's a format version, not today's date)
+        Statement:                           # Array of permission rules
+          - Sid: AllowCloudFrontOAC          # Statement ID — human-readable label for this rule
+            Effect: Allow                    # Allow (grant access) — the alternative is Deny
+            Principal:                       # WHO is allowed — in this case, the CloudFront service itself
+              Service: cloudfront.amazonaws.com  # AWS service principal — only CloudFront can use this policy
+            Action: s3:GetObject             # WHAT action is allowed — reading objects from the bucket
+            Resource: !Sub '${PromptComparisonBucket.Arn}/*'  # WHICH objects — all objects (*) in this bucket's ARN
+            Condition:                       # Extra guard — even CloudFront must prove it's OUR distribution
+              StringEquals:                  # Condition type — exact string match required
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${PromptComparisonDistribution}'  # Only requests from THIS specific CloudFront distribution are allowed
 
   # ──────────────────────────────────────────────────────────────────────────
   # 3. CLOUDFRONT ORIGIN ACCESS CONTROL (OAC)
@@ -514,14 +514,14 @@ Resources:
   #   → Create
   # ──────────────────────────────────────────────────────────────────────────
   PromptComparisonOAC:
-    Type: AWS::CloudFront::OriginAccessControl
+    Type: AWS::CloudFront::OriginAccessControl  # AWS resource type — creates an Origin Access Control for CloudFront
     Properties:
-      OriginAccessControlConfig:
-        Name: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-oac'
-        Description: !Sub 'OAC for LEON prompt comparison S3 bucket (${EnvironmentName})'
-        OriginAccessControlOriginType: s3
-        SigningBehavior: always
-        SigningProtocol: sigv4
+      OriginAccessControlConfig:             # Configuration block for the OAC settings
+        Name: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-oac'  # Unique name for this OAC — !Sub injects the environment
+        Description: !Sub 'OAC for LEON prompt comparison S3 bucket (${EnvironmentName})'  # Human-readable description shown in CloudFront console
+        OriginAccessControlOriginType: s3    # Origin type — tells CloudFront this OAC is for an S3 bucket (vs. MediaStore, Lambda URL, etc.)
+        SigningBehavior: always              # Always sign requests to S3 — even if the bucket allows public access (defense in depth)
+        SigningProtocol: sigv4               # Use AWS Signature Version 4 — the standard AWS request authentication method
 
   # ──────────────────────────────────────────────────────────────────────────
   # 4. CLOUDFRONT CACHE POLICY
@@ -543,23 +543,23 @@ Resources:
   #   → Create
   # ──────────────────────────────────────────────────────────────────────────
   PromptComparisonCachePolicy:
-    Type: AWS::CloudFront::CachePolicy
+    Type: AWS::CloudFront::CachePolicy      # AWS resource type — defines how CloudFront caches content
     Properties:
-      CachePolicyConfig:
-        Name: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-cache'
-        Comment: !Sub 'Short-TTL cache for prompt comparison (${EnvironmentName})'
-        DefaultTTL: !Ref CacheTtlSeconds
-        MinTTL: 0
-        MaxTTL: 86400
-        ParametersInCacheKeyAndForwardedToOrigin:
-          EnableAcceptEncodingGzip: true
-          EnableAcceptEncodingBrotli: true
-          HeadersConfig:
-            HeaderBehavior: none
-          CookiesConfig:
-            CookieBehavior: none
-          QueryStringsConfig:
-            QueryStringBehavior: none
+      CachePolicyConfig:                     # Configuration block for the cache policy settings
+        Name: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-cache'  # Unique name — shown in CloudFront Policies console
+        Comment: !Sub 'Short-TTL cache for prompt comparison (${EnvironmentName})'  # Description shown in the console
+        DefaultTTL: !Ref CacheTtlSeconds     # Default cache duration (300s = 5 min) — !Ref pulls from the Parameters section
+        MinTTL: 0                            # Minimum TTL — allows Cache-Control: no-cache to bypass cache entirely
+        MaxTTL: 86400                        # Maximum TTL (24 hours) — caps how long CloudFront can cache even if origin says longer
+        ParametersInCacheKeyAndForwardedToOrigin:  # Controls what makes each cached response unique (the "cache key")
+          EnableAcceptEncodingGzip: true      # Serve gzip-compressed version if browser supports it — reduces transfer size ~60-80%
+          EnableAcceptEncodingBrotli: true    # Serve brotli-compressed version if supported — even better compression than gzip
+          HeadersConfig:                     # Which HTTP headers to include in the cache key
+            HeaderBehavior: none             # None — all requests to the same path get the same cached response regardless of headers
+          CookiesConfig:                     # Which cookies to include in the cache key
+            CookieBehavior: none             # None — cookies are ignored for caching (static site has no user-specific content)
+          QueryStringsConfig:                # Which query string parameters to include in the cache key
+            QueryStringBehavior: none        # None — ?foo=bar and ?foo=baz both get the same cached response
 
   # ──────────────────────────────────────────────────────────────────────────
   # 5. CLOUDFRONT RESPONSE HEADERS POLICY
@@ -579,29 +579,29 @@ Resources:
   #   → Create
   # ──────────────────────────────────────────────────────────────────────────
   PromptComparisonResponseHeadersPolicy:
-    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Type: AWS::CloudFront::ResponseHeadersPolicy  # AWS resource type — adds HTTP headers to every CloudFront response
     Properties:
-      ResponseHeadersPolicyConfig:
-        Name: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-headers'
-        Comment: Security headers for prompt comparison
-        SecurityHeadersConfig:
-          StrictTransportSecurity:
-            AccessControlMaxAgeSec: 31536000
-            IncludeSubdomains: true
-            Override: true
-            Preload: true
-          ContentTypeOptions:
-            Override: true
-          XSSProtection:
-            ModeBlock: true
-            Override: true
-            Protection: true
-          FrameOptions:
-            FrameOption: DENY
-            Override: true
-          ReferrerPolicy:
-            ReferrerPolicy: strict-origin-when-cross-origin
-            Override: true
+      ResponseHeadersPolicyConfig:           # Configuration block for the response headers policy
+        Name: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-headers'  # Unique name — shown in CloudFront Policies console
+        Comment: Security headers for prompt comparison  # Description shown in the console
+        SecurityHeadersConfig:               # Block of security-related HTTP headers to inject
+          StrictTransportSecurity:            # HSTS — forces browsers to always use HTTPS for this domain
+            AccessControlMaxAgeSec: 31536000  # Browser remembers "always use HTTPS" for 1 year (31536000 seconds)
+            IncludeSubdomains: true           # Apply HSTS to all subdomains too (e.g. api.example.com)
+            Override: true                   # Override any HSTS header the origin (S3) might set — CloudFront's wins
+            Preload: true                    # Eligible for browser HSTS preload lists — HTTPS enforced before first visit
+          ContentTypeOptions:                # X-Content-Type-Options header
+            Override: true                   # Sets "nosniff" — prevents browser from guessing (MIME-sniffing) content type
+          XSSProtection:                     # X-XSS-Protection header — legacy browser XSS filter
+            ModeBlock: true                  # mode=block — if XSS detected, block the entire page (don't try to sanitize)
+            Override: true                   # Override any X-XSS-Protection header from the origin
+            Protection: true                 # Enable the XSS filter (sets the header value to "1")
+          FrameOptions:                      # X-Frame-Options header — controls iframe embedding
+            FrameOption: DENY                # DENY — page cannot be loaded in any iframe (prevents clickjacking attacks)
+            Override: true                   # Override any X-Frame-Options header from the origin
+          ReferrerPolicy:                    # Referrer-Policy header — controls what URL info is sent in the Referer header
+            ReferrerPolicy: strict-origin-when-cross-origin  # Same-origin gets full URL; cross-origin gets origin only (no path)
+            Override: true                   # Override any Referrer-Policy header from the origin
 
   # ──────────────────────────────────────────────────────────────────────────
   # 6. CLOUDFRONT DISTRIBUTION
@@ -646,34 +646,34 @@ Resources:
   #   Wait ~5-10 minutes for Status to change from "In Progress" to "Deployed"
   # ──────────────────────────────────────────────────────────────────────────
   PromptComparisonDistribution:
-    Type: AWS::CloudFront::Distribution
+    Type: AWS::CloudFront::Distribution      # AWS resource type — creates a CloudFront CDN distribution
     Properties:
-      DistributionConfig:
-        Enabled: true
-        Comment: !Sub 'LEON Prompt Comparison UI (${EnvironmentName})'
-        DefaultRootObject: !Ref DefaultRootObject
-        HttpVersion: http2and3
-        PriceClass: PriceClass_100
-        Origins:
-          - Id: S3Origin
-            DomainName: !GetAtt PromptComparisonBucket.RegionalDomainName
-            OriginAccessControlId: !Ref PromptComparisonOAC
-            S3OriginConfig:
-              OriginAccessIdentity: ''
-        DefaultCacheBehavior:
-          TargetOriginId: S3Origin
-          ViewerProtocolPolicy: redirect-to-https
-          AllowedMethods:
-            - GET
-            - HEAD
-            - OPTIONS
-          CachedMethods:
-            - GET
-            - HEAD
-          Compress: true
-          CachePolicyId: !Ref PromptComparisonCachePolicy
-          ResponseHeadersPolicyId: !Ref PromptComparisonResponseHeadersPolicy
-        CustomErrorResponses:
+      DistributionConfig:                    # Main configuration block for the distribution
+        Enabled: true                        # Distribution is active and serving traffic (false = disabled, returns 403)
+        Comment: !Sub 'LEON Prompt Comparison UI (${EnvironmentName})'  # Description shown in CloudFront console
+        DefaultRootObject: !Ref DefaultRootObject  # Page served when user hits "/" — pulls "index.html" from Parameters
+        HttpVersion: http2and3               # Support HTTP/2 (multiplexed) and HTTP/3 (QUIC/UDP) — fastest protocols
+        PriceClass: PriceClass_100           # Edge locations in North America + Europe only — cheapest tier, sufficient for internal tool
+        Origins:                             # List of content sources (where CloudFront fetches from)
+          - Id: S3Origin                     # Unique ID for this origin — referenced by cache behaviors below
+            DomainName: !GetAtt PromptComparisonBucket.RegionalDomainName  # !GetAtt = get attribute — S3 bucket's regional URL (e.g. bucket.s3.eu-west-1.amazonaws.com)
+            OriginAccessControlId: !Ref PromptComparisonOAC  # Attach the OAC — tells CloudFront to sign requests to S3 with SigV4
+            S3OriginConfig:                  # S3-specific origin configuration
+              OriginAccessIdentity: ''       # Empty string — required when using OAC (OAI is legacy; we use OAC instead)
+        DefaultCacheBehavior:                # How CloudFront handles requests that don't match any specific path pattern
+          TargetOriginId: S3Origin           # Route all requests to the S3Origin defined above
+          ViewerProtocolPolicy: redirect-to-https  # If user visits HTTP, automatically redirect to HTTPS (secure by default)
+          AllowedMethods:                    # HTTP methods CloudFront will accept from viewers
+            - GET                            # Read content
+            - HEAD                           # Read headers only (used by browsers for cache validation)
+            - OPTIONS                        # CORS preflight requests
+          CachedMethods:                     # Which of the allowed methods CloudFront will cache responses for
+            - GET                            # Cache GET responses
+            - HEAD                           # Cache HEAD responses
+          Compress: true                     # CloudFront compresses responses at the edge (gzip/brotli) if viewer supports it
+          CachePolicyId: !Ref PromptComparisonCachePolicy  # Use our custom cache policy (5-min TTL, gzip/brotli)
+          ResponseHeadersPolicyId: !Ref PromptComparisonResponseHeadersPolicy  # Use our security headers policy (HSTS, X-Frame-Options, etc.)
+        CustomErrorResponses:                # Custom handling when S3 returns error codes
           # SPA-style fallback: if S3 returns 403/404 (object not found),
           # serve index.html with 200 so client-side hash routing works.
           #
@@ -682,26 +682,26 @@ Resources:
           #   - HTTP error code: 403 → Response page path: /index.html
           #     → HTTP response code: 200 → Error caching min TTL: 10
           #   - Repeat for 404
-          - ErrorCode: 403
-            ResponseCode: 200
-            ResponsePagePath: /index.html
-            ErrorCachingMinTTL: 10
-          - ErrorCode: 404
-            ResponseCode: 200
-            ResponsePagePath: /index.html
-            ErrorCachingMinTTL: 10
-      Tags:
-        - Key: Name
+          - ErrorCode: 403                   # When S3 returns 403 Forbidden (e.g. object doesn't exist in private bucket)
+            ResponseCode: 200                # CloudFront returns 200 OK to the browser instead
+            ResponsePagePath: /index.html    # Serve this page — lets client-side JavaScript handle routing
+            ErrorCachingMinTTL: 10           # Cache this error response for only 10 seconds (so new uploads appear quickly)
+          - ErrorCode: 404                   # When S3 returns 404 Not Found
+            ResponseCode: 200                # Return 200 OK instead
+            ResponsePagePath: /index.html    # Serve index.html — same SPA fallback pattern
+            ErrorCachingMinTTL: 10           # Cache for 10 seconds only
+      Tags:                                  # Metadata tags for billing, ownership, and organization
+        - Key: Name                          # Human-readable name shown in CloudFront console
           Value: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison-cf'
-        - Key: tr:application-asset-insight-id
+        - Key: tr:application-asset-insight-id  # TR billing/asset tracking ID
           Value: !Ref ApplicationAssetInsightIdTag
-        - Key: tr:resource-owner
+        - Key: tr:resource-owner             # Team email responsible for this resource
           Value: !Ref ResourceOwnerTag
-        - Key: tr:environment-type
+        - Key: tr:environment-type           # DEVELOPMENT or QUALITY ASSURANCE — looked up from Mappings
           Value: !FindInMap [EnvironmentTypeTag, !Ref EnvironmentName, Name]
-        - Key: tr:environment-name
+        - Key: tr:environment-name           # Raw environment name (ci or test)
           Value: !Ref EnvironmentName
-        - Key: tr:project-name
+        - Key: tr:project-name               # Project name for grouping resources
           Value: sphinx
 
 # =============================================================================
@@ -713,27 +713,27 @@ Resources:
 # CLI:     aws cloudformation describe-stacks --stack-name a207920-leon-prompt-comparison \
 #            --query "Stacks[0].Outputs" --output table
 
-Outputs:
+Outputs:                                   # Values exposed after stack creation — visible in console "Outputs" tab and via CLI
 
-  BucketName:
+  BucketName:                                # Output: the S3 bucket name for uploading content
     Description: >
       S3 bucket name. Upload index.html here after generating:
         aws s3 cp prompt-comparison/index.html s3://<BucketName>/index.html \
           --content-type "text/html; charset=utf-8" --cache-control "max-age=300" \
           --region eu-west-1 --profile 'mgmt\m6127854'
       Console: S3 → this bucket → Upload → select index.html → Upload
-    Value: !Ref PromptComparisonBucket
-    Export:
-      Name: !Sub '${AWS::StackName}-bucket-name'
+    Value: !Ref PromptComparisonBucket       # !Ref on an S3 bucket returns the bucket NAME (e.g. a207920-leon-ci-prompt-comparison)
+    Export:                                  # Makes this value importable by other CloudFormation stacks
+      Name: !Sub '${AWS::StackName}-bucket-name'  # Export name — other stacks can use !ImportValue to reference it
 
-  BucketArn:
+  BucketArn:                                 # Output: the S3 bucket ARN for IAM policies
     Description: >
       S3 bucket ARN. Use in IAM policies if setting up CI/CD auto-deploy.
-    Value: !GetAtt PromptComparisonBucket.Arn
+    Value: !GetAtt PromptComparisonBucket.Arn  # !GetAtt = get attribute — returns the bucket's ARN (e.g. arn:aws:s3:::a207920-leon-ci-prompt-comparison)
     Export:
-      Name: !Sub '${AWS::StackName}-bucket-arn'
+      Name: !Sub '${AWS::StackName}-bucket-arn'  # Cross-stack export name
 
-  DistributionId:
+  DistributionId:                            # Output: CloudFront distribution ID for cache invalidation
     Description: >
       CloudFront distribution ID. Use to invalidate cache after re-uploading:
         aws cloudfront create-invalidation \
@@ -741,23 +741,23 @@ Outputs:
           --profile 'mgmt\m6127854'
       Console: CloudFront → distribution → Invalidations → Create invalidation
         → Path: /* → Create
-    Value: !Ref PromptComparisonDistribution
+    Value: !Ref PromptComparisonDistribution  # !Ref on a CloudFront distribution returns the distribution ID (e.g. E1ABC2DEF3GHIJ)
     Export:
-      Name: !Sub '${AWS::StackName}-distribution-id'
+      Name: !Sub '${AWS::StackName}-distribution-id'  # Cross-stack export name
 
-  DistributionDomainName:
+  DistributionDomainName:                    # Output: the auto-assigned CloudFront domain
     Description: >
       CloudFront domain name (e.g. d1234abcdef.cloudfront.net).
       This is the auto-assigned domain. To use a custom domain, add an
       Alias + ACM certificate to the distribution config.
-    Value: !GetAtt PromptComparisonDistribution.DomainName
+    Value: !GetAtt PromptComparisonDistribution.DomainName  # !GetAtt returns the domain name attribute (e.g. d1234abcdef.cloudfront.net)
     Export:
-      Name: !Sub '${AWS::StackName}-distribution-domain'
+      Name: !Sub '${AWS::StackName}-distribution-domain'  # Cross-stack export name
 
-  CloudFrontUrl:
+  CloudFrontUrl:                             # Output: the full HTTPS URL to access the site
     Description: >
       Full HTTPS URL — open this in a browser to access the prompt comparison UI.
       Console: CloudFront → your distribution → copy "Distribution domain name"
-    Value: !Sub 'https://${PromptComparisonDistribution.DomainName}'
+    Value: !Sub 'https://${PromptComparisonDistribution.DomainName}'  # !Sub builds the full URL by prepending https:// to the domain
     Export:
-      Name: !Sub '${AWS::StackName}-url'
+      Name: !Sub '${AWS::StackName}-url'     # Cross-stack export name — other stacks can import this URL
