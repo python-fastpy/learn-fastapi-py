@@ -52,6 +52,24 @@
 #       distribution (matched by the distribution's ARN)
 #     - Result: CloudFront can read → users cannot access S3 directly
 #
+#   How it works (the request flow):
+#
+#     ┌──────────────┐                              ┌─────────┐
+#     │  CloudFront  │  GET /index.html             │   S3    │
+#     │              │  Authorization:               │         │
+#     │  (has AWS    │  AWS4-HMAC-SHA256             │ (checks │
+#     │   creds via  │  Credential=AKIA.../...      │  sig &  │
+#     │   OAC)       │  Signature=a3b9f1c...        │  allows)│
+#     └──────────────┘──────────────────────────────▶└─────────┘
+#
+#     1. CloudFront takes the request details (method, URL, headers, timestamp)
+#     2. Hashes them together using its AWS credentials (provided by OAC)
+#     3. Attaches the resulting signature to the Authorization header
+#     4. S3 receives the request, re-computes the same hash using its copy
+#        of the key
+#     5. Signatures match → request is authentic → access granted
+#     6. No signature (someone hitting S3 URL directly) → 403 denied
+#
 #   Three pieces wire it together:
 #     1. OAC resource        → tells CloudFront "always sign requests to S3"
 #     2. Distribution config → references the OAC via OriginAccessControlId
@@ -64,6 +82,37 @@
 #     - OAI used a custom signing mechanism, not standard SigV4
 #     - OAI couldn't be used with Lambda@Edge POST requests
 #     OAC fixes all of these. Always use OAC for new distributions.
+#
+# ── What is SigV4 (Signature Version 4)? ───────────────────────────────────
+#
+#   SigV4 is AWS's standard method for authenticating ALL API requests.
+#   Every AWS API call needs to prove "I'm allowed to do this" — SigV4
+#   is how that proof is generated.
+#
+#   The signing process:
+#     1. Collect request details: HTTP method, URL, headers, body, timestamp
+#     2. Build a "canonical request" string from those details
+#     3. Hash it using HMAC-SHA256 with your AWS secret access key
+#     4. Attach the resulting signature to the Authorization header:
+#        Authorization: AWS4-HMAC-SHA256 Credential=AKIA.../... Signature=a3b9f1c...
+#     5. AWS receives the request, re-computes the same hash using its
+#        copy of your key
+#     6. If the signatures match → request is authentic and authorized
+#
+#   Why "Version 4"?
+#     - SigV2 (deprecated) — simpler but less secure, only worked with
+#       some services, no region scoping
+#     - SigV4 (current)    — used by ALL AWS services, supports regions,
+#       temporary credentials (STS), and is required for all new services
+#
+#   In this template:
+#     The OAC tells CloudFront to sign every S3 request using SigV4.
+#     S3 checks the signature against the bucket policy — if it came from
+#     your specific CloudFront distribution, access is granted.
+#     No valid signature → 403 Access Denied.
+#
+#   You never write SigV4 code yourself — the AWS SDK, CLI, and services
+#   like CloudFront handle the signing automatically.
 #
 # ── What is a Cache Policy? ─────────────────────────────────────────────────
 #
