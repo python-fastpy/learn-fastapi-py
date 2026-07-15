@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: S3 bucket for LEON Prompt Comparison static site.
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+    Description: Deployment environment stage.
+    AllowedValues:
+      - ci
+      - test
+    Default: ci
+
+  ApplicationAssetInsightIdTag:
+    Type: String
+    Description: TR asset insight ID for tagging/billing.
+    Default: '207920'
+
+  ResourceOwnerTag:
+    Type: String
+    Description: TR resource owner for tagging.
+    Default: ''
+
+Mappings:
+  EnvironmentTypeTag:
+    ci:
+      Name: DEVELOPMENT
+    test:
+      Name: QUALITY ASSURANCE
+
+Resources:
+
+  PromptComparisonBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub 'a207920-leon-${EnvironmentName}-prompt-comparison'
+        - Key: tr:application-asset-insight-id
+          Value: !Ref ApplicationAssetInsightIdTag
+        - Key: tr:resource-owner
+          Value: !Ref ResourceOwnerTag
+        - Key: tr:environment-type
+          Value: !FindInMap [EnvironmentTypeTag, !Ref EnvironmentName, Name]
+        - Key: tr:environment-name
+          Value: !Ref EnvironmentName
+        - Key: tr:project-name
+          Value: sphinx
+
+  # ── HOW TO UPDATE THIS STACK FROM THE CONSOLE ──────────────────────────────
+  #
+  #   1. Go to CloudFormation:
+  #      https://eu-west-1.console.aws.amazon.com/cloudformation
+  #   2. Select stack: a207920-leon-prompt-comparison
+  #   3. Click "Update" (top right)
+  #   4. Choose "Replace current template" → "Upload a template file"
+  #      → Choose file → select this YAML file → Next
+  #   5. Parameters page → review/keep existing values → Next
+  #   6. Configure stack options → Next
+  #   7. Review page → scroll to bottom →
+  #      ✅ Check "I acknowledge that AWS CloudFormation might create IAM resources"
+  #   8. Click "Submit"
+  #   9. Wait for status: UPDATE_COMPLETE
+  #      (watch the "Events" tab for per-resource progress)
+  # ───────────────────────────────────────────────────────────────────────────
+
+  PromptComparisonBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PromptComparisonBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${PromptComparisonBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${PromptComparisonDistribution}'
+
+Outputs:
+
+  BucketName:
+    Description: S3 bucket name.
+    Value: !Ref PromptComparisonBucket
+
+  BucketArn:
+    Description: S3 bucket ARN.
+    Value: !GetAtt PromptComparisonBucket.Arn

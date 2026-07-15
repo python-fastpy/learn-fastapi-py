@@ -474,7 +474,27 @@ Resources:
   #
   # Console equivalent (if creating manually):
   #   S3 → your bucket → Permissions tab → Bucket policy → Edit
-  #   Paste the JSON policy below (replacing the ARN placeholders).
+  #   Paste the JSON policy below (replacing the ARN placeholders):
+  #
+  #   {
+  #     "Version": "2012-10-17",
+  #     "Statement": [
+  #       {
+  #         "Sid": "AllowCloudFrontOAC",
+  #         "Effect": "Allow",
+  #         "Principal": {
+  #           "Service": "cloudfront.amazonaws.com"
+  #         },
+  #         "Action": "s3:GetObject",
+  #         "Resource": "arn:aws:s3:::a207920-leon-<ENV>-prompt-comparison/*",
+  #         "Condition": {
+  #           "StringEquals": {
+  #             "AWS:SourceArn": "arn:aws:cloudfront::060725138335:distribution/<DISTRIBUTION_ID>"
+  #           }
+  #         }
+  #       }
+  #     ]
+  #   }
   #
   #   If you created CloudFront via console, it shows a yellow banner:
   #   "The S3 bucket policy needs to be updated" with a "Copy policy"
