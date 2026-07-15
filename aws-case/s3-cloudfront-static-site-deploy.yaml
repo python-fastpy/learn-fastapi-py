@@ -263,6 +263,31 @@ Resources:
   #      (watch the "Events" tab for per-resource progress)
   # ───────────────────────────────────────────────────────────────────────────
 
+  # ── HOW TO DELETE THIS STACK ───────────────────────────────────────────────
+  #
+  #   Option A: Via CLI (recommended)
+  #     aws cloudformation delete-stack \
+  #       --stack-name a207920-leon-prompt-comparison \
+  #       --region eu-west-1 \
+  #       --profile 'mgmt\m6127854'
+  #
+  #   Option B: Via Console
+  #     CloudFormation → select stack → Delete → Confirm
+  #
+  #   CloudFormation deletes in reverse-dependency order automatically:
+  #     1. Distribution (depends on CachePolicy, HeadersPolicy, OAC, Bucket)
+  #     2. BucketPolicy (depends on Bucket + Distribution)
+  #     3. CachePolicy, ResponseHeadersPolicy, OAC (freed after Distribution gone)
+  #     4. S3 Bucket — SKIPPED (DeletionPolicy: Retain keeps it)
+  #
+  #   After stack deletion, manually delete the retained S3 bucket:
+  #     aws s3 rm s3://a207920-leon-<env>-prompt-comparison --recursive \
+  #       --region eu-west-1 --profile 'mgmt\m6127854'
+  #     aws s3 rb s3://a207920-leon-<env>-prompt-comparison \
+  #       --region eu-west-1 --profile 'mgmt\m6127854'
+  #   Or console: S3 → bucket → Empty → Delete bucket
+  # ───────────────────────────────────────────────────────────────────────────
+
 Outputs:
 
   BucketName:
