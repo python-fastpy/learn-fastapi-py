@@ -1,6 +1,6 @@
 # Learn LangGraph — Step by Step
 
-12 runnable lessons building from zero to production patterns. Wired to the same TR LLM Orchestrator used by the Reuters AI Assistant skills.
+13 runnable lessons building from zero to production patterns. Wired to the same TR LLM Orchestrator used by the Reuters AI Assistant skills.
 
 ## Setup
 
@@ -43,6 +43,7 @@ uv run python 01_state_basics.py
 | 10 | `10_streaming.py` | stream modes: updates, values, messages |
 | 11 | `11_subgraphs.py` | Composing graphs, parent/child state |
 | 12 | `12_error_handling.py` | RetryPolicy, error routing, fallbacks |
+| 13 | `13_orchestrator.py` | What is an orchestrator? Building a mini orchestrator |
 
 ## How it connects to your work
 
@@ -54,6 +55,7 @@ uv run python 01_state_basics.py
 | 10 | Backend SSE streaming (`reuters-assistant_backend/src/routers/v1/chat.py`) |
 | 11 | Skill composition via MCP (each skill = subgraph) |
 | 12 | Backend retry/fallback logic |
+| 13 | `reuters-assistant_backend/src/services/langgraph_mcp_orchestrator.py` (end-to-end) |
 
 ## LLM Helper
 
