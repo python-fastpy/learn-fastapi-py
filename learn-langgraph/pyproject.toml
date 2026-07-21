@@ -1,0 +1,19 @@
+[project]
+name = "learn-langgraph"
+version = "0.1.0"
+description = "Step-by-step LangGraph learning — wired to TR LLM Orchestrator"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.4",
+    "langchain-openai>=0.3",
+    "langchain-core>=0.3",
+    "openai>=1.40",
+    "azure-identity>=1.17",
+    "python-dotenv>=1.0",
+    "pydantic>=2.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+]
