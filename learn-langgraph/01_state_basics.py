@@ -65,6 +65,15 @@ if __name__ == "__main__":
     print(app.get_graph().draw_mermaid())
     print()
 
+    # Render the graph as a PNG and open it in the default image viewer
+    import tempfile, os
+    png_data = app.get_graph().draw_mermaid_png()
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    tmp.write(png_data)
+    tmp.close()
+    os.startfile(tmp.name)
+
+
     result = app.invoke({"name": "Shubham"})
     print("=== Result ===")
     print(result)
