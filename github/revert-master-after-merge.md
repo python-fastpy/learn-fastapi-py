@@ -463,6 +463,114 @@ git reset --hard a1b2c3d      # use hash directly
 
 ---
 
+## When Master Is Protected (Cannot Push Directly)
+
+In most teams, master has branch protection rules — no direct pushes allowed.
+You must create a revert on a separate branch and raise a PR.
+
+### Why You Can't Just "Merge to Fix It"
+
+```
+You might think: "I'll create a fix branch and merge it to master to undo things."
+
+But merging ADDS commits — it doesn't remove them. There's no merge operation
+that subtracts changes. You need `git revert`, which creates a NEW commit
+that applies the inverse diff of the merge.
+```
+
+### Why "Reset on a Branch" Doesn't Work Either
+
+```
+You might think: "I'll create a branch, reset it to before the merge,
+and PR that into master."
+
+git checkout -b undo-branch master
+git reset --hard Z               # move back to before merge
+
+undo-branch:  X---Y---Z          (points to Z)
+master:       X---Y---Z---M      (points to M, which is AHEAD)
+
+PR: undo-branch → master = "Already up to date"
+
+Why? undo-branch has NO new commits that master doesn't already have.
+Z is already in master's history. The branch is BEHIND, not ahead.
+
+A PR can only merge NEW commits into master.
+It cannot move master's pointer backward.
+That's what git reset does — but you can't reset a protected branch.
+```
+
+```
+Think of it this way:
+
+  git merge  = "bring new things INTO master"   (adds commits)
+  git reset  = "move master's pointer backward"  (removes commits)
+
+  A PR does a merge. A merge can only add.
+  You can't subtract through a PR.
+
+  The only way to "subtract" through a PR is to ADD a new commit
+  that contains the INVERSE of the changes → that's git revert.
+```
+
+### Steps (PR-Based Revert Workflow)
+
+```bash
+# 1. Make sure master is up to date
+git checkout master
+git pull origin master
+
+# 2. Find the merge commit hash
+git log --oneline --merges -5
+# a1b2c3d Merge branch 'feature' into master  <-- this one
+
+# 3. Create a revert branch FROM master
+git checkout -b revert-feature-merge
+
+# 4. Revert the merge commit on this branch
+git revert -m 1 a1b2c3d
+
+# 5. Push the revert branch
+git push origin revert-feature-merge
+
+# 6. Create a PR: revert-feature-merge → master
+#    Title: "Revert: Merge branch 'feature' into master"
+#    The PR diff will show the exact inverse of what the merge added
+```
+
+### What the PR Diff Shows
+
+```
+The PR removes exactly what the feature merge added:
+  - Files added by feature     → deleted
+  - Lines added by feature     → removed
+  - Lines deleted by feature   → restored
+  - Files modified by feature  → reverted to pre-merge state
+
+Reviewers can verify: "yes, this cleanly undoes the feature merge."
+```
+
+### Visual
+
+```
+master (protected):  X---Y---Z---M
+                                  \
+revert-feature-merge:              M' (revert commit, PR into master)
+
+After PR is merged:
+master:              X---Y---Z---M---M' (clean, no force push)
+```
+
+### Key Points
+
+- The revert branch is a **throwaway** — delete it after the PR merges
+- The PR contains exactly ONE commit (the revert), making review easy
+- No force push, no history rewrite, no coordination with the team
+- Same re-merge caveat applies: to re-merge the feature later, you
+  must first revert the revert (see "Re-merging After a Revert" below)
+
+---
+
 # Comparison of All Options
 
 | Option                  | History     | Force Push? | Keep Changes? | Re-merge Later?          | Risk    | Needs `-m 1`? |
@@ -589,14 +697,150 @@ Master: X---Y---Z---M---M'(revert)
 Feature:       D--E--F   (already reachable from M, so Git skips them)
 ```
 
-## The Standard Fix (Revert the Revert)
+## The Standard Fix (Revert the Revert) — Step by Step
 
-```bash
-git revert <revert-commit-hash>   # undo the undo
-git merge feature                 # now merge again
+### Current State After the First Revert
+
+```
+git log --oneline --graph master:
+
+* r1e2v3t (HEAD -> master) Revert "Merge branch 'feature' into master"  <-- M' (revert)
+*   a1b2c3d Merge branch 'feature' into master                          <-- M  (original merge)
+|\
+| * f1e2d3c commit F
+| * e1d2c3b commit E
+| * d1c2b3a commit D
+|/
+* x9y8z7w commit Z
+
+Code state: feature changes are GONE from the files
+Git graph:  feature commits D, E, F are still REACHABLE through M
 ```
 
-This works but leaves messy history: merge → revert → revert-of-revert → re-merge.
+### Steps
+
+```bash
+# 1. Find the revert commit hash
+git log --oneline -5
+# r1e2v3t Revert "Merge branch 'feature' into master"  <-- M' (this one)
+# a1b2c3d Merge branch 'feature' into master            <-- M
+
+# 2. Revert the revert (undo the undo)
+#    This is a REGULAR revert — no -m flag needed
+#    because M' is a normal commit (1 parent), not a merge commit
+git revert r1e2v3t
+
+# 3. Feature code is now BACK in master's files
+git log --oneline -3
+# q1w2e3r Revert "Revert "Merge branch 'feature' into master""  <-- M'' (revert of revert)
+# r1e2v3t Revert "Merge branch 'feature' into master"           <-- M'
+# a1b2c3d Merge branch 'feature' into master                    <-- M
+
+# 4. Push
+git push origin master
+```
+
+### Why No `-m` Flag This Time?
+
+```
+The revert commit M' is a REGULAR commit (1 parent), not a merge commit.
+
+M  = merge commit  (2 parents: Z and F)  → needs -m 1 to pick a side
+M' = revert commit (1 parent: M)         → regular revert, no -m needed
+
+Rule: -m is ONLY for merge commits (2+ parents)
+      regular commits (1 parent) never need -m
+```
+
+### Result
+
+```
+AFTER:
+
+* q1w2e3r (HEAD -> master) Revert "Revert "Merge ..."  <-- M'' (feature code is back)
+* r1e2v3t Revert "Merge branch 'feature' into master"  <-- M'  (removed feature code)
+*   a1b2c3d Merge branch 'feature' into master          <-- M   (added feature code)
+|\
+| * f1e2d3c commit F
+| * e1d2c3b commit E
+| * d1c2b3a commit D
+|/
+* x9y8z7w commit Z
+
+Code state: feature changes D, E, F are BACK in the files
+History:    merge → revert → revert-of-revert (messy but safe)
+```
+
+### If Master Is Protected (PR-Based Revert-of-Revert)
+
+```bash
+# Can't push directly to master? Same pattern — branch + PR
+
+git checkout master
+git pull origin master
+git checkout -b revert-the-revert
+
+git revert r1e2v3t                       # revert the revert commit
+git push origin revert-the-revert
+# Create PR: revert-the-revert → master
+
+# PR diff will show: feature code being RE-ADDED to master
+```
+
+### What If You Also Have NEW Commits on the Feature Branch?
+
+```
+After the original merge + revert, you added new commits G, H to feature:
+
+Feature: D---E---F---G---H   (G, H are new work)
+
+Master:  X---Y---Z---M---M'  (M' reverted D, E, F)
+```
+
+```bash
+# Step 1: Revert the revert (brings back D, E, F)
+git checkout master
+git revert r1e2v3t
+
+# Step 2: NOW merge feature again (picks up G, H)
+git merge feature
+
+# Git already has D, E, F (restored by revert-of-revert)
+# The merge only brings in G and H (the truly new commits)
+```
+
+```
+RESULT:
+
+* m2e3r4g (HEAD -> master) Merge branch 'feature' into master  <-- M2 (brings G, H)
+|\
+| * h1g2f3e commit H (new)
+| * g1f2e3d commit G (new)
+* | q1w2e3r Revert "Revert "Merge ..."                         <-- M'' (D,E,F restored)
+* | r1e2v3t Revert "Merge ..."                                 <-- M'  (D,E,F removed)
+* | a1b2c3d Merge branch 'feature' into master                 <-- M   (D,E,F added)
+|\ \
+| |/
+| * f1e2d3c commit F
+| * e1d2c3b commit E
+| * d1c2b3a commit D
+|/
+* x9y8z7w commit Z
+```
+
+### The History Is Messy — Does It Matter?
+
+```
+merge → revert → revert-of-revert → re-merge
+
+4 commits to end up where 1 merge would have sufficed. But:
+  ✓ No force push
+  ✓ No history rewrite
+  ✓ Every step is traceable and auditable
+  ✓ Safe for shared/protected branches
+
+If clean history matters more, use the alternatives below instead.
+```
 
 ## Alternatives That Avoid the Revert-of-Revert
 
@@ -734,6 +978,120 @@ Need to re-merge a feature branch after revert?
 | Rebase feature           | Yes         | Yes                 | Yes                | Low        |
 | Squash merge             | Yes         | No (combined)       | No                 | Low        |
 | Revert-of-revert         | No          | Yes                 | No                 | Low        |
+
+---
+
+# How to Avoid the Revert-Revert Problem Entirely
+
+The revert-revert problem exists ONLY because of **merge commits**.
+A merge commit links the feature commits (D, E, F) into master's
+ancestry graph. Even after reverting, Git still "sees" them.
+
+## Use Squash Merge Instead of Merge Commit
+
+```
+MERGE COMMIT (the problem):
+
+Feature:  D---E---F
+                   \
+Master:   X---Y---Z---M          M links D, E, F into master's graph
+                     /            ↓
+              D, E, F are now    git revert -m 1 M  →  creates M'
+              reachable from M   git merge feature  →  "Already up to date"
+                                 You MUST revert the revert first
+
+
+SQUASH MERGE (no problem):
+
+Feature:  D---E---F              D, E, F are NOT in master's graph
+                                  ↓
+Master:   X---Y---Z---S          S is a brand-new commit (new hash)
+                                 git revert S  →  creates S'
+                                 git merge feature  →  WORKS (D,E,F are "new")
+```
+
+## Why This Works
+
+```
+Merge commit M:
+  - Has 2 parents (Z and F)
+  - Makes D, E, F reachable from master
+  - After revert, Git still sees D, E, F in the graph
+  - Re-merge says "Already up to date"
+
+Squash commit S:
+  - Has 1 parent (Z only)
+  - D, E, F are NOT connected to master's graph at all
+  - S is an independent commit that happens to have the same changes
+  - After revert, D, E, F are still unknown to master
+  - Re-merge works because Git sees D, E, F as fresh commits
+```
+
+## Side-by-Side Comparison
+
+```bash
+# === MERGE COMMIT workflow (has the problem) ===
+git checkout master
+git merge feature                   # creates M with 2 parents
+# oops, need to revert
+git revert -m 1 <M-hash>           # creates M', needs -m flag
+# want to re-merge later
+git merge feature                   # "Already up to date" — FAILS
+git revert <M'-hash>                # must revert the revert first
+git merge feature                   # now works (messy history)
+
+
+# === SQUASH MERGE workflow (avoids the problem) ===
+git checkout master
+git merge --squash feature          # stages changes, no commit yet
+git commit -m "Add feature"         # creates S with 1 parent
+# oops, need to revert
+git revert <S-hash>                 # creates S', no -m flag needed
+# want to re-merge later
+git merge feature                   # WORKS directly, no extra steps
+```
+
+## Tradeoff
+
+```
+Squash merge avoids revert-revert, but:
+
+✓ Simpler revert (no -m flag, no revert-of-revert)
+✓ Cleaner master history (one commit per feature)
+✓ Re-merge just works
+
+✗ Loses individual commit history on master (D, E, F → single S)
+✗ Feature branch shows as "unmerged" in Git (no ancestry link)
+✗ GitHub/GitLab may show the PR branch as not merged
+✗ Many teams mandate merge commits (not an option everywhere)
+```
+
+## If You Cannot Use Squash Merge
+
+If your team enforces merge commits, the revert-revert problem is
+unavoidable with a plain `git merge`. Your options to re-merge:
+
+```
+Must use merge commits? Need to re-merge after revert?
+│
+├── Revert the revert (standard fix above)
+│   Messy history but zero risk, no branch rewriting
+│
+├── Cherry-pick onto a new branch (Alternative 1 below)
+│   Best balance — new hashes, preserves individual commits
+│
+├── Rebase the feature branch (Alternative 2 below)
+│   Only if no one else is on the feature branch
+│
+└── Squash merge JUST the re-merge (Alternative 3 below)
+    You keep merge commits for the initial merge,
+    but use squash only for the re-merge step
+    (combines D, E, F into one commit S for the re-merge)
+```
+
+Note: Alternative 3 (squash merge) can be used ONLY for the re-merge
+step, even if your team mandates merge commits for normal PRs. The
+re-merge is a recovery operation, not a normal feature merge.
 
 ---
 
