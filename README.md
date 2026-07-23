@@ -140,6 +140,7 @@ dev = [
 | `annotations.py` | Type hints, Optional, Union, TypeVar, Protocol, generics |
 | `typeddict.py` | TypedDict, NotRequired, Required, nested, inheritance, JSON patterns |
 | `exception-handling.py` | try/except, custom exceptions, context managers, ExceptionGroup |
+| `async-await.py` | asyncio, gather, create_task, Semaphore, Lock, Event, Queue, TaskGroup |
 | `file-handling.py` | File I/O, CSV, JSON, pathlib, tempfile, shutil |
 
 ### Each file has 3 sections:
@@ -228,6 +229,7 @@ learn-fastapi-py/
 │   ├── decorators.py
 │   ├── annotations.py
 │   ├── typeddict.py
+│   ├── async-await.py
 │   ├── exception-handling.py
 │   └── file-handling.py
 ├── viewer/                     # HTML viewer
