@@ -319,3 +319,26 @@ print(search_tool({"query": "python typeddict"}))
 #    NamedTuple         → immutable, tuple-like
 #    Pydantic BaseModel → runtime validation + conversion
 # ══════════════════════════════════════════════════════════════════
+
+# ╔══════════════════════════════════════════════════╗
+# ║          INTERVIEW GOTCHAS                       ║
+# ╚══════════════════════════════════════════════════╝
+
+# ── Q: Does TypedDict validate at runtime? ──
+class StrictUser(TypedDict):
+    name: str
+    age: int
+
+wrong: StrictUser = {"name": 123, "age": "thirty"}  # type: ignore
+print(wrong)  # runs fine! {'name': 123, 'age': 'thirty'}
+# TypedDict is ONLY for type checkers — Python ignores it completely
+# For runtime validation → use Pydantic
+
+# ── Q: TypedDict vs dataclass — when to use which? ──
+# TypedDict → when data is already a dict (JSON, API responses, configs)
+# dataclass → when you want user.name (dot access), methods, immutability
+
+# ── Q: What's the difference between total=False and NotRequired? ──
+# total=False → makes ALL keys optional
+# NotRequired → makes INDIVIDUAL keys optional (more precise)
+# Use NotRequired when most keys are required but a few are optional

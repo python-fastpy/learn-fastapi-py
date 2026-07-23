@@ -645,3 +645,44 @@ asyncio.run(main())
 import os
 if os.path.exists("test_exc.txt"):
     os.remove("test_exc.txt")
+
+# ╔══════════════════════════════════════════════════╗
+# ║          INTERVIEW GOTCHAS                       ║
+# ╚══════════════════════════════════════════════════╝
+
+# ── Q: When does else run in try/except/else/finally? ──
+try:
+    x = 10 / 2
+except ZeroDivisionError:
+    print("error")       # runs ONLY if exception raised
+else:
+    print("success")     # runs ONLY if NO exception — prints this
+finally:
+    print("always")      # runs ALWAYS — even if return/break inside try
+
+# ── Q: What's wrong with bare except? ──
+# try:
+#     something()
+# except:             # catches EVERYTHING — including KeyboardInterrupt, SystemExit
+#     pass            # silently swallows ALL errors — NEVER do this
+# Better: except Exception:   # catches normal errors, lets system exits through
+
+# ── Q: Custom exception — why and how? ──
+class InsufficientFundsError(Exception):
+    def __init__(self, balance, amount):
+        self.balance = balance
+        self.amount = amount
+        super().__init__(f"Need {amount}, have {balance}")
+
+try:
+    raise InsufficientFundsError(100, 250)
+except InsufficientFundsError as e:
+    print(f"{e}, short by {e.amount - e.balance}")  # Need 250, have 100, short by 150
+
+# ── Q: raise vs raise from ──
+try:
+    int("abc")
+except ValueError as original:
+    # raise from → chains exceptions (shows "caused by" in traceback)
+    # raise RuntimeError("parse failed") from original
+    pass

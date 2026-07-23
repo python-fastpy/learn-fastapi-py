@@ -450,3 +450,73 @@ print(f"callable:     {callable(example)}")         # True
 #  partial(fn, arg) pre-fill args        One function = one job
 #  @lru_cache       cache by args        Type hints: def f(x: int)
 #  @decorator       wrap behavior
+
+# ╔══════════════════════════════════════════════════╗
+# ║          INTERVIEW GOTCHAS                       ║
+# ╚══════════════════════════════════════════════════╝
+
+# ── Q: Mutable default argument (classic bug) ──
+def add_item_bad(item, items=[]):   # DEFAULT LIST shared across ALL calls
+    items.append(item)
+    return items
+
+print(add_item_bad("a"))   # ['a']
+print(add_item_bad("b"))   # ['a', 'b'] — SURPRISE! same list reused
+
+def add_item_good(item, items=None):   # FIX: use None
+    if items is None:
+        items = []
+    items.append(item)
+    return items
+
+print(add_item_good("a"))  # ['a']
+print(add_item_good("b"))  # ['b'] — fresh list each time
+
+# ── Q: Closure gotcha in loops ──
+funcs = []
+for i in range(3):
+    funcs.append(lambda: i)    # all lambdas capture SAME variable i
+
+print([f() for f in funcs])    # [2, 2, 2] — NOT [0, 1, 2]!
+
+# FIX: capture i as default argument
+funcs_fixed = []
+for i in range(3):
+    funcs_fixed.append(lambda i=i: i)
+print([f() for f in funcs_fixed])       # [0, 1, 2]
+
+# ── Q: Can a function modify an argument? ──
+def change_list(lst):
+    lst.append(99)       # modifies the SAME list (mutable)
+
+def change_number(n):
+    n = n + 1            # creates NEW int (immutable) — original unchanged
+
+my_list = [1, 2]
+change_list(my_list)
+print(my_list)           # [1, 2, 99] — changed!
+
+my_num = 10
+change_number(my_num)
+print(my_num)            # 10 — unchanged
+
+# ── Q: Argument unpacking ──
+def greet_full(first, last):
+    return f"Hello {first} {last}"
+
+names = ["Alice", "Smith"]
+print(greet_full(*names))          # Hello Alice Smith  — * unpacks list
+
+info = {"first": "Bob", "last": "Jones"}
+print(greet_full(**info))          # Hello Bob Jones  — ** unpacks dict
+
+# ── Q: List comprehension vs generator ──
+list_comp = [x**2 for x in range(1000)]    # creates entire list in memory
+generator = (x**2 for x in range(1000))    # lazy — computes one at a time
+print(type(list_comp))  # <class 'list'>
+print(type(generator))  # <class 'generator'>
+
+# ── Q: Walrus operator := (3.8+) ──
+data = [1, 2, 3, 4, 5, 6, 7, 8]
+results = [y for x in data if (y := x ** 2) > 10]
+print(results)  # [16, 25, 36, 49, 64]

@@ -297,3 +297,49 @@ print("GET /unknown ->", api.request("GET", "/unknown"))
 #   @A / @B / def f  ->  f = A(B(f))  ->  bottom-up wrap, top-down execute
 #   Always use @functools.wraps(func) to preserve __name__ and __doc__
 #   @decorator vs @decorator() — parens mean factory (extra nesting level)
+
+# ╔══════════════════════════════════════════════════╗
+# ║          INTERVIEW GOTCHAS                       ║
+# ╚══════════════════════════════════════════════════╝
+
+# ── Q: What does @decorator actually do? ──
+# @my_decorator         is EXACTLY the same as:
+# def say_hello(): ...  say_hello = my_decorator(say_hello)
+
+# ── Q: Why use functools.wraps? ──
+def bad_dec(func):
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+def good_dec(func):
+    @functools.wraps(func)          # preserves original function's metadata
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+@bad_dec
+def foo2(): "I am foo"
+
+@good_dec
+def bar2(): "I am bar"
+
+print(foo2.__name__)   # "wrapper"  — lost original name!
+print(bar2.__name__)   # "bar2"     — preserved by @wraps
+
+# ── Q: Decorator with arguments — 3 levels of nesting ──
+def repeat(times):                 # decorator FACTORY — returns decorator
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for _ in range(times):
+                result = func(*args, **kwargs)
+            return result
+        return wrapper
+    return decorator
+
+@repeat(3)             # repeat(3) returns the actual decorator
+def say_hi():
+    print("Hi!")
+
+say_hi()                # prints "Hi!" 3 times

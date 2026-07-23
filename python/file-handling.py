@@ -450,3 +450,28 @@ if os.path.exists("test_dir"):
 #  ERRORS: FileNotFoundError, PermissionError, IsADirectoryError,
 #          UnicodeDecodeError, json.JSONDecodeError, OSError
 # ══════════════════════════════════════════════════════════════════
+
+# ╔══════════════════════════════════════════════════╗
+# ║          INTERVIEW GOTCHAS                       ║
+# ╚══════════════════════════════════════════════════╝
+
+# ── Q: Why use "with open()" instead of open/close? ──
+# with = context manager — auto-closes file even if exception occurs
+# BAD:
+#   f = open("file.txt")
+#   data = f.read()
+#   f.close()           # if error happens before this → file stays open!
+# GOOD:
+#   with open("file.txt") as f:
+#       data = f.read()  # file auto-closed when block exits
+
+# ── Q: read() vs readline() vs readlines() vs for loop ──
+# f.read()        → entire file as ONE string (loads all into memory)
+# f.readline()    → ONE line at a time
+# f.readlines()   → ALL lines as a LIST (loads all into memory)
+# for line in f:  → BEST for large files (one line at a time, memory efficient)
+
+# ── Q: "w" vs "a" vs "x" mode ──
+# "w" → write (OVERWRITES existing file — data lost!)
+# "a" → append (adds to end — existing data preserved)
+# "x" → exclusive create (error if file already exists — safe creation)

@@ -388,3 +388,26 @@ print(f"Result: {compute(3, 5)}, name: {compute.__name__}")  # 8, compute
 #    Pydantic     → enforces types, auto-converts
 #    mypy/pyright → static checking (no runtime)
 # ══════════════════════════════════════════════════════════════════
+
+# ╔══════════════════════════════════════════════════╗
+# ║          INTERVIEW GOTCHAS                       ║
+# ╚══════════════════════════════════════════════════╝
+
+# ── Q: Do type hints enforce types? ──
+def add_nums(a: int, b: int) -> int:
+    return a + b
+
+print(add_nums("hello", " world"))   # "hello world" — NO ERROR
+# Python IGNORES annotations. Only mypy/pyright catch this.
+
+# ── Q: Optional vs Union vs | — what's the difference? ──
+# Optional[str]    ==  str | None       (3.10+)
+# Union[str, int]  ==  str | int        (3.10+)
+# They are the SAME thing — | is just shorter syntax
+
+# ── Q: When does Python actually READ annotations? ──
+# Pure Python  → IGNORES them
+# dataclass    → reads them to create __init__, __repr__, __eq__
+# FastAPI      → reads them for validation, conversion, docs
+# Pydantic     → reads AND enforces at runtime
+# mypy/pyright → checks at edit/compile time (not runtime)

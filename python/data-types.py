@@ -537,3 +537,66 @@ KEY GOTCHAS:
   mutable default args shared -> use field(default_factory=list)
   list.sort() returns None    -> use sorted() for new list
 """)
+
+# ╔══════════════════════════════════════════════════╗
+# ║          INTERVIEW GOTCHAS                       ║
+# ╚══════════════════════════════════════════════════╝
+
+# ── Q: Mutable vs Immutable — what changes in place? ──
+a = [1, 2, 3]
+b = a              # b points to SAME list
+b.append(4)
+print(a)           # [1, 2, 3, 4] — a changed too! same object
+
+x = "hello"
+y = x
+y = y + " world"
+print(x)           # "hello" — unchanged, strings are immutable, y is a NEW string
+
+# ── Q: == vs is ──
+a = [1, 2, 3]
+b = [1, 2, 3]
+print(a == b)    # True  — same VALUE
+print(a is b)    # False — different OBJECTS in memory
+
+# gotcha with small ints (Python caches -5 to 256)
+x = 256; y = 256
+print(x is y)    # True  — cached
+x = 257; y = 257
+print(x is y)    # False (in most cases) — not cached
+
+# ── Q: Shallow vs Deep Copy ──
+original = [[1, 2], [3, 4]]
+shallow = original.copy()           # or list(original) or original[:]
+deep = copy.deepcopy(original)
+
+original[0].append(99)
+print(shallow)   # [[1, 2, 99], [3, 4]] — inner list shared!
+print(deep)      # [[1, 2], [3, 4]]     — fully independent
+
+# ── Q: Tuple with one element ──
+not_a_tuple = (42)      # just an int in parentheses
+is_a_tuple = (42,)      # trailing comma makes it a tuple
+print(type(not_a_tuple))  # <class 'int'>
+print(type(is_a_tuple))   # <class 'tuple'>
+
+# ── Q: What does `in` check for dicts? ──
+d = {"name": "Alice", "age": 30}
+print("name" in d)     # True  — checks KEYS, not values
+print("Alice" in d)    # False — "Alice" is a value, not a key
+print("Alice" in d.values())  # True
+
+# ── Q: String formatting tricks ──
+name = "Alice"
+price = 1234.5678
+print(f"{name!r}")          # 'Alice'    — repr
+print(f"{price:.2f}")       # 1234.57    — 2 decimals
+print(f"{price:,.2f}")      # 1,234.57   — thousands separator
+print(f"{42:08b}")          # 00101010   — binary with padding
+print(f"{'hi':>10}")        #         hi — right align
+print(f"{'hi':^10}")        #     hi     — center
+
+# ── Q: any() and all() ──
+nums = [1, 0, 3, 5]
+print(any(nums))           # True  — at least one truthy
+print(all(nums))           # False — 0 is falsy

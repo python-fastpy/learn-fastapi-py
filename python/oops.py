@@ -443,3 +443,83 @@ print(Plugin.registry)  # ['PDFExporter', 'CSVExporter', 'XMLExporter']
 # SLOTS:           __slots__=(...) no __dict__, less memory, faster access
 # PATTERNS:        Mixin (reusable MI) | Enum/auto() | return self (chaining)
 #                  Composition > Inheritance — "has-a" beats "is-a"
+
+# ╔══════════════════════════════════════════════════╗
+# ║          INTERVIEW GOTCHAS                       ║
+# ╚══════════════════════════════════════════════════╝
+
+# ── Q: What is self? ──
+# self = reference to the current instance, NOT a keyword — just convention
+# When you call: Dog("Rex").speak()
+# Python actually calls: Dog.speak(dog_instance) — self is auto-passed
+
+# ── Q: Class method vs Static method vs Instance method ──
+class MyClass:
+    class_var = "shared"
+
+    def instance_method(self):          # gets instance (self)
+        return f"instance: {self}"
+
+    @classmethod
+    def class_method(cls):              # gets class (cls), NOT instance
+        return f"class: {cls.class_var}"
+
+    @staticmethod
+    def static_method():                # gets NOTHING — just a function in a class
+        return "static: no self, no cls"
+
+obj = MyClass()
+print(obj.instance_method())     # instance: <__main__.MyClass object ...>
+print(MyClass.class_method())    # class: shared
+print(MyClass.static_method())   # static: no self, no cls
+
+# ── Q: MRO — diamond problem ──
+class A2:
+    def greet(self): return "A"
+class B2(A2):
+    def greet(self): return "B"
+class C2(A2):
+    def greet(self): return "C"
+class D2(B2, C2):
+    pass
+
+print(D2().greet())     # "B" — MRO is D → B → C → A
+print(D2.__mro__)       # shows the full order
+
+# ── Q: __str__ vs __repr__ ──
+class Point2:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+    def __str__(self):           # for print() — human readable
+        return f"({self.x}, {self.y})"
+    def __repr__(self):          # for debugging — unambiguous
+        return f"Point({self.x}, {self.y})"
+
+p = Point2(3, 4)
+print(p)          # (3, 4)         — calls __str__
+print(repr(p))    # Point(3, 4)    — calls __repr__
+print([p])        # [Point(3, 4)]  — lists use __repr__ for items
+
+# ── Q: @property — getter/setter without Java boilerplate ──
+class Circle2:
+    def __init__(self, radius):
+        self._radius = radius
+
+    @property
+    def radius(self):               # getter — access like attribute
+        return self._radius
+
+    @radius.setter
+    def radius(self, value):        # setter — validate on assignment
+        if value < 0:
+            raise ValueError("Radius can't be negative")
+        self._radius = value
+
+    @property
+    def area(self):                 # computed — read only
+        return 3.14159 * self._radius ** 2
+
+c = Circle2(5)
+print(c.radius)     # 5      — looks like attribute, calls getter
+print(c.area)       # 78.5   — computed on access
+c.radius = 10       # calls setter
