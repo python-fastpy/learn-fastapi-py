@@ -1095,6 +1095,128 @@ re-merge is a recovery operation, not a normal feature merge.
 
 ---
 
+# Real-World Fix Strategy (From Experience)
+
+## Step 1: Visualize the Problem First
+
+Before doing anything, open a Git client that shows the commit tree
+(GitKraken, SourceTree, Fork, or `git log --oneline --graph --all`).
+
+Visualizing helps you understand what actually happened. Example:
+a developer reverted a cherry-picked commit in QA that was originally
+pushed to develop — this causes conflicts between develop and QA on
+every future merge because Git replays the revert.
+
+## Step 2: Choose Your Fix
+
+### Option A: Resolve Conflicts Manually
+
+```
+- Go through each conflict carefully
+- Understand WHAT was reverted and WHY
+- Decide for each file: keep the reverted state or restore the original
+
+Warning: This requires extreme accuracy. You must understand
+every conflict — a wrong resolution silently drops changes.
+```
+
+### Option B: Reset the Branch and Re-merge from Scratch
+
+When the branch is too tangled to resolve conflicts safely,
+start over by resetting the branch to before the mess began.
+
+```bash
+# 1. Coordinate with the team
+#    Ask developers to stop pushing to the affected branch
+#    until you're done
+
+# 2. Temporarily allow force push on the protected branch
+#    GitHub: Settings → Branches → Branch protection rules
+#    Uncheck "Restrict force pushes" (or add yourself)
+
+# 3. Find the last clean commit (before the bad revert/merge)
+git log --oneline --graph
+# identify the commit hash where everything was still correct
+
+# 4. Reset the branch to the clean state
+git checkout qa                    # or whichever branch is broken
+git reset --hard <clean-commit>
+
+# What git reset --hard does:
+#
+# BEFORE reset:
+#
+# qa:  A---B---C---X---R(revert of X)---M(bad merge)
+#               ^                        ^
+#          clean-commit                 HEAD
+#
+# git reset --hard C
+#
+# AFTER reset:
+#
+# qa:  A---B---C
+#               ^
+#              HEAD (everything after C is gone)
+#
+# X, R, M — completely removed from the branch
+# as if they never happened
+#
+# Note: commits are NOT deleted from Git's database immediately
+#       they stay in reflog for ~90 days (recoverable with git reflog)
+#       only this branch is affected, other branches are untouched
+
+# 5. Re-merge the branches that should be in there
+git merge develop                  # or whatever was merged before
+# resolve conflicts fresh — this time without the revert pollution
+
+# 6. Force push
+git push --force origin qa
+
+# 7. IMMEDIATELY restore branch protection
+#    GitHub: Settings → Branches → re-enable the rules
+#    Don't forget this step!
+```
+
+### Which Option to Choose
+
+```
+How messy is the branch?
+│
+├── Few conflicts, you understand each one
+│   └── Option A: resolve manually (safer, no force push)
+│
+├── Many conflicts, hard to tell what's correct
+│   └── Option B: reset and re-merge from scratch
+│
+└── Revert was cherry-picked across multiple branches?
+    └── Option B: the revert will keep polluting future merges
+        Resetting is the only way to cleanly remove it
+```
+
+## Why Git Revert Is Dangerous Across Branches
+
+```
+Developer reverts commit X in QA:
+
+  QA:      ...---X---R(revert of X)
+  develop: ...---X---...
+
+Now every time you merge develop → QA (or QA → develop),
+Git replays the revert R and causes conflicts with X.
+
+The revert "follows" the branch — it's a commit, and merges
+carry commits across branches. This is why:
+
+  - Use revert ONLY for changes that should be permanently deleted
+  - For temporary rollbacks, manually undo the changes instead
+    (edit the files back, commit as a normal change)
+  - A manual undo doesn't have the "revert propagation" problem
+    because Git doesn't treat it specially — it's just a commit
+    that happens to change code back
+```
+
+---
+
 # Lesson Learned
 
 When you create a feature branch from QA without adding commits,
