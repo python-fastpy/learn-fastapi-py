@@ -6,6 +6,116 @@ A hands-on learning repo with condensed Python and FastAPI examples. Each file c
 
 ---
 
+## Quick Start with uv
+
+[uv](https://docs.astral.sh/uv/) is a fast Python package manager (replaces pip, venv, pyenv). Install it first:
+
+```bash
+# Install uv
+# Windows (PowerShell):
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+# Mac/Linux:
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### Set Up a Project
+
+```bash
+# Create a new project (creates pyproject.toml + .venv automatically)
+uv init my-project
+cd my-project
+
+# Or init in current directory
+uv init
+```
+
+### Install & Run Python
+
+```bash
+# Install a specific Python version
+uv python install 3.12
+
+# Run a script (uv auto-creates .venv if needed)
+uv run python script.py
+
+# Run FastAPI dev server
+uv run fastapi dev main.py
+```
+
+### Manage Dependencies
+
+```bash
+# Add a package (adds to pyproject.toml + installs)
+uv add fastapi
+uv add uvicorn
+uv add pydantic
+
+# Add multiple at once
+uv add httpx pytest boto3
+
+# Add dev-only dependency (not needed in production)
+uv add --dev pytest ruff mypy
+
+# Remove a package
+uv remove httpx
+
+# Sync — install everything from pyproject.toml (like npm install)
+uv sync
+
+# See what's installed
+uv pip list
+```
+
+### How It Works
+
+```
+  uv init
+    → creates pyproject.toml     (like package.json — lists your dependencies)
+    → creates .venv/             (isolated Python environment — like node_modules)
+    → creates uv.lock            (exact versions — like package-lock.json)
+
+  uv add fastapi
+    → adds "fastapi" to pyproject.toml [dependencies]
+    → installs it into .venv/
+    → updates uv.lock with exact version
+
+  uv run python app.py
+    → runs using .venv Python (no need to activate venv manually)
+```
+
+### pyproject.toml (what it looks like)
+
+```toml
+[project]
+name = "my-project"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "pydantic>=2.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.5.0",
+]
+```
+
+### uv vs pip Comparison
+
+| Task | pip (old way) | uv (new way) |
+|------|--------------|--------------|
+| Create venv | `python -m venv .venv` | `uv init` (auto) |
+| Activate venv | `.venv\Scripts\activate` | not needed — `uv run` handles it |
+| Install package | `pip install fastapi` | `uv add fastapi` |
+| Install from file | `pip install -r requirements.txt` | `uv sync` |
+| Run script | `python app.py` | `uv run python app.py` |
+| Lock versions | `pip freeze > requirements.txt` | automatic (`uv.lock`) |
+
+---
+
 ## What's Inside
 
 ### FastAPI (`fastapi/`)
@@ -28,6 +138,7 @@ A hands-on learning repo with condensed Python and FastAPI examples. Each file c
 | `oops.py` | Classes, inheritance, MRO, dunder methods, ABC, dataclasses |
 | `decorators.py` | Function/class decorators, chaining, functools.wraps |
 | `annotations.py` | Type hints, Optional, Union, TypeVar, Protocol, generics |
+| `typeddict.py` | TypedDict, NotRequired, Required, nested, inheritance, JSON patterns |
 | `exception-handling.py` | try/except, custom exceptions, context managers, ExceptionGroup |
 | `file-handling.py` | File I/O, CSV, JSON, pathlib, tempfile, shutil |
 
@@ -116,6 +227,7 @@ learn-fastapi-py/
 │   ├── oops.py
 │   ├── decorators.py
 │   ├── annotations.py
+│   ├── typeddict.py
 │   ├── exception-handling.py
 │   └── file-handling.py
 ├── viewer/                     # HTML viewer
