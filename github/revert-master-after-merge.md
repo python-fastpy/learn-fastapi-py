@@ -9,6 +9,10 @@
 
 ---
 
+---
+
+________________________________________________________________________________
+
 # Case 1: Feature Branch Has New Commits (Merge Commit)
 
 ## Scenario
@@ -19,8 +23,6 @@ and merged it into master using `git merge` (merge commit, NOT squash).
 ## Visual Diagram
 
 ```
-BEFORE (what happened):
-
 QA branch:        A---B---C
                            \
 Feature branch:             D---E---F
@@ -29,8 +31,11 @@ Master branch:   X---Y---Z-----------M (merge commit, 2 parents)
                           ^           ^
                      you want to     current
                      go back here    state
+```
 
+```
 git log --oneline --graph on master:
+
 *   a1b2c3d Merge branch 'feature' into master
 |\
 | * f1e2d3c commit F
@@ -42,6 +47,10 @@ git log --oneline --graph on master:
 ```
 
 ---
+
+---
+
+________________________________________________________________________________
 
 # Case 2: Feature Branch Has NO New Commits (Merge Commit)
 
@@ -55,8 +64,6 @@ which brought all of QA's commits into master.
 ## Visual Diagram
 
 ```
-BEFORE (what happened):
-
 QA branch:        A---B---C
                            |
 Feature branch:            C  (same commit, no new work)
@@ -65,8 +72,11 @@ Master branch:   X---Y---Z---M (merge commit - brought A, B, C into master)
                           ^   ^
                      want to  current
                      be here  state
+```
 
+```
 git log --oneline --graph on master:
+
 *   a1b2c3d Merge branch 'feature' into master
 |\
 | * c1b2a3z commit C (from QA)
@@ -114,6 +124,10 @@ git rev-parse qa
 
 ---
 
+---
+
+________________________________________________________________________________
+
 # All Possible Options to Undo the Merge
 
 Both Case 1 and Case 2 use the same options below.
@@ -139,23 +153,9 @@ Merge commit M has 2 parents:
 ### Steps
 
 ```bash
-# 1. Switch to master
 git checkout master
-
-# 2. Find the merge commit hash
-git log --oneline --graph
-# *   a1b2c3d (HEAD -> master) Merge branch 'feature' into master  <-- M
-# |\
-# | * f1e2d3c commit F
-# |/
-# * x9y8z7w previous commit on master                              <-- Z
-
-# 3. Revert the merge commit
-#    -m 1 = keep master side (parent 1), undo feature side
-#    Replace a1b2c3d with YOUR actual merge commit hash
-git revert -m 1 a1b2c3d
-
-# 4. Push the revert
+git log --oneline --graph                # find the merge commit hash
+git revert -m 1 a1b2c3d                  # revert the merge commit
 git push origin master
 ```
 
@@ -166,33 +166,24 @@ If you get **conflicts**, see [git-merge-conflict-resolution.md](git-merge-confl
 ```
 AFTER:
 
-*   m1r2e3v (HEAD -> master) Revert "Merge branch 'feature' into master"  <-- M'
-*   a1b2c3d Merge branch 'feature' into master                            <-- M (still in history)
+Master: X---Y---Z---M---M'  (M' undoes M's changes, history preserved)
+
+*   m1r2e3v Revert "Merge branch 'feature' into master"  <-- M'
+*   a1b2c3d Merge branch 'feature' into master            <-- M (still in history)
 |\
 | * f1e2d3c commit F
 |/
 * x9y8z7w commit Z
-
-Master: X---Y---Z---M---M'  (M' undoes M's changes, history preserved)
 ```
 
-### Pros
+### Pros and Cons
 
-- History is preserved (M still exists in log)
-- No force push needed
-- Safe for shared branches
-- Other developers are not affected
-
-### Cons
-
-- Adds an extra commit (M')
-- If you want to re-merge the same feature branch later, you must
-  first revert the revert:
-
-```bash
-git revert b2c3d4e    # undo the revert commit M'
-git merge feature     # now merge again
-```
+| Pros                              | Cons                                          |
+|-----------------------------------|-----------------------------------------------|
+| History preserved (M still in log)| Adds an extra commit (M')                     |
+| No force push needed              | Re-merging same branch needs revert-of-revert |
+| Safe for shared branches          |                                                |
+| Other developers not affected     |                                                |
 
 ### What `-m 1` vs `-m 2` Does
 
@@ -213,19 +204,10 @@ git revert -m 2 a1b2c3d   # undo master changes, keep feature as-is
 ### Steps
 
 ```bash
-# 1. Switch to master
 git checkout master
-
-# 2. Find the commit hash BEFORE the merge (commit Z)
-git log --oneline
-# a1b2c3d (HEAD -> master) Merge branch 'feature' into master  <-- M
-# x9y8z7w previous commit on master                            <-- Z (target)
-
-# 3. Hard reset to the commit before merge
-git reset --hard x9y8z7w
-
-# 4. Force push (ONLY if already pushed to remote)
-git push --force origin master
+git log --oneline                        # find commit hash BEFORE the merge (Z)
+git reset --hard x9y8z7w                 # hard reset to before merge
+git push --force origin master           # ONLY if already pushed to remote
 ```
 
 ### Result
@@ -233,26 +215,19 @@ git push --force origin master
 ```
 AFTER:
 
+Master: X---Y---Z   (M is completely removed from history)
+
 * x9y8z7w (HEAD -> master) commit Z
 * y8z7w6v commit Y
-
-Master: X---Y---Z   (M is completely removed from history)
 ```
 
-### Pros
+### Pros and Cons
 
-- Clean history — merge commit is gone entirely
-- Can re-merge the feature branch directly later (no revert-of-revert needed)
-
-### Cons
-
-- Rewrites history (dangerous for shared branches)
-- Requires force push if already pushed
-- Other developers must resync:
-  ```bash
-  git fetch origin
-  git reset --hard origin/master
-  ```
+| Pros                                   | Cons                                          |
+|----------------------------------------|-----------------------------------------------|
+| Clean history — merge commit gone      | Rewrites history (dangerous for shared branches)|
+| Can re-merge directly later            | Requires force push if already pushed         |
+|                                        | Other devs must resync: `git reset --hard origin/master` |
 
 ---
 
@@ -264,48 +239,33 @@ changes in your staging area for review or partial re-commit.
 ### Steps
 
 ```bash
-# 1. Switch to master
 git checkout master
+git reset --soft x9y8z7w                 # soft reset to before merge
+git status                                # shows all merged files as staged
+```
 
-# 2. Soft reset to the commit before merge
-git reset --soft x9y8z7w
+After the reset you can:
 
-# 3. Now the merged changes are in staging area
-git status   # shows all merged files as staged
-
-# 4. You can:
-#    a) Discard everything:
+```bash
+# a) Discard everything:
 git reset HEAD .
 git checkout -- .
 
-#    b) Keep some files and commit:
+# b) Keep some files and commit:
 git reset HEAD file-you-dont-want.py
 git commit -m "kept only selected changes from feature merge"
 
-#    c) Review what was merged:
+# c) Review what was merged:
 git diff --cached
 ```
 
-### Result
+### Pros and Cons
 
-```
-AFTER (before re-committing):
-
-Master: X---Y---Z   (HEAD moved back, but changes are staged)
-                 ^
-                 HEAD is here, but working directory has merged code
-```
-
-### Pros
-
-- Non-destructive to working directory
-- Lets you cherry-pick which changes to keep
-- Good for partial rollbacks
-
-### Cons
-
-- Requires manual decision on what to keep/discard
-- Still rewrites history (needs force push if pushed)
+| Pros                                | Cons                                         |
+|-------------------------------------|----------------------------------------------|
+| Non-destructive to working dir      | Requires manual decision on what to keep     |
+| Cherry-pick which changes to keep   | Still rewrites history (needs force push)    |
+| Good for partial rollbacks          |                                              |
 
 ---
 
@@ -317,41 +277,28 @@ directory (unstaged) instead of staging area.
 ### Steps
 
 ```bash
-# 1. Switch to master
 git checkout master
+git reset x9y8z7w                        # mixed reset (default)
+git status                                # shows changes as modified (not staged)
+```
 
-# 2. Mixed reset (default behavior of git reset)
-git reset x9y8z7w
+After the reset you can:
 
-# 3. Changes are now unstaged in working directory
-git status   # shows changes as modified (not staged)
-
-# 4. You can:
-#    a) Discard all:
+```bash
+# a) Discard all:
 git checkout -- .
 
-#    b) Stage and commit specific files:
+# b) Stage and commit specific files:
 git add specific-file.py
 git commit -m "kept specific changes"
 ```
 
-### Result
+### Pros and Cons
 
-```
-AFTER:
-
-Master: X---Y---Z   (HEAD and index moved back, changes in working dir)
-```
-
-### Pros
-
-- Full control over what to keep
-- Can review changes file by file before staging
-
-### Cons
-
-- Rewrites history
-- More manual work than revert
+| Pros                            | Cons                         |
+|---------------------------------|------------------------------|
+| Full control over what to keep  | Rewrites history             |
+| Review changes file by file     | More manual work than revert |
 
 ---
 
@@ -363,19 +310,14 @@ a new clean branch from before the merge.
 ### Steps
 
 ```bash
-# 1. Find the commit before merge
-git log master --oneline
-# x9y8z7w previous commit on master  <-- Z
-
-# 2. Create a new branch from that commit
-git checkout -b master-clean x9y8z7w
-
-# 3. Push the new branch
+git log master --oneline                  # find commit before merge (Z)
+git checkout -b master-clean x9y8z7w      # create clean branch
 git push origin master-clean
+```
 
-# 4. Optionally, make this the new master:
-#    - In GitHub/GitLab: change default branch to master-clean
-#    - Rename branches:
+Optionally, make this the new master:
+
+```bash
 git branch -m master master-broken
 git branch -m master-clean master
 git push origin master --force
@@ -385,23 +327,17 @@ git push origin --delete master-broken
 ### Result
 
 ```
-AFTER:
-
 master-broken:   X---Y---Z---M   (old master, kept for reference)
 master-clean:    X---Y---Z       (new clean branch)
 ```
 
-### Pros
+### Pros and Cons
 
-- Original master is preserved as backup
-- No force push needed (until you rename)
-- Safest approach — nothing is deleted
-
-### Cons
-
-- More steps involved
-- Team needs to switch to new branch
-- Confusing if not communicated clearly
+| Pros                               | Cons                                     |
+|------------------------------------|------------------------------------------|
+| Original master preserved as backup| More steps involved                      |
+| No force push needed (until rename)| Team needs to switch to new branch       |
+| Safest approach                    | Confusing if not communicated clearly    |
 
 ---
 
@@ -413,132 +349,89 @@ the undo (get the merge back).
 ### Steps
 
 ```bash
-# 1. View reflog to find the merge commit
 git reflog
-# output:
 # x9y8z7w HEAD@{0}: reset: moving to x9y8z7w   <-- the reset you did
 # a1b2c3d HEAD@{1}: merge feature: Merge ...    <-- the merge commit (M)
-# x9y8z7w HEAD@{2}: commit: previous work       <-- Z
 
-# 2. Reset back to the merge commit
-#    IMPORTANT: wrap HEAD@{1} in quotes to avoid shell errors
-#    PowerShell, Zsh, and some shells treat { } as special characters
-
-# Works in PowerShell, Zsh, Git Bash (safest — always use quotes):
+# Use quotes to avoid shell errors with { }
 git reset --hard "HEAD@{1}"
 
-# 3. Or just use the actual commit hash directly (always works, no quoting issues):
+# Or just use the commit hash directly (always works):
 git reset --hard a1b2c3d
 ```
 
-### Common Error with HEAD@{1}
+### Common Shell Error with HEAD@{1}
 
 ```bash
-# ERROR: shells interpret { } before git sees them
-git reset --hard HEAD@{1}
-# PowerShell error: "unexpected token '@{1}'"
-# Zsh error:        "no matches found: HEAD@{1}"
+# ERROR: shells interpret { } as special characters
+git reset --hard HEAD@{1}                 # FAILS in PowerShell and Zsh
 
-# FIX: wrap in double quotes
-git reset --hard "HEAD@{1}"
-
-# OR single quotes (works in Bash/Zsh, NOT PowerShell)
-git reset --hard 'HEAD@{1}'
-
-# OR just use the commit hash (no quoting needed, always works everywhere)
-git reflog                    # find the hash: a1b2c3d
-git reset --hard a1b2c3d      # use hash directly
+# FIX options:
+git reset --hard "HEAD@{1}"              # double quotes (works everywhere)
+git reset --hard 'HEAD@{1}'              # single quotes (Bash/Zsh only, NOT PowerShell)
+git reset --hard a1b2c3d                  # use hash directly (always works)
 ```
 
-### Pros
+### Pros and Cons
 
-- Can recover from accidental resets
-- Reflog keeps ~90 days of history locally
-
-### Cons
-
-- Only works locally (reflog is not pushed)
-- Only available before `git gc` cleans up
-- `HEAD@{n}` syntax needs quoting in most shells
+| Pros                                | Cons                                     |
+|-------------------------------------|------------------------------------------|
+| Recovers from accidental resets     | Only works locally (reflog not pushed)   |
+| Reflog keeps ~90 days of history    | Only available before `git gc` cleans up |
 
 ---
 
-## When Master Is Protected (Cannot Push Directly)
+---
+
+________________________________________________________________________________
+
+# When Master Is Protected (Cannot Push Directly)
 
 In most teams, master has branch protection rules — no direct pushes allowed.
 You must create a revert on a separate branch and raise a PR.
 
-### Why You Can't Just "Merge to Fix It"
+## Why You Can't Just "Merge to Fix It"
 
-```
-You might think: "I'll create a fix branch and merge it to master to undo things."
+Merging **ADDS** commits — it doesn't remove them. There's no merge
+operation that subtracts changes. You need `git revert`, which creates
+a NEW commit that applies the inverse diff of the merge.
 
-But merging ADDS commits — it doesn't remove them. There's no merge operation
-that subtracts changes. You need `git revert`, which creates a NEW commit
-that applies the inverse diff of the merge.
-```
-
-### Why "Reset on a Branch" Doesn't Work Either
+## Why "Reset on a Branch" Doesn't Work Either
 
 ```
 You might think: "I'll create a branch, reset it to before the merge,
 and PR that into master."
 
-git checkout -b undo-branch master
-git reset --hard Z               # move back to before merge
-
-undo-branch:  X---Y---Z          (points to Z)
-master:       X---Y---Z---M      (points to M, which is AHEAD)
+undo-branch:  X---Y---Z          (reset to Z — BEHIND master)
+master:       X---Y---Z---M      (has M — AHEAD)
 
 PR: undo-branch → master = "Already up to date"
-
-Why? undo-branch has NO new commits that master doesn't already have.
-Z is already in master's history. The branch is BEHIND, not ahead.
-
-A PR can only merge NEW commits into master.
-It cannot move master's pointer backward.
-That's what git reset does — but you can't reset a protected branch.
 ```
 
-```
-Think of it this way:
+The branch has NO new commits that master doesn't already have.
+Z is already in master's history. The branch is **BEHIND**, not ahead.
 
-  git merge  = "bring new things INTO master"   (adds commits)
-  git reset  = "move master's pointer backward"  (removes commits)
+A PR can only merge **NEW** commits into master.
+It cannot move master's pointer backward — that's what `git reset` does,
+but you can't reset a protected branch.
 
-  A PR does a merge. A merge can only add.
-  You can't subtract through a PR.
+The only way to "subtract" through a PR is to **ADD** a new commit
+that contains the **INVERSE** of the changes — that's `git revert`.
 
-  The only way to "subtract" through a PR is to ADD a new commit
-  that contains the INVERSE of the changes → that's git revert.
-```
-
-### Steps (PR-Based Revert Workflow)
+## Steps (PR-Based Revert Workflow)
 
 ```bash
-# 1. Make sure master is up to date
 git checkout master
 git pull origin master
+git log --oneline --merges -5             # find the merge commit hash
 
-# 2. Find the merge commit hash
-git log --oneline --merges -5
-# a1b2c3d Merge branch 'feature' into master  <-- this one
-
-# 3. Create a revert branch FROM master
-git checkout -b revert-feature-merge
-
-# 4. Revert the merge commit on this branch
-git revert -m 1 a1b2c3d
-
-# 5. Push the revert branch
-git push origin revert-feature-merge
-
-# 6. Create a PR: revert-feature-merge → master
-#    Title: "Revert: Merge branch 'feature' into master"
-#    The PR diff will show the exact inverse of what the merge added
+git checkout -b revert-feature-merge      # create revert branch
+git revert -m 1 a1b2c3d                   # revert the merge commit
+git push origin revert-feature-merge      # push the revert branch
+# Create PR: revert-feature-merge → master
 ```
 
-### What the PR Diff Shows
+## What the PR Diff Shows
 
 ```
 The PR removes exactly what the feature merge added:
@@ -546,30 +439,25 @@ The PR removes exactly what the feature merge added:
   - Lines added by feature     → removed
   - Lines deleted by feature   → restored
   - Files modified by feature  → reverted to pre-merge state
-
-Reviewers can verify: "yes, this cleanly undoes the feature merge."
 ```
 
-### Visual
+## Result
 
 ```
+BEFORE:
 master (protected):  X---Y---Z---M
-                                  \
-revert-feature-merge:              M' (revert commit, PR into master)
 
-After PR is merged:
+AFTER PR merged:
 master:              X---Y---Z---M---M' (clean, no force push)
 ```
 
-### Key Points
-
-- The revert branch is a **throwaway** — delete it after the PR merges
-- The PR contains exactly ONE commit (the revert), making review easy
-- No force push, no history rewrite, no coordination with the team
-- Same re-merge caveat applies: to re-merge the feature later, you
-  must first revert the revert (see "Re-merging After a Revert" below)
+The revert branch is a **throwaway** — delete it after the PR merges.
 
 ---
+
+---
+
+________________________________________________________________________________
 
 # Comparison of All Options
 
@@ -586,6 +474,10 @@ master:              X---Y---Z---M---M' (clean, no force push)
 
 ---
 
+---
+
+________________________________________________________________________________
+
 # Recommendation Decision Tree
 
 ```
@@ -598,6 +490,9 @@ Do you need to undo a merge on master?
 │
 ├── Has the merge been pushed to remote?
 │   ├── YES
+│   │   ├── Is master protected?
+│   │   │   └── YES --> PR-based revert (see "When Master Is Protected")
+│   │   │
 │   │   ├── Are other people working on master?
 │   │   │   ├── YES --> Option 1: git revert -m 1 (safest)
 │   │   │   └── NO  --> Option 1 or Option 2 (coordinate force push)
@@ -615,6 +510,10 @@ Do you need to undo a merge on master?
 ```
 
 ---
+
+---
+
+________________________________________________________________________________
 
 # Prevention: Check Before Merging
 
@@ -637,75 +536,70 @@ git log qa..feature --oneline
 
 ---
 
+---
+
+________________________________________________________________________________
+
 # Quick Reference Commands
 
 ```bash
-# See recent commits with graph
-git log --oneline --graph --all
+git log --oneline --graph --all          # recent commits with graph
+git log --merges --oneline               # find merge commits
+git cat-file -p a1b2c3d | grep parent   # check if merge commit
+git rev-parse a1b2c3d^1                  # parent 1 (master side)
+git rev-parse a1b2c3d^2                  # parent 2 (feature side)
+git log branch1..branch2 --oneline       # compare two branches
+git reflog --oneline                     # see reflog for recovery
+```
 
-# Find merge commits specifically
-git log --merges --oneline
+Dry-run a revert before committing:
 
-# Check if a commit is a merge commit (see git-cat-file.md)
-git cat-file -p a1b2c3d | grep parent
-
-# Get parents quickly (see git-commit-parents.md)
-git rev-parse a1b2c3d^1    # Parent 1 (master)
-git rev-parse a1b2c3d^2    # Parent 2 (feature)
-
-# Check what a revert will do before committing
+```bash
 git revert -m 1 --no-commit a1b2c3d
-git diff --cached
-git revert --abort
-
-# Verify master is clean after any operation
-git status
-git log --oneline -5
-
-# Compare two branches
-git log branch1..branch2 --oneline
-
-# See reflog for recovery
-git reflog --oneline
+git diff --cached                        # review what changes
+git revert --abort                       # cancel if not happy
 ```
 
 ---
 
-# Re-merging After a Revert: Avoiding "Revert the Revert"
+---
+
+________________________________________________________________________________
+
+# Re-merging After a Revert
 
 ## The Problem
 
 After `git revert -m 1`, if you try to merge the same feature branch
-again, **Git says "Already up to date"** — it thinks those changes
-already exist in history, even though the revert undid them.
+again, **Git says "Already up to date"** — nothing happens.
 
 ```bash
 git revert -m 1 a1b2c3d      # undo the merge
-git merge feature             # "Already up to date." — nothing happens!
+git merge feature             # "Already up to date." — FAILS
 ```
 
 ## Why This Happens
 
 Git tracks by **commit ancestry**, not by file contents. The feature
-commits (D, E, F) are already reachable from master's history
-(through the original merge M). The revert only added a new commit
-that undid the changes — it didn't remove D, E, F from the graph.
+commits (D, E, F) are still reachable from master's history through
+the original merge M. The revert only added a new commit that undid
+the changes — it didn't remove D, E, F from the graph.
 
 ```
 Master: X---Y---Z---M---M'(revert)
-                    / \
-Feature:       D--E--F   (already reachable from M, so Git skips them)
+                    /
+Feature:       D--E--F   (still reachable from M, so Git skips them)
 ```
 
-## The Standard Fix (Revert the Revert) — Step by Step
+---
 
-### Current State After the First Revert
+## Fix 1: Revert the Revert (Standard Fix)
+
+### Current State
 
 ```
-git log --oneline --graph master:
-
-* r1e2v3t (HEAD -> master) Revert "Merge branch 'feature' into master"  <-- M' (revert)
-*   a1b2c3d Merge branch 'feature' into master                          <-- M  (original merge)
+* r1e2v3t Revert "Merge branch 'feature' into master"  <-- M' (revert)
+*   a1b2c3d Merge branch 'feature' into master          <-- M
 |\
 | * f1e2d3c commit F
 | * e1d2c3b commit E
@@ -720,46 +614,28 @@ Git graph:  feature commits D, E, F are still REACHABLE through M
 ### Steps
 
 ```bash
-# 1. Find the revert commit hash
-git log --oneline -5
-# r1e2v3t Revert "Merge branch 'feature' into master"  <-- M' (this one)
-# a1b2c3d Merge branch 'feature' into master            <-- M
-
-# 2. Revert the revert (undo the undo)
-#    This is a REGULAR revert — no -m flag needed
-#    because M' is a normal commit (1 parent), not a merge commit
-git revert r1e2v3t
-
-# 3. Feature code is now BACK in master's files
-git log --oneline -3
-# q1w2e3r Revert "Revert "Merge branch 'feature' into master""  <-- M'' (revert of revert)
-# r1e2v3t Revert "Merge branch 'feature' into master"           <-- M'
-# a1b2c3d Merge branch 'feature' into master                    <-- M
-
-# 4. Push
+git log --oneline -5                     # find the revert commit hash (M')
+git revert r1e2v3t                       # revert the revert — no -m flag needed
 git push origin master
 ```
 
 ### Why No `-m` Flag This Time?
 
-```
-The revert commit M' is a REGULAR commit (1 parent), not a merge commit.
+The revert commit M' is a **regular commit** (1 parent), not a merge commit.
 
-M  = merge commit  (2 parents: Z and F)  → needs -m 1 to pick a side
-M' = revert commit (1 parent: M)         → regular revert, no -m needed
+| Commit | Type           | Parents      | Needs -m? |
+|--------|----------------|--------------|-----------|
+| M      | Merge commit   | Z and F      | YES       |
+| M'     | Regular commit | M            | NO        |
 
-Rule: -m is ONLY for merge commits (2+ parents)
-      regular commits (1 parent) never need -m
-```
+Rule: `-m` is ONLY for merge commits (2+ parents).
 
 ### Result
 
 ```
-AFTER:
-
-* q1w2e3r (HEAD -> master) Revert "Revert "Merge ..."  <-- M'' (feature code is back)
-* r1e2v3t Revert "Merge branch 'feature' into master"  <-- M'  (removed feature code)
-*   a1b2c3d Merge branch 'feature' into master          <-- M   (added feature code)
+* q1w2e3r Revert "Revert "Merge ..."   <-- M'' (feature code is BACK)
+* r1e2v3t Revert "Merge ..."           <-- M'  (removed feature code)
+*   a1b2c3d Merge branch 'feature'      <-- M   (added feature code)
 |\
 | * f1e2d3c commit F
 | * e1d2c3b commit E
@@ -767,145 +643,62 @@ AFTER:
 |/
 * x9y8z7w commit Z
 
-Code state: feature changes D, E, F are BACK in the files
-History:    merge → revert → revert-of-revert (messy but safe)
+History: merge → revert → revert-of-revert (messy but safe)
 ```
 
-### If Master Is Protected (PR-Based Revert-of-Revert)
+### If Master Is Protected
+
+Same pattern — branch + PR:
 
 ```bash
-# Can't push directly to master? Same pattern — branch + PR
-
-git checkout master
-git pull origin master
+git checkout master && git pull origin master
 git checkout -b revert-the-revert
-
-git revert r1e2v3t                       # revert the revert commit
+git revert r1e2v3t
 git push origin revert-the-revert
 # Create PR: revert-the-revert → master
-
-# PR diff will show: feature code being RE-ADDED to master
 ```
 
-### What If You Also Have NEW Commits on the Feature Branch?
+### With NEW Commits on the Feature Branch
 
-```
-After the original merge + revert, you added new commits G, H to feature:
-
-Feature: D---E---F---G---H   (G, H are new work)
-
-Master:  X---Y---Z---M---M'  (M' reverted D, E, F)
-```
+If you added new commits G, H to feature after the original merge + revert:
 
 ```bash
 # Step 1: Revert the revert (brings back D, E, F)
-git checkout master
 git revert r1e2v3t
 
-# Step 2: NOW merge feature again (picks up G, H)
+# Step 2: Merge feature again (picks up only G, H)
 git merge feature
-
-# Git already has D, E, F (restored by revert-of-revert)
-# The merge only brings in G and H (the truly new commits)
 ```
 
 ```
-RESULT:
-
-* m2e3r4g (HEAD -> master) Merge branch 'feature' into master  <-- M2 (brings G, H)
+* m2e3r4g Merge branch 'feature'        <-- M2 (brings G, H)
 |\
 | * h1g2f3e commit H (new)
 | * g1f2e3d commit G (new)
-* | q1w2e3r Revert "Revert "Merge ..."                         <-- M'' (D,E,F restored)
-* | r1e2v3t Revert "Merge ..."                                 <-- M'  (D,E,F removed)
-* | a1b2c3d Merge branch 'feature' into master                 <-- M   (D,E,F added)
-|\ \
-| |/
-| * f1e2d3c commit F
-| * e1d2c3b commit E
-| * d1c2b3a commit D
-|/
-* x9y8z7w commit Z
+* | q1w2e3r Revert "Revert ..."         <-- M'' (D,E,F restored)
+* | r1e2v3t Revert "Merge ..."          <-- M'
+* | a1b2c3d Merge branch 'feature'      <-- M
 ```
 
-### The History Is Messy — Does It Matter?
+---
 
-```
-merge → revert → revert-of-revert → re-merge
-
-4 commits to end up where 1 merge would have sufficed. But:
-  ✓ No force push
-  ✓ No history rewrite
-  ✓ Every step is traceable and auditable
-  ✓ Safe for shared/protected branches
-
-If clean history matters more, use the alternatives below instead.
-```
-
-## Alternatives That Avoid the Revert-of-Revert
-
-### Alternative 1: Cherry-pick onto a New Branch
+## Fix 2: Cherry-pick onto a New Branch
 
 Create a new branch and cherry-pick the original feature commits.
 Git sees new commit hashes, so it treats them as fresh changes.
 
 ```bash
-# 1. Find the original feature commits
-git log --oneline feature
-# f1e2d3c commit F
-# e1d2c3b commit E
-# d1c2b3a commit D
-
-# 2. Create a new branch from master
-git checkout -b feature-v2 master
-
-# 3. Cherry-pick the feature commits (oldest to newest)
-git cherry-pick d1c2b3a e1d2c3b f1e2d3c
-
-# 4. Merge the new branch into master
+git log --oneline feature                # find original commits
+git checkout -b feature-v2 master        # new branch from master
+git cherry-pick d1c2b3a e1d2c3b f1e2d3c  # cherry-pick (oldest to newest)
 git checkout master
 git merge feature-v2
 ```
 
-```
-RESULT:
-
-Master: X---Y---Z---M---M'(revert)---M2 (merge feature-v2)
-                                     /
-feature-v2:                    D'--E'--F' (new hashes, same changes)
-```
-
-**Pros:** Clean, no revert-of-revert, easy to understand
-**Cons:** If feature had many commits, cherry-picking each one is tedious
-**Tip:** Use range cherry-pick to avoid listing each commit:
+Range shortcut (avoids listing each commit):
 
 ```bash
-# Cherry-pick all commits from D to F (D's parent..F)
 git cherry-pick d1c2b3a^..f1e2d3c
-```
-
----
-
-### Alternative 2: Rebase Feature Branch (Create New SHAs)
-
-Rebase the feature branch to generate new commit hashes, then merge.
-This rewrites the **feature branch** only, not master.
-
-```bash
-# 1. Rebase feature branch onto master
-#    --no-ff forces new commits even if it could fast-forward
-git checkout feature
-git rebase --no-ff master
-
-# 2. Now feature has new commit hashes
-git log --oneline feature
-# a2b3c4d commit F  (new hash, same content)
-# b3c4d5e commit E  (new hash)
-# c4d5e6f commit D  (new hash)
-
-# 3. Merge into master
-git checkout master
-git merge feature
 ```
 
 ```
@@ -913,19 +706,38 @@ RESULT:
 
 Master: X---Y---Z---M---M'(revert)---M2
                                      /
-feature (rebased):             D''--E''--F'' (new hashes)
+feature-v2:                    D'--E'--F' (new hashes, same changes)
 ```
 
-**Pros:** Feature branch stays as one unit, no new branch needed
-**Cons:** Rewrites feature branch history — don't do this if others are
-working on that feature branch
+| Pros                              | Cons                               |
+|-----------------------------------|------------------------------------|
+| Clean, no revert-of-revert        | Tedious if many commits            |
+| Preserves individual commits      | Need to create a new branch        |
 
 ---
 
-### Alternative 3: Squash Merge the Feature Branch
+## Fix 3: Rebase Feature Branch (Create New SHAs)
 
-Squash all feature commits into one new commit. Git sees a brand new
-commit with a new hash.
+Rebase the feature branch to generate new commit hashes, then merge.
+Rewrites the **feature branch** only, not master.
+
+```bash
+git checkout feature
+git rebase --no-ff master                # new hashes for D, E, F
+git checkout master
+git merge feature
+```
+
+| Pros                              | Cons                                          |
+|-----------------------------------|-----------------------------------------------|
+| Feature branch stays as one unit  | Rewrites feature branch history               |
+| No new branch needed              | Don't use if others share the feature branch  |
+
+---
+
+## Fix 4: Squash Merge the Re-merge
+
+Squash all feature commits into one new commit with a new hash.
 
 ```bash
 git checkout master
@@ -933,167 +745,122 @@ git merge --squash feature
 git commit -m "Re-add feature: D, E, F changes (squashed)"
 ```
 
-```
-RESULT:
-
-Master: X---Y---Z---M---M'(revert)---S (single squashed commit)
-
-S contains all changes from D+E+F combined into one commit
-```
-
-**Pros:** Simplest command, one clean commit
-**Cons:** Loses individual commit history (D, E, F become one commit S)
+| Pros                  | Cons                                        |
+|-----------------------|---------------------------------------------|
+| Simplest command      | Loses individual commit history (D,E,F → S) |
+| One clean commit      |                                             |
 
 ---
 
-## Which Alternative to Use?
+## Which Fix to Use?
 
 ```
 Need to re-merge a feature branch after revert?
 │
-├── How many commits does the feature have?
-│   │
-│   ├── Few commits (1-5)
-│   │   └── Cherry-pick onto new branch (Alternative 1)
-│   │       Simple, clean, preserves individual commits
-│   │
-│   ├── Many commits (5+)
-│   │   ├── Care about individual commit history?
-│   │   │   ├── YES --> Rebase the feature branch (Alternative 2)
-│   │   │   └── NO  --> Squash merge (Alternative 3)
-│   │   │
-│   │   └── Others working on the feature branch?
-│   │       ├── YES --> Cherry-pick or Squash (don't rebase shared branch)
-│   │       └── NO  --> Any alternative works
-│   │
-│   └── Just want it done, don't care about history?
-│       └── Squash merge (Alternative 3) — one command, done
+├── Few commits (1-5)
+│   └── Cherry-pick onto new branch (Fix 2)
 │
-└── Or just do the standard revert-of-revert if none of this matters
+├── Many commits (5+)
+│   ├── Care about individual commit history?
+│   │   ├── YES --> Rebase the feature branch (Fix 3)
+│   │   └── NO  --> Squash merge (Fix 4)
+│   │
+│   └── Others working on the feature branch?
+│       ├── YES --> Cherry-pick or Squash (don't rebase shared branch)
+│       └── NO  --> Any fix works
+│
+├── Just want it done?
+│   └── Squash merge (Fix 4) — one command, done
+│
+└── None of this matters?
+    └── Revert the revert (Fix 1)
 ```
 
-| Alternative              | New Hashes? | Preserves Commits? | Rewrites Feature? | Complexity |
-|--------------------------|-------------|---------------------|--------------------|------------|
-| Cherry-pick (new branch) | Yes         | Yes                 | No                 | Medium     |
-| Rebase feature           | Yes         | Yes                 | Yes                | Low        |
-| Squash merge             | Yes         | No (combined)       | No                 | Low        |
-| Revert-of-revert         | No          | Yes                 | No                 | Low        |
+| Fix                        | New Hashes? | Preserves Commits? | Rewrites Feature? |
+|----------------------------|-------------|---------------------|--------------------|
+| 1. Revert-of-revert        | No          | Yes                 | No                 |
+| 2. Cherry-pick (new branch)| Yes         | Yes                 | No                 |
+| 3. Rebase feature          | Yes         | Yes                 | Yes                |
+| 4. Squash merge            | Yes         | No (combined)       | No                 |
 
 ---
+
+---
+
+________________________________________________________________________________
 
 # How to Avoid the Revert-Revert Problem Entirely
 
 The revert-revert problem exists ONLY because of **merge commits**.
-A merge commit links the feature commits (D, E, F) into master's
+
+## Why Merge Commits Cause This
+
+A merge commit links feature commits (D, E, F) into master's
 ancestry graph. Even after reverting, Git still "sees" them.
 
-## Use Squash Merge Instead of Merge Commit
-
 ```
-MERGE COMMIT (the problem):
+MERGE COMMIT:
 
 Feature:  D---E---F
                    \
 Master:   X---Y---Z---M          M links D, E, F into master's graph
-                     /            ↓
-              D, E, F are now    git revert -m 1 M  →  creates M'
-              reachable from M   git merge feature  →  "Already up to date"
-                                 You MUST revert the revert first
 
+After revert:  git merge feature  →  "Already up to date" (FAILS)
+```
 
-SQUASH MERGE (no problem):
+## Squash Merge Avoids It
+
+A squash commit creates a brand-new commit with no link to D, E, F.
+
+```
+SQUASH MERGE:
 
 Feature:  D---E---F              D, E, F are NOT in master's graph
-                                  ↓
-Master:   X---Y---Z---S          S is a brand-new commit (new hash)
-                                 git revert S  →  creates S'
-                                 git merge feature  →  WORKS (D,E,F are "new")
+
+Master:   X---Y---Z---S          S is independent (new hash)
+
+After revert:  git merge feature  →  WORKS (D, E, F are "new" to Git)
 ```
 
-## Why This Works
-
-```
-Merge commit M:
-  - Has 2 parents (Z and F)
-  - Makes D, E, F reachable from master
-  - After revert, Git still sees D, E, F in the graph
-  - Re-merge says "Already up to date"
-
-Squash commit S:
-  - Has 1 parent (Z only)
-  - D, E, F are NOT connected to master's graph at all
-  - S is an independent commit that happens to have the same changes
-  - After revert, D, E, F are still unknown to master
-  - Re-merge works because Git sees D, E, F as fresh commits
-```
-
-## Side-by-Side Comparison
+## Side-by-Side
 
 ```bash
-# === MERGE COMMIT workflow (has the problem) ===
-git checkout master
-git merge feature                   # creates M with 2 parents
-# oops, need to revert
-git revert -m 1 <M-hash>           # creates M', needs -m flag
-# want to re-merge later
-git merge feature                   # "Already up to date" — FAILS
-git revert <M'-hash>                # must revert the revert first
-git merge feature                   # now works (messy history)
+# MERGE COMMIT workflow (has the problem)
+git merge feature                # creates M with 2 parents
+git revert -m 1 <M-hash>        # needs -m flag
+git merge feature                # "Already up to date" — FAILS
 
-
-# === SQUASH MERGE workflow (avoids the problem) ===
-git checkout master
-git merge --squash feature          # stages changes, no commit yet
-git commit -m "Add feature"         # creates S with 1 parent
-# oops, need to revert
-git revert <S-hash>                 # creates S', no -m flag needed
-# want to re-merge later
-git merge feature                   # WORKS directly, no extra steps
+# SQUASH MERGE workflow (no problem)
+git merge --squash feature       # stages changes
+git commit -m "Add feature"      # creates S with 1 parent
+git revert <S-hash>              # no -m flag needed
+git merge feature                # WORKS directly
 ```
 
 ## Tradeoff
 
-```
-Squash merge avoids revert-revert, but:
-
-✓ Simpler revert (no -m flag, no revert-of-revert)
-✓ Cleaner master history (one commit per feature)
-✓ Re-merge just works
-
-✗ Loses individual commit history on master (D, E, F → single S)
-✗ Feature branch shows as "unmerged" in Git (no ancestry link)
-✗ GitHub/GitLab may show the PR branch as not merged
-✗ Many teams mandate merge commits (not an option everywhere)
-```
+| Squash merge pros                     | Squash merge cons                         |
+|---------------------------------------|-------------------------------------------|
+| Simpler revert (no -m, no revert-revert) | Loses individual commit history on master |
+| Cleaner master history                | Feature branch shows as "unmerged" in Git |
+| Re-merge just works                   | Many teams mandate merge commits          |
 
 ## If You Cannot Use Squash Merge
 
-If your team enforces merge commits, the revert-revert problem is
-unavoidable with a plain `git merge`. Your options to re-merge:
+Your options to re-merge after revert:
 
-```
-Must use merge commits? Need to re-merge after revert?
-│
-├── Revert the revert (standard fix above)
-│   Messy history but zero risk, no branch rewriting
-│
-├── Cherry-pick onto a new branch (Alternative 1 below)
-│   Best balance — new hashes, preserves individual commits
-│
-├── Rebase the feature branch (Alternative 2 below)
-│   Only if no one else is on the feature branch
-│
-└── Squash merge JUST the re-merge (Alternative 3 below)
-    You keep merge commits for the initial merge,
-    but use squash only for the re-merge step
-    (combines D, E, F into one commit S for the re-merge)
-```
-
-Note: Alternative 3 (squash merge) can be used ONLY for the re-merge
-step, even if your team mandates merge commits for normal PRs. The
-re-merge is a recovery operation, not a normal feature merge.
+| Approach                          | Notes                                          |
+|-----------------------------------|-------------------------------------------------|
+| Revert the revert (Fix 1)        | Messy history but zero risk                    |
+| Cherry-pick onto new branch (Fix 2)| Best balance — new hashes, preserves commits |
+| Rebase the feature branch (Fix 3)| Only if no one else shares the branch          |
+| Squash only the re-merge (Fix 4) | Use squash just for the recovery step          |
 
 ---
+
+---
+
+________________________________________________________________________________
 
 # Real-World Fix Strategy (From Experience)
 
@@ -1102,79 +869,93 @@ re-merge is a recovery operation, not a normal feature merge.
 Before doing anything, open a Git client that shows the commit tree
 (GitKraken, SourceTree, Fork, or `git log --oneline --graph --all`).
 
-Visualizing helps you understand what actually happened. Example:
-a developer reverted a cherry-picked commit in QA that was originally
-pushed to develop — this causes conflicts between develop and QA on
-every future merge because Git replays the revert.
+Visualizing helps identify the problem. Example: a developer reverted
+a cherry-picked commit in QA that was originally pushed to develop —
+this caused conflicts between develop and QA on every future merge
+because Git replays the revert.
 
 ## Step 2: Choose Your Fix
 
 ### Option A: Resolve Conflicts Manually
 
-```
-- Go through each conflict carefully
-- Understand WHAT was reverted and WHY
-- Decide for each file: keep the reverted state or restore the original
+Go through each conflict carefully. Understand WHAT was reverted and WHY.
+Decide for each file: keep the reverted state or restore the original.
 
-Warning: This requires extreme accuracy. You must understand
-every conflict — a wrong resolution silently drops changes.
-```
+**Warning:** Requires extreme accuracy. A wrong resolution silently drops changes.
 
 ### Option B: Reset the Branch and Re-merge from Scratch
 
 When the branch is too tangled to resolve conflicts safely,
 start over by resetting the branch to before the mess began.
 
+**Steps:**
+
 ```bash
-# 1. Coordinate with the team
-#    Ask developers to stop pushing to the affected branch
-#    until you're done
+# 1. Ask developers to stop pushing to the affected branch
 
 # 2. Temporarily allow force push on the protected branch
 #    GitHub: Settings → Branches → Branch protection rules
-#    Uncheck "Restrict force pushes" (or add yourself)
 
 # 3. Find the last clean commit (before the bad revert/merge)
 git log --oneline --graph
-# identify the commit hash where everything was still correct
 
 # 4. Reset the branch to the clean state
-git checkout qa                    # or whichever branch is broken
+git checkout qa
 git reset --hard <clean-commit>
 
-# What git reset --hard does:
-#
-# BEFORE reset:
-#
-# qa:  A---B---C---X---R(revert of X)---M(bad merge)
-#               ^                        ^
-#          clean-commit                 HEAD
-#
-# git reset --hard C
-#
-# AFTER reset:
-#
-# qa:  A---B---C
-#               ^
-#              HEAD (everything after C is gone)
-#
-# X, R, M — completely removed from the branch
-# as if they never happened
-#
-# Note: commits are NOT deleted from Git's database immediately
-#       they stay in reflog for ~90 days (recoverable with git reflog)
-#       only this branch is affected, other branches are untouched
-
 # 5. Re-merge the branches that should be in there
-git merge develop                  # or whatever was merged before
-# resolve conflicts fresh — this time without the revert pollution
+git merge develop
+# resolve conflicts fresh — without the revert pollution
 
 # 6. Force push
 git push --force origin qa
 
 # 7. IMMEDIATELY restore branch protection
-#    GitHub: Settings → Branches → re-enable the rules
-#    Don't forget this step!
+```
+
+### What `git reset --hard` Does Here
+
+```
+BEFORE:  qa:  A---B---C---X---R(revert of X)---M(bad merge)
+                       ^                         ^
+                  clean-commit                  HEAD
+
+AFTER:   qa:  A---B---C
+                       ^
+                      HEAD (X, R, M gone — as if they never happened)
+```
+
+Commits stay in reflog for ~90 days (recoverable with `git reflog`).
+Only this branch is affected — other branches are untouched.
+
+### Why `--hard` and Not `--soft` or `--mixed`?
+
+| Flag      | Working dir  | Staging     | Use when                          |
+|-----------|-------------|-------------|-----------------------------------|
+| `--hard`  | RESET       | RESET       | Clean slate — ready to re-merge   |
+| `--soft`  | UNCHANGED   | ALL staged  | Want to review before discarding  |
+| `--mixed` | UNCHANGED   | RESET       | Want files in working dir only    |
+
+You want to throw away X, R, M completely — `--hard` is the right choice.
+
+Tip: use `--soft` first to review, then `--hard` for real:
+
+```bash
+git reset --soft <clean-commit>
+git diff --cached                        # see what's being thrown away
+git reset --hard <clean-commit>          # then do it for real
+```
+
+### Why Regular Push Fails After Reset
+
+```
+After reset:
+
+Local qa:   A---B---C              (HEAD moved backward)
+Remote qa:  A---B---C---X---R---M  (still has everything)
+
+git push origin qa         → REJECTED (local is behind remote)
+git push --force origin qa → WORKS (forces remote to match local)
 ```
 
 ### Which Option to Choose
@@ -1193,6 +974,8 @@ How messy is the branch?
         Resetting is the only way to cleanly remove it
 ```
 
+---
+
 ## Why Git Revert Is Dangerous Across Branches
 
 ```
@@ -1203,19 +986,25 @@ Developer reverts commit X in QA:
 
 Now every time you merge develop → QA (or QA → develop),
 Git replays the revert R and causes conflicts with X.
-
-The revert "follows" the branch — it's a commit, and merges
-carry commits across branches. This is why:
-
-  - Use revert ONLY for changes that should be permanently deleted
-  - For temporary rollbacks, manually undo the changes instead
-    (edit the files back, commit as a normal change)
-  - A manual undo doesn't have the "revert propagation" problem
-    because Git doesn't treat it specially — it's just a commit
-    that happens to change code back
 ```
 
+The revert "follows" the branch — it's a commit, and merges carry
+commits across branches.
+
+| Scenario                         | Use revert?  | Better alternative              |
+|----------------------------------|-------------|----------------------------------|
+| Change should be permanently deleted | YES      | `git revert` is correct          |
+| Temporary rollback               | NO          | Manually edit files back         |
+
+A manual undo doesn't have the "revert propagation" problem because
+Git doesn't treat it specially — it's just a commit that happens to
+change code back.
+
 ---
+
+---
+
+________________________________________________________________________________
 
 # Lesson Learned
 
@@ -1224,7 +1013,6 @@ merging that feature branch into master is the same as merging QA.
 Always check what you're actually merging:
 
 ```bash
-# BEFORE merging, always run:
 git log master..feature --oneline
 
 # This shows ALL commits that master doesn't have yet
