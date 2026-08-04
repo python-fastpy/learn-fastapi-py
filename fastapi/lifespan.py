@@ -60,6 +60,43 @@ from fastapi.responses import JSONResponse
 #     yield        = hand off (caller runs while yielded)
 #     after yield  = cleanup  (runs once at end)
 #
+#   HOW IT'S CONSUMED (what happens under the hood):
+#
+#     async with db_manager() as conn:   # calls __aenter__ → runs code before yield
+#         await conn.execute("SELECT 1") # your code runs here (yield pauses db_manager)
+#     # exiting `async with` calls __aexit__ → runs code after yield
+#
+#     # Step by step:
+#     # 1. Python sees `async with db_manager()`
+#     # 2. Calls __aenter__  → runs `conn = await connect()` (before yield)
+#     # 3. yield conn        → `conn` becomes the `as conn` variable
+#     # 4. YOUR code runs    → `await conn.execute("SELECT 1")`
+#     # 5. Block exits       → __aexit__ runs `await conn.close()` (after yield)
+#
+#     # FastAPI does the same with lifespan:
+#     # async with lifespan(app):  ← FastAPI calls this internally
+#     #     # app serves requests here (between yield)
+#
+#   HOW FASTAPI CONSUMES LIFESPAN:
+#
+#     # Step 1: You define the lifespan
+#     @asynccontextmanager
+#     async def lifespan(app: FastAPI):
+#         db = await connect()       # startup
+#         app.state.db = db
+#         yield                      # app serves requests
+#         await db.close()           # shutdown
+#
+#     # Step 2: You pass it to FastAPI (just a reference, NOT called yet)
+#     app = FastAPI(lifespan=lifespan)
+#
+#     # Step 3: Uvicorn starts → FastAPI internally does:
+#     async with lifespan(app):     # ← FastAPI calls it for you
+#         await serve_requests()    # handles all HTTP traffic
+#     # exiting async with → shutdown code runs
+#
+#     # You NEVER call lifespan() yourself — FastAPI is the consumer.
+#
 #   If setup raises before yield, cleanup code after yield
 #   NEVER executes — this is why FastAPI chose it for lifespan.
 #
