@@ -6,7 +6,7 @@
 # ══════════════════════════════════════════════════════════════════
 
 from __future__ import annotations  # makes all annotations lazy strings (3.7+)
-import typing, functools
+import typing, functools, operator
 from typing import (
     Optional, Union, Any, Callable, Literal, TypeAlias,
     TypedDict, Annotated, TypeVar, Protocol, runtime_checkable,
@@ -155,6 +155,33 @@ print(create_item("Laptop", 999.99))  # {'name': 'Laptop', 'price': 999.99}
 #     limit: Annotated[int, Query(le=100)] = 10,
 # ): ...
 # FastAPI reads Query() from Annotated → enforces validation + generates docs
+
+# Annotated with operator.add — used by LangGraph to MERGE state fields
+# In LangGraph, Annotated[list[str], operator.add] means:
+# "When updating this field, APPEND new items instead of replacing the list"
+# Without it: new_state = ["c"]           → field becomes ["c"]
+# With it:    new_state = ["c"]           → field becomes ["a", "b", "c"]
+from dataclasses import dataclass as dc
+
+@dc
+class ChatState:
+    messages: Annotated[list[str], operator.add] = field(default_factory=list)
+    context: Annotated[list[str], operator.add] = field(default_factory=list)
+    final_answer: str = ""    # no reducer → plain overwrite
+
+state = ChatState(messages=["Hello"], context=["doc1"])
+# Simulating what LangGraph does internally when a node returns a partial update:
+update = {"messages": ["How are you?"], "context": ["doc2", "doc3"]}
+# LangGraph sees operator.add in the annotation → calls operator.add(old, new)
+merged_messages = operator.add(state.messages, update["messages"])
+merged_context = operator.add(state.context, update["context"])
+print(f"Merged messages: {merged_messages}")  # ['Hello', 'How are you?']
+print(f"Merged context: {merged_context}")    # ['doc1', 'doc2', 'doc3']
+# Without operator.add, update["messages"] would REPLACE state.messages entirely
+
+# operator.add works because list.__add__ concatenates:
+print(operator.add([1, 2], [3, 4]))  # [1, 2, 3, 4]
+# Other reducers you could use: operator.or_ (sets), custom functions, etc.
 
 # Custom metadata class — access at runtime
 class Range:
