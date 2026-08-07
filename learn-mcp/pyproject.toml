@@ -5,6 +5,7 @@ description = "Step-by-step MCP learning with FastMCP -- wired to TR LLM Orchest
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp>=3.4.0",
+    "langgraph>=0.4",
     "langchain-openai>=0.3",
     "langchain-core>=0.3",
     "openai>=1.40",
