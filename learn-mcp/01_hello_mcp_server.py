@@ -1,24 +1,27 @@
-"""Lesson 01 -- Your First MCP Server
-======================================
+"""Lesson 01 -- MCP Server: Decorator vs Imperative Registration
+================================================================
 Concepts:
   - FastMCP: the server framework for building MCP-compliant tools
-  - @mcp.tool: decorator to register a tool function
+  - Two registration styles:
+      1. @mcp.tool          -- decorator (simple, good for small servers)
+      2. mcp.tool()(fn)     -- imperative (production pattern, decoupled)
   - Annotated[type, Field(description="...")]: parameter metadata
+  - meta dict: display_name, response_mode, hidden
   - Client(server): in-process client -- no HTTP needed for testing
-  - Tools are async functions that return dicts
 
 Flow:
-  +--------+     +------------+     +--------+
-  | Client | --> | MCP Server | --> | Tool   |
-  +--------+     +------------+     +--------+
-       |              |                  |
-       |   list_tools()                  |
-       |   call_tool("greet", {name})    |
-       |              +--- greet() ------+
-       |   <-- result dict               |
-       +----------------------------------
+  +--------+     +------------------+     +------------------+
+  | Client | --> | MCP Server       | --> | Tool Functions   |
+  +--------+     | "learn-mcp"      |     |                  |
+                 +------------------+     | greet()          |
+                 | Tools:           |     | farewell()       |
+                 |  - greet         |     +------------------+
+                 |  - farewell      |
+                 +------------------+
 
-  Maps to: story-drafting/src/main.py (FastMCP constructor + tool registration)
+  Your production code uses IMPERATIVE registration exclusively:
+    mcp.tool(name="generate_spot_story", meta={...})(generate_spot_story)
+  This keeps tool logic separate from server wiring.
 
 No LLM needed -- pure MCP protocol mechanics.
 
@@ -31,16 +34,15 @@ from pydantic import Field
 from fastmcp import FastMCP, Client
 
 
-# -- Step 1: Create a FastMCP server -------------------------------------------
-# This is the same pattern as story-drafting/src/main.py:
-#   mcp: FastMCP = FastMCP(name="story-drafting")
-
-mcp = FastMCP(name="hello-mcp")
+mcp = FastMCP(name="learn-mcp")
 
 
-# -- Step 2: Register a tool with the @mcp.tool decorator ----------------------
-# The decorator automatically extracts the function signature and docstring
-# to build the MCP tool schema. Annotated + Field gives parameter descriptions.
+# =============================================================================
+# STYLE 1: DECORATOR REGISTRATION
+# =============================================================================
+# Simple and clean -- good for small servers or learning.
+# The decorator extracts the function signature and docstring
+# to build the MCP tool schema automatically.
 
 @mcp.tool
 async def greet(
@@ -49,21 +51,49 @@ async def greet(
     """Generate a personalized greeting."""
     return {
         "greeting": f"Hello, {name}! Welcome to MCP.",
-        "server": "hello-mcp",
+        "server": "learn-mcp",
     }
 
 
-# -- Step 3: Use an in-process Client to call the tool -------------------------
-# FastMCP supports passing the server object directly to Client().
-# No HTTP server needed -- great for testing and learning.
+# =============================================================================
+# STYLE 2: IMPERATIVE REGISTRATION
+# =============================================================================
+# This is what your production codebase uses (story-drafting/src/main.py).
+# Advantages:
+#   - Tool function is a plain async def -- no framework coupling
+#   - Registration with name/meta happens separately (usually in main.py)
+#   - Easier to test the function independently
+#   - meta dict controls UI behavior (display_name, response_mode, hidden)
+
+async def farewell(
+    name: Annotated[str, Field(description="The person's name to say goodbye to")],
+) -> dict:
+    """Generate a personalized farewell message."""
+    return {
+        "farewell": f"Goodbye, {name}! See you next time.",
+        "server": "learn-mcp",
+    }
+
+
+mcp.tool(
+    name="farewell",
+    meta={
+        "display_name": "Say Farewell",
+        "response_mode": "direct",
+    },
+)(farewell)
+
+
+# =============================================================================
+# CLIENT -- test both styles in-process
+# =============================================================================
 
 async def main():
-    # Connect client directly to the server object (in-process transport)
     async with Client(mcp) as client:
 
-        # Discover available tools
+        # Discover all registered tools
         tools = await client.list_tools()
-        print("=== Available Tools ===")
+        print("=== Registered Tools ===")
         for tool in tools:
             print(f"  - {tool.name}: {tool.description}")
             if tool.inputSchema.get("properties"):
@@ -71,25 +101,39 @@ async def main():
                     print(f"      param '{param}': {schema.get('description', 'no description')}")
         print()
 
-        # Call the tool
-        result = await client.call_tool("greet", {"name": "Shubham"})
-        print("=== Tool Result ===")
-        print(f"  {result}")
+        # Call the decorator-registered tool
+        print("=== greet (decorator style) ===")
+        r1 = await client.call_tool("greet", {"name": "Shubham"})
+        print(f"  {r1}")
+
+        # Call the imperative-registered tool
+        print("\n=== farewell (imperative style) ===")
+        r2 = await client.call_tool("farewell", {"name": "Shubham"})
+        print(f"  {r2}")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 
     # -- Key takeaway --------------------------------------------------------
-    # FastMCP makes building MCP servers simple:
-    #   1. Create: mcp = FastMCP(name="...")
-    #   2. Register: @mcp.tool on async functions
-    #   3. Test: Client(mcp) connects in-process
     #
-    # The protocol handles schema generation, validation, and transport
-    # automatically -- you just write Python functions.
+    # DECORATOR (@mcp.tool):
+    #   - One-liner registration, function IS the tool
+    #   - Good for small servers, learning, quick prototypes
+    #
+    # IMPERATIVE (mcp.tool(name, meta)(fn)):
+    #   - Function stays framework-free (plain async def)
+    #   - Registration + meta lives in one place (main.py)
+    #   - Easier to unit-test the function directly
+    #   - Production pattern used in story-drafting, urgent-drafting
+    #
+    # The meta dict controls UI behavior:
+    #   display_name  -> what the user sees in the skill list
+    #   response_mode -> "direct" (tool runs to completion)
+    #   hidden        -> True for internal tools (validate_ric, search_rics)
     #
     # -- Exercise -------------------------------------------------------------
-    # 1. Add a second tool `farewell(name: str) -> dict` that says goodbye
-    # 2. Call both tools from the client
-    # 3. Observe how list_tools() shows both tools
+    # 1. Move greet() to imperative style and farewell() to decorator style
+    # 2. Add meta={"hidden": True} to farewell and verify it still works
+    #    when called by name (hidden just affects UI display)
+    # 3. Try calling a tool that doesn't exist and observe the error

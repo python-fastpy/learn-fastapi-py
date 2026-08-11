@@ -17,9 +17,8 @@ For lessons 07, 08, 12 (LLM-powered): copy `.env.example` to `.env` and fill in 
 
 | # | File | Title | Concepts | Maps To |
 |---|------|-------|----------|---------|
-| 01 | `01_hello_mcp_server.py` | Your First MCP Server | FastMCP, @mcp.tool, Annotated params, in-process Client | story-drafting/main.py |
-| 02 | `02_tool_patterns.py` | Tool Registration & Types | Decorator vs imperative, meta dict, hidden tools | story-drafting/main.py |
-| 03 | `03_input_validation.py` | Validation & Error Handling | ToolError, input clamping, Pydantic Field | archive_search.py, search_rics.py |
+| 01 | `01_hello_mcp_server.py` | MCP Server: Decorator vs Imperative | FastMCP, @mcp.tool, imperative mcp.tool()(fn), meta dict, in-process Client | story-drafting/main.py |
+| 02 | `02_input_validation.py` | Validation & Error Handling | ToolError, input clamping, isError flag, raise_on_error | archive_search.py, search_rics.py |
 | 04 | `04_resources_and_prompts.py` | Beyond Tools: Resources & Prompts | 3 MCP primitives, @mcp.resource, @mcp.prompt | workflows/routes.py |
 
 ### Phase 2: Client & Transport (No LLM)
