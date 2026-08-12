@@ -19,6 +19,7 @@ For lessons 07, 08, 12 (LLM-powered): copy `.env.example` to `.env` and fill in 
 |---|------|-------|----------|---------|
 | 01 | `01_hello_mcp_server.py` | MCP Server: Decorator vs Imperative | FastMCP, @mcp.tool, imperative mcp.tool()(fn), meta dict, in-process Client | story-drafting/main.py |
 | 02 | `02_input_validation.py` | Validation & Error Handling | ToolError, input clamping, isError flag, raise_on_error | archive_search.py, search_rics.py |
+| 03 | `03_logging.py` | Logging in MCP Servers | FastMCP log_level, get_logger, Python logging in tools | story-drafting/main.py |
 | 04 | `04_resources_and_prompts.py` | Beyond Tools: Resources & Prompts | 3 MCP primitives, @mcp.resource, @mcp.prompt | workflows/routes.py |
 
 ### Phase 2: Client & Transport (No LLM)
