@@ -101,6 +101,12 @@ async def run_client():
     print()
 
     # -- 2. Connect via MCP over HTTP -----------------------------------------
+    # Lessons 01-03:  Client(mcp)  -- in-process, no network
+    #   Client  ──directly──>  MCP Server (same process)
+    #
+    # This lesson:  Client(transport)  -- over HTTP
+    #   Client  ──POST /mcp──>  HTTP Server (child process)
+    #              <──JSON───
     transport = StreamableHttpTransport(url=f"{SERVER_URL}/mcp")
 
     async with Client(transport) as client:
