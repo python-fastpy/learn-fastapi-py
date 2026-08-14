@@ -50,6 +50,41 @@ Flow:
 PREREQUISITES: Lesson 08 (forwarded blocks — interrupts build on the same _meta mechanism)
 
 Run:  uv run python 10_interrupts.py
+
+EXPECTED OUTPUT:
+  === 1. Spot Story Review Interrupt ===
+
+    Agent-visible text: Draft ready for review ...
+    Forwarded block:
+      event_type: SPOT_STORY_REVIEW
+      message: Please review this draft before publishing
+      actions: ['approve', 'refine', 'reject']
+      Payload keys: ['draft', 'word_count', 'headline', 'metadata']
+
+  === 2. RIC Selection Interrupt ===
+
+    Agent-visible text: Multiple RICs found. Please select ...
+    Forwarded block:
+      event_type: NEWS_BUZZ.RIC_SELECTION
+      message: We found multiple matches for "AAPL". Please select ...
+      actions: ['select', 'cancel']
+      Payload keys: ['candidates', 'original_query']
+
+  === 3. Headline Selection Interrupt ===
+
+    Agent-visible text: Headlines fetched. Please select ...
+    Forwarded block:
+      event_type: NEWS_BUZZ.HEADLINE_SELECTION
+      message: Select the headlines to include in the buzz
+      actions: ['select', 'select_all', 'cancel']
+      Payload keys: ['headlines', 'ric', 'company_name']
+
+  === Interrupt Lifecycle Summary ===
+    1. Tool builds SkillInterrupt ...
+    2. Interrupt creates a forwarded block ...
+    3. Orchestrator checkpoints state (DynamoDB) ...
+    4. User responds (approve/refine/reject) ...
+    5. Orchestrator resumes from checkpoint ...
 """
 
 import asyncio

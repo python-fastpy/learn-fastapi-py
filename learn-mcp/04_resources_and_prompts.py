@@ -46,6 +46,39 @@ Flow:
 PREREQUISITES: Lesson 01 (server + tool basics)
 
 Run:  uv run python 04_resources_and_prompts.py
+
+EXPECTED OUTPUT:
+  === Resources ===
+
+  Available resources:
+    - config://settings: get_settings
+
+  config://settings -> ["...version: 2.1.0, region: eu-west-1..."]
+
+  topic://markets -> ["...S&P 500...+1.2%..."]
+  topic://energy  -> ["...Brent Crude...78.50...-0.5%..."]
+
+  === Resource Templates ===
+
+  Available templates:
+    - topic://{topic}: get_topic_data
+
+  === Prompts ===
+
+  Available prompts:
+    - summarize: Generate a prompt for summarizing news about a topic.
+    - draft_headline: Generate a prompt for drafting a news headline.
+
+  summarize(oil prices, bullet):
+    Summarize the latest news about oil prices as 5 bullet points. ...
+
+  draft_headline(Fed raises rates):
+    Write a Reuters-style headline for the following event: ...
+
+  === Tools (for comparison) ===
+
+  Tools: ['analyze_topic']
+  analyze_topic('markets') -> [TextContent(... sentiment: positive ...)]
 """
 
 import asyncio

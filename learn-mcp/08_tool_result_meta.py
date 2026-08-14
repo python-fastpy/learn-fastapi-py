@@ -49,6 +49,30 @@ PREREQUISITES: Lesson 07 (LLM tools), Lesson 04 (resources/primitives)
 ** Requires .env with TR Orchestrator credentials **
 
 Run:  uv run python 08_tool_result_meta.py
+
+EXPECTED OUTPUT (without .env -- mock mode):
+  === 1. Simple Tool (word_count) ===
+
+    Result: [TextContent(... word_count: 7, char_count: 45 ...)]
+
+  === 2. Forwarded Blocks via call_tool (agent view only) ===
+
+    Agent sees: [TextContent(... summary: 'Draft generated', word_count: <N> ...)]
+    (Forwarded blocks are invisible to call_tool -- use call_tool_mcp to access them)
+
+  === 3. Forwarded Blocks via call_tool_mcp (full result) ===
+
+    Content blocks (agent-visible): 1
+      [0] TextContent: {"summary": "Draft generated", ...}
+
+    Forwarded blocks (UI-only): 1
+      event_type: SPOT_STORY_REVIEW
+      word_count: <N>
+      draft preview: <first 200 chars of mock/LLM draft>...
+
+EXPECTED OUTPUT (with .env -- real LLM draft):
+  Same structure, but draft_story returns a real LLM-generated draft
+  instead of a mock placeholder.
 """
 
 import asyncio

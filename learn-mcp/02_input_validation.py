@@ -37,6 +37,24 @@ Flow:
 PREREQUISITES: Lesson 01 (server + tool basics)
 
 Run:  uv run python 02_input_validation.py
+
+EXPECTED OUTPUT:
+  === Successful Calls ===
+
+    greet('Shubham')           -> [TextContent(... "Hey Shubham! What's up?" ...)]
+    greet('Shubham', formal)   -> [TextContent(... "Good day, Shubham. ..." ...)]
+    farewell('Shubham', 3)     -> [TextContent(... "Goodbye, Shubham! ..." wave_count_used: 3)]
+
+  === Input Clamping ===
+
+    farewell(wave_count=99)  -> clamped to {..., 'wave_count_used': 5}
+    farewell(wave_count=-5)  -> clamped to {..., 'wave_count_used': 1}
+
+  === Error Cases (ToolError) ===
+
+    greet('')              -> isError=True, msg=name cannot be empty
+    greet(style=pirate)    -> isError=True, msg=Invalid style 'pirate'. Must be one of: casual, enthusiastic, formal
+    farewell('')           -> isError=True, msg=name cannot be empty
 """
 
 import asyncio

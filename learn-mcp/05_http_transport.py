@@ -42,6 +42,25 @@ Flow:
 PREREQUISITES: Lesson 01 (server basics), Lesson 04 (client discovery)
 
 Run:  uv run python 05_http_transport.py
+
+EXPECTED OUTPUT:
+  Starting HTTP server on port 8765...
+  Server is ready.
+
+  === Health Check ===
+    GET /health -> 200: {'status': 'healthy', 'server': 'http-demo'}
+
+  === Tools (via HTTP) ===
+    - word_count: Count words in the given text.
+    - uppercase: Convert text to uppercase.
+
+  === word_count ===
+    [TextContent(... word_count: 7, char_count: 45 ...)]
+
+  === uppercase ===
+    [TextContent(... 'uppercased': 'BREAKING NEWS' ...)]
+
+  Server stopped.
 """
 
 import asyncio

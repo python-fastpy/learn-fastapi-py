@@ -57,6 +57,36 @@ PREREQUISITES: Lessons 09 (workflows), 11 (multi-server), 06 (client patterns)
 ** Requires .env for full LLM orchestration; runs in mock mode without it **
 
 Run:  uv run python 12_workflow_orchestration.py
+
+EXPECTED OUTPUT (mock mode -- no .env):
+  === Workflow-Driven Orchestration Demo ===
+
+  Setting up orchestrator...
+    Registered 2 servers with 5 tools
+    Loaded 3 workflows
+
+  === Test 1: "draft a story about oil prices" ===
+    Fast-path matched -> draft-story
+    Available tools (gated): ['search_articles', 'draft_story']
+    Calling search_articles({query: 'oil prices'})...
+    Calling draft_story({topic: 'oil prices', ...})...
+    Result: Draft about oil prices ... (2 tool calls)
+
+  === Test 2: "search for articles about OPEC meeting" ===
+    Fast-path matched -> search-and-summarize
+    Available tools (gated): ['search_articles', 'summarize_text']
+    Calling search_articles({query: 'OPEC meeting'})...
+    Result: Found articles about OPEC meeting (1 tool call)
+
+  === Test 3: "validate RIC AAPL.O" ===
+    Fast-path matched -> ric-resolution
+    Available tools (gated): ['validate_ric']
+    Calling validate_ric({ric: 'AAPL.O'})...
+    Result: RIC AAPL.O validated (1 tool call)
+
+  === Test 4: "what's the weather today?" ===
+    No workflow matched (no fast-path, no LLM match)
+    Falling back to general response.
 """
 
 import asyncio

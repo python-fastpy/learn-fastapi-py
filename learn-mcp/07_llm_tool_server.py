@@ -40,6 +40,35 @@ PREREQUISITES: Lesson 01 (tools), llm_helper.py (credentials)
 ** Requires .env with TR Orchestrator credentials **
 
 Run:  uv run python 07_llm_tool_server.py
+
+EXPECTED OUTPUT (without .env -- schema-only mode):
+  === LLM Tools Demo (NO .env - showing tool schemas only) ===
+
+  Tool: summarize_text
+    Description: Summarize text using an LLM. ...
+    Parameters: ['text', 'style']
+
+  Tool: generate_headline
+    Description: Generate a Reuters-style headline using LLM.
+    Parameters: ['event', 'max_length']
+
+  Tool: classify_content
+    Description: Classify news content by topic and sentiment using LLM.
+    Parameters: ['text']
+
+  To run with real LLM calls, create a .env file from .env.example
+
+EXPECTED OUTPUT (with .env -- real LLM calls):
+  === LLM Tools Demo (with real LLM calls) ===
+
+  --- summarize_text ---
+    [TextContent(... summary: <LLM-generated summary> ...)]
+
+  --- generate_headline ---
+    [TextContent(... headline: <LLM-generated headline> ...)]
+
+  --- classify_content ---
+    [TextContent(... topic: 'tech', sentiment: 'positive' ...)]
 """
 
 import asyncio

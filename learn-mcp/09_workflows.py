@@ -51,6 +51,57 @@ Flow:
 PREREQUISITES: Lesson 01 (tools), Lesson 04 (resources)
 
 Run:  uv run python 09_workflows.py
+
+EXPECTED OUTPUT:
+  === Workflow System Demo ===
+
+  Created workflow files:
+    <tmpdir>/summarize-news.md
+    <tmpdir>/draft-story.md
+    <tmpdir>/search-and-summarize.md
+
+  === Server Tools (6) ===
+    - search_articles: Search for news articles by query
+    - summarize_text: Summarize a block of text
+    - generate_headline: Generate a headline for a story
+    - draft_story: Draft a full story from inputs
+    - validate_ric: Validate a Reuters Instrument Code
+    - fetch_quotes: Fetch latest quotes for a RIC
+
+  === Workflows (3) ===
+
+  1. summarize-news
+     Description: Summarize recent news about a topic ...
+     Tools: ['search_articles', 'summarize_text']
+     Triggers: ['summarize * news', 'news summary']
+
+  2. draft-story
+     Description: Draft a complete news story ...
+     Tools: ['search_articles', 'draft_story', 'generate_headline', 'validate_ric']
+     Triggers: ['draft * story', 'write * article']
+
+  3. search-and-summarize
+     Description: Search the text archive and summarize results ...
+     Tools: ['search_articles', 'summarize_text']
+     Triggers: ['search * archive', 'find * articles']
+
+  === Tool Visibility per Workflow ===
+
+  Workflow: summarize-news
+    search_articles    -> VISIBLE
+    summarize_text     -> VISIBLE
+    generate_headline  -> HIDDEN (not in workflow)
+    draft_story        -> HIDDEN (not in workflow)
+    validate_ric       -> HIDDEN (not in workflow)
+    fetch_quotes       -> HIDDEN (not in workflow)
+
+  Workflow: draft-story
+    search_articles    -> VISIBLE
+    summarize_text     -> HIDDEN (not in workflow)
+    generate_headline  -> VISIBLE
+    draft_story        -> VISIBLE
+    validate_ric       -> VISIBLE
+    fetch_quotes       -> HIDDEN (not in workflow)
 """
 
 import asyncio

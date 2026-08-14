@@ -25,6 +25,20 @@ FastMCP settings:
 PREREQUISITES: Lesson 01 (server + tool basics)
 
 Run:  uv run python 03_logging.py
+
+EXPECTED OUTPUT:
+  === MCP Logging Demo ===
+
+  <timestamp> __main__ INFO greet called with name=Shubham
+  (+ FastMCP DEBUG lines: tool dispatch, schema loading)
+
+  Result: [TextContent(... "Hello, Shubham!" ...)]
+
+  --- Log level set to WARNING (fewer logs) ---
+
+  (no INFO/DEBUG logs -- only WARNING+ would appear)
+
+  Result: [TextContent(... "Hello, Shubham!" ...)]
 """
 
 import asyncio

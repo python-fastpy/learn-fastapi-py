@@ -55,6 +55,52 @@ No real LLM needed -- uses mock analysis to keep it runnable without
 credentials.  Swap mock_analyze() for LLM-based analysis to go live.
 
 Run:  uv run python 13_langgraph_mcp_integration.py
+
+EXPECTED OUTPUT:
+  === LangGraph + MCP Orchestrator ===
+
+  Setting up MCP servers...
+    story-drafting: 2 tools
+    text-archive: 1 tools
+
+  Graph structure (Mermaid):
+    %%{init: ...}%%
+    graph TD; ...
+    analyze --> route --> ...
+
+  === Test 1: "search for articles about OPEC" ===
+    [analyze] Intent: search, tools: ['search_archive']
+    [route]   -> call_tools (tools needed)
+    [call_tools] Calling search_archive ...
+    [maybe_interrupt] No interrupt needed
+    [synthesize] Composing final response
+    Final: Found articles about OPEC ... (1 tool call)
+
+  === Test 2: "draft a story about oil prices" ===
+    [analyze] Intent: draft, tools: ['draft_story']
+    [route]   -> call_tools
+    [call_tools] Calling draft_story ...
+    [maybe_interrupt] INTERRUPT: draft needs review
+    --- Paused for human review ---
+    Resuming with: approved
+    [synthesize] Composing final response
+    Final: Draft approved and finalized ...
+
+  === Test 3: "hello, how are you?" ===
+    [analyze] Intent: chat, tools: []
+    [route]   -> synthesize (no tools needed)
+    [synthesize] Composing final response
+    Final: I'm an AI assistant ...
+
+  === Test 4: "search for oil news and draft a story" ===
+    [analyze] Intent: search+draft, tools: ['search_archive', 'draft_story']
+    [route]   -> call_tools
+    [call_tools] Calling search_archive, draft_story ...
+    [maybe_interrupt] INTERRUPT: draft needs review
+    --- Paused for human review ---
+    Resuming with: approved
+    [synthesize] Composing final response
+    Final: Based on search results, here is your draft ...
 """
 
 import asyncio

@@ -48,6 +48,36 @@ Flow:
 PREREQUISITES: Lesson 05 (HTTP transport), Lesson 06 (client patterns)
 
 Run:  uv run python 11_multi_server.py
+
+EXPECTED OUTPUT:
+  === Multi-Server Registry Demo ===
+
+  Discovering tools from 3 servers...
+    story-drafting: 2 tools [draft_story, search_rics]
+    text-archive: 2 tools [search_archive, get_article]
+    urgent-drafting: 1 tools [generate_urgent]
+
+  === Tool Routing Table ===
+    draft_story     -> story-drafting
+    search_rics     -> story-drafting
+    search_archive  -> text-archive
+    get_article     -> text-archive
+    generate_urgent -> urgent-drafting
+
+  === Routed Tool Calls ===
+
+    draft_story(topic=oil)      -> story-drafting -> {draft: ..., topic: 'oil'}
+    search_archive(query=OPEC)  -> text-archive   -> {results: [...], query: 'OPEC'}
+    generate_urgent(headline=..)-> urgent-drafting -> {urgent: ..., priority: 'FLASH'}
+
+  === Error: Unknown Tool ===
+    nonexistent_tool -> Error: Tool 'nonexistent_tool' not found ...
+
+  === Parallel Calls Across Servers ===
+    3 calls completed in parallel:
+      draft_story: {draft: ...}
+      search_archive: {results: ...}
+      generate_urgent: {urgent: ...}
 """
 
 import asyncio

@@ -31,8 +31,13 @@ _DEPLOYMENTS = {
         "api_version": "2025-01-01-preview",
     },
     "gpt-4-1": {
-        "deployment": f"{_PREFIX}-gpt-4-1/deployments/gpt-4-1",
-        "profile_key": f"{_PREFIX}-gpt-4-1",
+        "deployment": f"{_PREFIX}-gpt-4.1-2025-04-14/deployments/gpt-4.1-2025-04-14",
+        "profile_key": f"{_PREFIX}-gpt-4.1-2025-04-14",
+        "api_version": "2025-01-01-preview",
+    },
+    "gpt-5-4": {
+        "deployment": f"{_PREFIX}-gpt-5-4-2026-03-05/deployments/gpt-5-4-2026-03-05",
+        "profile_key": f"{_PREFIX}-gpt-5-4-2026-03-05",
         "api_version": "2025-01-01-preview",
     },
     "o4-mini": {

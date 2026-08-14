@@ -41,6 +41,41 @@ Flow:
 PREREQUISITES: Lesson 05 (HTTP transport)
 
 Run:  uv run python 06_client_patterns.py
+
+EXPECTED OUTPUT:
+  === 1. Discovery ===
+
+    Tools (3):
+      - echo(message): Echo a message back (always succeeds).
+      - slow_tool(seconds): Simulate a slow operation.
+      - flaky_tool(message): Fails 50% of the time to demonstrate retry logic.
+
+    Resources (0):
+    Prompts (0):
+
+  === 2. Timeout Handling ===
+
+    slow_tool(0.1s): [TextContent(... 'done' ...)]
+    slow_tool(5.0s): TIMED OUT (expected)
+
+  === 3. Retry with Backoff ===
+
+      Attempt 1 failed: Random failure on call #1
+      Retrying in 0.2s...
+    Final result: {'result': [TextContent(...)], 'attempt': 2}
+
+  === 5. Error Handling ===
+
+    Unknown tool: ClientError: ...
+    Missing param: ClientError: ...
+
+  === 4. One-Shot Client Pattern ===
+
+    One-shot #1: [TextContent(... 'request #1' ...)]
+    One-shot #2: [TextContent(... 'request #2' ...)]
+    One-shot #3: [TextContent(... 'request #3' ...)]
+
+    (Each call was a separate client session)
 """
 
 import asyncio

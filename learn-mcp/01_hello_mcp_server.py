@@ -39,6 +39,19 @@ Flow:
 PREREQUISITES: None -- this is the starting point.
 
 Run:  uv run python 01_hello_mcp_server.py
+
+EXPECTED OUTPUT:
+  === Registered Tools ===
+    - greet: Generate a personalized greeting.
+        param 'name': The person's name to greet
+    - farewell: Generate a personalized farewell message.
+        param 'name': The person's name to say goodbye to
+
+  === greet (decorator style) ===
+    [TextContent(type='text', text='{"greeting": "Hello, Shubham! ...", "server": "learn-mcp"}')]
+
+  === farewell (imperative style) ===
+    [TextContent(type='text', text='{"farewell": "Goodbye, Shubham! ...", "server": "learn-mcp"}')]
 """
 
 import asyncio
