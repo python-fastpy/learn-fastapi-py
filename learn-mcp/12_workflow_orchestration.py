@@ -1,12 +1,31 @@
 """Lesson 12 -- Workflow-Driven Orchestration
 ===============================================
+
+WHY THIS MATTERS:
+  This lesson combines everything from lessons 01-11 into a single
+  orchestration loop — the same pattern used by the production backend.
+  When a user says "draft a story about oil," the orchestrator:
+    1. Discovers available workflows from the skill servers
+    2. Picks the right workflow (fast-path regex or LLM fallback)
+    3. Gates tools to only those listed in the workflow
+    4. Calls tools in sequence
+    5. Returns the result
+
+  This is the highest-level pattern *before* LangGraph (lesson 13).
+
+WHAT YOU'LL LEARN:
+  1. The complete orchestration loop from user message to response
+  2. Fast-path matching: skip the LLM for well-known patterns (~100ms)
+  3. LLM-based workflow selection as fallback (~2-3s)
+  4. Tool gating in action: hiding irrelevant tools from the agent
+  5. How all the pieces from prior lessons fit together
+
 Concepts:
   - Full orchestration loop: user intent -> workflow selection -> tool execution
   - Workflow discovery from MCP servers
   - LLM selects which workflow to run based on user message
   - Tool gating: only workflow-listed tools are available
   - Multi-step execution following workflow instructions
-  - Combining all lessons: server, client, workflows, LLM, interrupts
 
 Flow:
   +-----------+     +--------------------+     +------------------+
@@ -32,6 +51,8 @@ Flow:
     langgraph_mcp_orchestrator.py (full orchestration loop)
     fast_path_matcher.py (regex shortcut for known patterns)
     mcp_protocol.py (tool execution)
+
+PREREQUISITES: Lessons 09 (workflows), 11 (multi-server), 06 (client patterns)
 
 ** Requires .env for full LLM orchestration; runs in mock mode without it **
 

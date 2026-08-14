@@ -1,9 +1,25 @@
-"""Lesson 13 -- LangGraph + MCP Integration
-=============================================
+"""Lesson 13 -- LangGraph + MCP Integration (Capstone)
+======================================================
+
+WHY THIS MATTERS:
+  This is the capstone lesson. The production backend uses LangGraph
+  to orchestrate MCP tool calls — it's a directed graph where each
+  node is a step (analyze, call tools, interrupt for review, synthesize).
+  LangGraph gives you checkpointing (save state, resume after interrupt),
+  conditional routing (skip tools if not needed), and a clear execution
+  flow. This lesson builds the same architecture with mock LLM calls
+  so you can run it without credentials.
+
+WHAT YOU'LL LEARN:
+  1. Build a LangGraph StateGraph with nodes and conditional edges
+  2. Call MCP tools from inside LangGraph nodes
+  3. Use interrupt() to pause for human review + Command(resume=...) to continue
+  4. Use MemorySaver to checkpoint state (production uses DynamoDB)
+  5. See how all MCP lessons (01-12) combine into the final architecture
+
 Concepts:
   - LangGraph StateGraph as the orchestrator
   - MCP servers (FastMCP) as the tool providers
-  - Converting MCP tools into LangChain tools for LangGraph
   - Full loop: user message -> analyze -> call MCP tools -> synthesize
   - Human-in-the-loop interrupts via LangGraph interrupt() + MCP
   - MemorySaver checkpointer for interrupt/resume
@@ -32,11 +48,8 @@ Architecture (mirrors your production backend):
     mcp_protocol.py              -> MCP client calls inside nodes
     mcp_server_registry.py       -> multi-server discovery
 
-  Previous lessons this builds on:
-    LangGraph 06 (tool calling) + 07 (agent loop) + 09 (interrupts)
-    + 13 (orchestrator)
-    MCP 05 (HTTP transport) + 06 (client patterns) + 11 (multi-server)
-    + 12 (workflow orchestration)
+PREREQUISITES: Lesson 12 (orchestration), Lesson 10 (interrupts), Lesson 11 (multi-server)
+  Also helpful: LangGraph basics (StateGraph, nodes, edges)
 
 No real LLM needed -- uses mock analysis to keep it runnable without
 credentials.  Swap mock_analyze() for LLM-based analysis to go live.

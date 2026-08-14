@@ -1,12 +1,25 @@
 """Lesson 05 -- Real HTTP Server
 =================================
+
+WHY THIS MATTERS:
+  Up to now, the client and server lived in the same Python process
+  (Client(mcp) — "in-process"). In production, each skill is a Docker
+  container on ECS behind an ALB. This lesson bridges that gap: you'll
+  run a real HTTP server and connect to it over the network, exactly
+  like the backend does when it calls story-drafting on port 8004.
+
+WHAT YOU'LL LEARN:
+  1. Start an MCP server as a real HTTP service
+  2. Connect to it from a client using StreamableHttpTransport
+  3. Add custom REST endpoints (like /health for ALB health checks)
+  4. Run server + client in one script using multiprocessing
+
 Concepts:
   - mcp.run(transport="http"): start a real HTTP server
   - StreamableHttpTransport: connect a client over HTTP
   - @mcp.custom_route("/health"): custom REST endpoints
   - stateless_http=True: no session state between requests
   - json_response=True: JSON-formatted responses
-  - multiprocessing: run server + client in one script
 
 Flow:
   +--------+     HTTP      +------------------+
@@ -26,7 +39,7 @@ Flow:
               json_response=True, stateless_http=True)
     @mcp.custom_route("/health") for ALB health checks
 
-No LLM needed -- demonstrates real HTTP transport.
+PREREQUISITES: Lesson 01 (server basics), Lesson 04 (client discovery)
 
 Run:  uv run python 05_http_transport.py
 """

@@ -1,11 +1,25 @@
 """Lesson 11 -- Multi-Server Registry
 ======================================
+
+WHY THIS MATTERS:
+  The Reuters AI Assistant doesn't have one MCP server — it has three
+  (story-drafting, urgent-drafting, text-archive), each on a different
+  port. When the agent says "call search_archive," the backend needs
+  to know that tool lives on the text-archive server, not story-drafting.
+  The ServerRegistry solves this: it discovers all tools from all servers
+  at startup and builds a routing table (tool_name → server).
+
+WHAT YOU'LL LEARN:
+  1. Register multiple MCP servers in a central registry
+  2. Discover tools from all servers at startup
+  3. Route tool calls to the correct server automatically
+  4. Execute tools in parallel across different servers
+
 Concepts:
   - Running multiple MCP servers simultaneously
   - ServerRegistry: track servers and their capabilities
   - Tool routing: which server handles which tool
   - Parallel tool calls across servers
-  - Capability discovery across the fleet
 
 Flow:
   +-------------------+
@@ -31,7 +45,7 @@ Flow:
     mcp_client_manager.py (connection pool, per-server clients)
     mcp_protocol.py (tool routing, parallel execution)
 
-No LLM needed -- demonstrates multi-server coordination.
+PREREQUISITES: Lesson 05 (HTTP transport), Lesson 06 (client patterns)
 
 Run:  uv run python 11_multi_server.py
 """

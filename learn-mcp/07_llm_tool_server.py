@@ -1,11 +1,25 @@
 """Lesson 07 -- Tools That Call LLMs
 =====================================
+
+WHY THIS MATTERS:
+  An MCP tool doesn't have to be a simple function. In production,
+  generate_spot_story calls GPT-4o to actually *write* the story.
+  The LLM is an implementation detail — the client just calls
+  "generate_spot_story" and gets back a draft. It doesn't know or
+  care that an LLM was involved. This pattern is the core of every
+  drafting skill.
+
+WHAT YOU'LL LEARN:
+  1. Call an LLM from inside a tool using get_llm()
+  2. Construct prompts within tool logic
+  3. Return LLM-generated content as structured data
+  4. Handle the case where credentials aren't available (mock fallback)
+
 Concepts:
   - LLM as implementation detail inside MCP tools
   - get_llm() from llm_helper to connect to TR Orchestrator
   - Async LLM calls within tool functions
   - Prompt engineering inside tool logic
-  - Returning generated content as structured dict
 
 Flow:
   +--------+     +------------------+     +-------------------+
@@ -20,6 +34,8 @@ Flow:
   Maps to:
     story-drafting/src/tools/generate_spot_story.py (LLM inside tool)
     shared/llm/orchestrator.py (LLM client setup)
+
+PREREQUISITES: Lesson 01 (tools), llm_helper.py (credentials)
 
 ** Requires .env with TR Orchestrator credentials **
 

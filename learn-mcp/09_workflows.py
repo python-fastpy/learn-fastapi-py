@@ -1,5 +1,21 @@
 """Lesson 09 -- Workflow System
 ================================
+
+WHY THIS MATTERS:
+  A skill might have 10+ tools, but for a given task (e.g., "draft a
+  news buzz"), only 3 of them are relevant. Workflows solve this:
+  they're markdown files that say "for this task, use these tools in
+  this order." The orchestrator reads workflows at startup, picks the
+  right one based on the user's message, and hides all other tools
+  from the LLM agent. This keeps the agent focused and prevents it
+  from calling tools that don't belong to the current task.
+
+WHAT YOU'LL LEARN:
+  1. Define workflows as markdown files with YAML frontmatter
+  2. Parse and load workflows programmatically
+  3. Mount REST endpoints so the orchestrator can discover workflows
+  4. Understand tool gating — only workflow-listed tools are visible
+
 Concepts:
   - Workflows: markdown files with YAML frontmatter
   - Workflow fields: name, description, tools, trigger_patterns
@@ -32,7 +48,7 @@ Flow:
     shared/workflows/routes.py (mount_workflows, REST endpoints)
     story-drafting/src/workflows/*.md (production workflow files)
 
-No LLM needed -- demonstrates the workflow discovery system.
+PREREQUISITES: Lesson 01 (tools), Lesson 04 (resources)
 
 Run:  uv run python 09_workflows.py
 """

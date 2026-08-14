@@ -1,5 +1,21 @@
 """Lesson 10 -- Human-in-the-Loop Interrupts
 =============================================
+
+WHY THIS MATTERS:
+  The AI drafts a story — but you can't just publish it without a
+  journalist reviewing it. Interrupts let a tool *pause* and ask the
+  human: "Here's the draft. Approve, refine, or reject?" The entire
+  execution state is saved (checkpointed), and when the user responds,
+  execution resumes exactly where it left off. Every drafting skill
+  uses this for review/approval flows.
+
+WHAT YOU'LL LEARN:
+  1. Build structured interrupt payloads (what the frontend renders)
+  2. Define actions the user can take (approve, refine, reject)
+  3. Use the .block() builder to create forwarded blocks
+  4. Understand the full lifecycle: tool → interrupt → checkpoint → resume
+  5. See all production event types (SPOT_STORY_REVIEW, RIC_SELECTION, etc.)
+
 Concepts:
   - SkillInterrupt: structured payload for pausing execution
   - InterruptPayload: typed payload with extra="forbid"
@@ -31,7 +47,7 @@ Flow:
     story-drafting/src/interrupts/news_buzz_ric_selection.py
     langgraph_mcp_orchestrator.py (interrupt() + checkpoint resume)
 
-No LLM needed -- demonstrates the interrupt data model and lifecycle.
+PREREQUISITES: Lesson 08 (forwarded blocks — interrupts build on the same _meta mechanism)
 
 Run:  uv run python 10_interrupts.py
 """

@@ -1,5 +1,17 @@
 """Lesson 02 -- Validation & Error Handling
 ============================================
+
+WHY THIS MATTERS:
+  When an LLM agent calls your tool, it might pass garbage — empty strings,
+  negative numbers, invalid date formats. You need to decide: crash loudly
+  (ToolError) or fix it silently (clamping). The LLM sees ToolError messages
+  and can retry with corrected input. This lesson teaches both strategies.
+
+WHAT YOU'LL LEARN:
+  1. Raise ToolError for genuinely wrong inputs (LLM gets the error, can retry)
+  2. Clamp edge values silently (e.g., limit=200 becomes limit=50)
+  3. Inspect errors safely on the client side with raise_on_error=False
+
 Concepts:
   - ToolError: graceful error responses (not exceptions that crash)
   - Input clamping: sanitize values instead of rejecting
@@ -22,7 +34,7 @@ Flow:
     text-archive/src/tools/archive_search.py (ToolError usage)
     story-drafting/src/tools/search_rics.py (input clamping pattern)
 
-No LLM needed -- demonstrates validation and error patterns.
+PREREQUISITES: Lesson 01 (server + tool basics)
 
 Run:  uv run python 02_input_validation.py
 """

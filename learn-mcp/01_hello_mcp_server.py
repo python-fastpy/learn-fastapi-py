@@ -1,5 +1,18 @@
 """Lesson 01 -- MCP Server: Decorator vs Imperative Registration
 ================================================================
+
+WHY THIS MATTERS:
+  Every skill in the Reuters AI Assistant (story-drafting, urgent-drafting,
+  text-archive) is an MCP server. Before you can build any of them, you
+  need to know how to create a server and register tools on it. This lesson
+  teaches both ways to do that.
+
+WHAT YOU'LL LEARN:
+  1. Create an MCP server with FastMCP (like FastAPI, but for tools)
+  2. Register tools using @mcp.tool decorator (quick and easy)
+  3. Register tools using mcp.tool()(fn) imperative style (production pattern)
+  4. Test tools with an in-process client (no HTTP needed)
+
 Concepts:
   - FastMCP: the server framework for building MCP-compliant tools
   - Two registration styles:
@@ -23,7 +36,7 @@ Flow:
     mcp.tool(name="generate_spot_story", meta={...})(generate_spot_story)
   This keeps tool logic separate from server wiring.
 
-No LLM needed -- pure MCP protocol mechanics.
+PREREQUISITES: None -- this is the starting point.
 
 Run:  uv run python 01_hello_mcp_server.py
 """

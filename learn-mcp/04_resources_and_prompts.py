@@ -1,7 +1,23 @@
 """Lesson 04 -- Beyond Tools: Resources & Prompts
 ==================================================
+
+WHY THIS MATTERS:
+  Most people think MCP = tools. But MCP actually has THREE primitives:
+    - Tools:     DO something (write, search, generate)
+    - Resources: READ something (config, templates, data)
+    - Prompts:   TEMPLATE for LLM messages (reusable instructions)
+
+  Tools are actions. Resources are data. Prompts are message templates.
+  Together they let an agent discover everything it can do, read, and say.
+  In production, workflows are exposed as resources via REST endpoints.
+
+WHAT YOU'LL LEARN:
+  1. Expose static data as resources (like a config endpoint)
+  2. Expose dynamic data with URI templates (like a parameterized GET)
+  3. Create reusable prompt templates
+  4. Discover all three primitives from the client side
+
 Concepts:
-  - MCP has THREE primitives: Tools, Resources, Prompts
   - @mcp.resource("uri"): expose read-only data (like a GET endpoint)
   - @mcp.resource("template://{param}"): dynamic resource with URI params
   - @mcp.prompt(): reusable prompt templates for LLMs
@@ -27,7 +43,7 @@ Flow:
     shared/workflows/routes.py (workflows are effectively resources via REST)
     mcp_protocol.py (list_resources, read_resource client calls)
 
-No LLM needed -- demonstrates the MCP primitive surface area.
+PREREQUISITES: Lesson 01 (server + tool basics)
 
 Run:  uv run python 04_resources_and_prompts.py
 """

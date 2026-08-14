@@ -1,11 +1,27 @@
 """Lesson 08 -- ToolResult & Forwarded Blocks
 ===============================================
+
+WHY THIS MATTERS:
+  When a tool generates a 500-word draft, the LLM agent doesn't need
+  to see all of it in its context window — that wastes tokens and
+  confuses the agent. But the *frontend* needs the full draft to
+  display it to the user. Forwarded blocks solve this: the agent
+  sees a short summary ("Draft generated, 500 words, spot style"),
+  while the UI gets the full text via _meta.forwarded_blocks.
+
+  This is the key mechanism behind all story/buzz/bulletin drafts.
+
+WHAT YOU'LL LEARN:
+  1. Return rich results with content + metadata
+  2. Use _meta.forwarded_blocks for UI-only payloads
+  3. The difference between call_tool() and call_tool_mcp()
+  4. The forwarded_tool_result() helper pattern
+
 Concepts:
   - ToolResult: rich return type with content + metadata
   - _meta.forwarded_blocks: out-of-band payload for UI (not seen by agent)
   - call_tool_mcp() vs call_tool(): preserves MCP metadata
   - Agent-visible content vs UI-visible blocks
-  - forwarded_tool_result() helper pattern
 
 Flow:
   +--------+     +------------------+     +---------------------+
@@ -27,6 +43,8 @@ Flow:
     shared/forwarded.py (forwarded_tool_result helper)
     mcp_protocol.py (_call_tool_result_to_dict extracts forwarded blocks)
     story-drafting tools (return drafts via forwarded blocks)
+
+PREREQUISITES: Lesson 07 (LLM tools), Lesson 04 (resources/primitives)
 
 ** Requires .env with TR Orchestrator credentials **
 

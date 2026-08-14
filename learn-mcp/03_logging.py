@@ -1,5 +1,17 @@
 """Lesson 03 -- Logging in MCP Servers
 ======================================
+
+WHY THIS MATTERS:
+  MCP tools run on remote servers — you can't set breakpoints or add print
+  statements. Logging is your only window into what's happening. FastMCP has
+  its own logger (for framework events) and you'll want a separate Python
+  logger (for your tool logic). This lesson shows both.
+
+WHAT YOU'LL LEARN:
+  1. FastMCP's built-in logger (framework-level: tool dispatch, transport)
+  2. Python's logging.getLogger for your own tool code
+  3. How production uses JSON formatting for Datadog
+
 Concepts:
   - FastMCP built-in logging: log_level, get_logger
   - Python logging inside tools
@@ -9,6 +21,8 @@ FastMCP settings:
   log_level      -> "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL"
   log_enabled    -> True/False to toggle all FastMCP logging
   client_log_level -> minimum level sent to MCP clients
+
+PREREQUISITES: Lesson 01 (server + tool basics)
 
 Run:  uv run python 03_logging.py
 """

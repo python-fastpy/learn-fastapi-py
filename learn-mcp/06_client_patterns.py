@@ -1,12 +1,26 @@
 """Lesson 06 -- Discovery, Invocation & Retry
 ==============================================
+
+WHY THIS MATTERS:
+  Skills run on remote containers that can be slow, crash, or go
+  unreachable. The backend orchestrator must handle all of this
+  gracefully — not crash, not hang forever, not flood a recovering
+  server with retries. This lesson teaches the resilience patterns
+  used in mcp_protocol.py and mcp_client_manager.py.
+
+WHAT YOU'LL LEARN:
+  1. Discover everything a server offers (tools, resources, prompts)
+  2. Handle timeouts so a slow tool doesn't block the whole request
+  3. Retry failed calls with exponential backoff (1s, 2s, 4s...)
+  4. Use the one-shot client pattern (connect → call → disconnect)
+  5. The difference between call_tool() and call_tool_mcp()
+
 Concepts:
   - Full discovery: list_tools(), list_resources(), list_prompts()
-  - call_tool() vs call_tool_mcp() -- dict result vs raw MCP CallToolResult
+  - call_tool() vs call_tool_mcp(): dict result vs raw MCP CallToolResult
   - Timeout handling with asyncio.wait_for
   - Retry with exponential backoff
   - One-shot client pattern (connect -> call -> disconnect per request)
-  - Error handling for tool calls
 
 Flow:
   +----------+     +------------------+
@@ -24,7 +38,7 @@ Flow:
     mcp_client_manager.py -> retry logic, circuit breaker concepts
     mcp_server_registry.py -> capability discovery (list_tools)
 
-No LLM needed -- demonstrates client-side resilience patterns.
+PREREQUISITES: Lesson 05 (HTTP transport)
 
 Run:  uv run python 06_client_patterns.py
 """
