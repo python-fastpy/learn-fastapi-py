@@ -1,32 +1,72 @@
 """Lesson 06 — Tool Calling
 ============================
+
+WHY THIS MATTERS:
+  In lessons 01-04 we hard-coded which node runs when. In lesson 05
+  the LLM generated text, but it couldn't *do* anything. Tool calling
+  changes that: you give the LLM a menu of functions it can call, and
+  IT decides which ones to use and when. This is how the production
+  assistant calls MCP tools — the LLM picks greet, farewell, search,
+  or draft based on what the user asked for.
+
+WHAT YOU'LL LEARN:
+  1. Define tools with the @tool decorator (the LLM reads the docstring)
+  2. Bind tools to an LLM with llm.bind_tools() (gives the LLM the menu)
+  3. Use ToolNode to auto-execute tool calls from the LLM response
+  4. Route with a conditional edge: tool_calls present → run tools,
+     no tool_calls → done
+  5. The LLM ↔ tools loop: LLM calls tool → gets result → decides next
+
 Concepts:
-  - Defining tools with @tool decorator
-  - Binding tools to an LLM with llm.bind_tools()
-  - ToolNode: auto-executes tool calls from the LLM
-  - The LLM decides WHEN and WHICH tool to call
+  - @tool decorator: turns a Python function into something the LLM can call
+  - llm.bind_tools(tools): attaches tool schemas to the LLM
+  - ToolNode(tools): prebuilt node that reads tool_calls from the last
+    message, executes the matching function, and returns the result
+  - Conditional routing: check last message for tool_calls to decide
+    whether to loop back or exit
 
-Graph:
-  +-------+     +-----+
-  | START | --> | llm |
-  +-------+     +-----+
-                  |
-          should_use_tool()
-            /          \
-           v            v
-      +-------+      +-----+
-      | tools | ---> | END |
-      +-------+  |
-           |     (no tool_calls)
-           +---> llm
-        (loop back)
+Flow:
+  +-------+     +----------+     has tool_calls?     +-----------+
+  | START | --> | call_llm | ------------------->    | tool_node |
+  +-------+     +----------+        YES              +-----------+
+                     ^                                     |
+                     |          (loop back with results)   |
+                     +-------------------------------------+
+                     |
+                     |  NO tool_calls (LLM is done)
+                     v
+                  +-----+
+                  | END |
+                  +-----+
 
-  The LLM -> tools -> LLM loop continues until the LLM responds
-  without any tool_calls, then it exits to END.
+  The loop continues until the LLM responds with plain text
+  (no tool_calls), meaning it has all the info it needs.
+
+  Maps to:
+    langgraph_mcp_orchestrator.py  → the same LLM ↔ tool loop
+    mcp_protocol.py               → tool execution (call_tool)
+    story-drafting/src/main.py    → @tool-decorated functions
+
+PREREQUISITES: Lesson 05 (chat models — MessagesState, HumanMessage)
 
 ** Requires .env with orchestrator credentials **
 
 Run:  uv run python 06_tool_calling.py
+
+EXPECTED OUTPUT:
+  === Graph Diagram (Mermaid) ===
+  (mermaid graph text)
+
+  === Conversation ===
+  [Human] Greet Alice and then say goodbye to her
+
+  [AI] Tool calls: ['greet', 'farewell']
+
+  [Tool:greet] Hello, Alice! Welcome!
+
+  [Tool:farewell] Goodbye, Alice! See you soon!
+
+  [AI] I've greeted Alice and said goodbye to her! ...
 """
 
 from typing import TypedDict, Annotated
@@ -39,8 +79,10 @@ from llm_helper import get_llm
 
 
 # ── Step 1: Define tools ─────────────────────────────────────────────
-# Tools are just Python functions with the @tool decorator.
-# The docstring becomes the tool description the LLM sees.
+# @tool turns a normal function into something the LLM can call.
+# The LLM sees the function name + docstring as its "menu" —
+# it uses those to decide which tool fits the user's request.
+# (This is why short, clear docstrings matter.)
 
 @tool
 def greet(name: str) -> str:
@@ -58,25 +100,36 @@ tools = [greet, farewell]
 
 
 # ── Step 2: Bind tools to the LLM ───────────────────────────────────
-# bind_tools tells the LLM about available tools so it can call them.
+# bind_tools attaches the tool schemas (name, description, params)
+# to the LLM. Without this, the LLM doesn't know any tools exist.
+# Think of it as handing the LLM a menu before it takes an order.
 
 llm = get_llm(model="gpt-4o")
 llm_with_tools = llm.bind_tools(tools)
 
 
 # ── Step 3: Define nodes ────────────────────────────────────────────
+# Two nodes: one for the LLM, one for executing tools.
 
 def call_llm(state: MessagesState) -> dict:
-    """Let the LLM decide whether to call a tool or respond directly."""
+    """Send messages to the LLM. It responds with either plain text
+    (if it has the answer) or tool_calls (if it needs to use a tool)."""
     response = llm_with_tools.invoke(state["messages"])
     return {"messages": [response]}
 
 
-# ToolNode automatically executes any tool calls in the last message
+# ToolNode is a prebuilt node from LangGraph. It reads tool_calls
+# from the last AI message, runs the matching Python function, and
+# returns the result as a ToolMessage. You don't write any dispatch
+# logic — it handles the name→function lookup automatically.
 tool_node = ToolNode(tools)
 
 
 # ── Step 4: Route based on whether the LLM wants to call a tool ─────
+# After the LLM responds, we check: did it ask to call a tool?
+# If yes → route to tool_node to execute it.
+# If no  → the LLM is done, route to END.
+# This is what creates the loop: LLM → tools → LLM → ... → END.
 
 def should_use_tool(state: MessagesState) -> str:
     last_message = state["messages"][-1]
@@ -86,14 +139,34 @@ def should_use_tool(state: MessagesState) -> str:
 
 
 # ── Step 5: Build the graph ─────────────────────────────────────────
+# Wire up the loop: START → llm → (tools → llm)* → END
 
 graph = StateGraph(MessagesState)
 graph.add_node("llm", call_llm)
 graph.add_node("tools", tool_node)
 
 graph.add_edge(START, "llm")
+
+# add_conditional_edges takes three arguments:
+#   1. "llm"            — after THIS node finishes...
+#   2. should_use_tool  — call THIS function to decide where to go...
+#   3. routing map      — translate the return value to a node name:
+#
+#   should_use_tool returns  │  map entry         │  goes to
+#   ─────────────────────────┼─────────────────────┼──────────────────
+#   "tools"                  │  "tools": "tools"   │  tool_node
+#   END                      │  END: END           │  exit the graph
+#
+# Think of it as a switch:
+#   match should_use_tool(state):
+#       case "tools":  go to tools node
+#       case END:      finish the graph
+#
+# The map is optional (LangGraph can infer it from the return values),
+# but it makes the wiring visible and catches typos at build time.
 graph.add_conditional_edges("llm", should_use_tool, {"tools": "tools", END: END})
-graph.add_edge("tools", "llm")  # After tool runs, go back to LLM
+
+graph.add_edge("tools", "llm")  # After tool runs, go back to LLM for next decision
 
 app = graph.compile()
 
@@ -122,8 +195,19 @@ if __name__ == "__main__":
         print()
 
     # ── Key takeaway ─────────────────────────────────────────────────
-    # Flow: LLM → (tool_calls?) → ToolNode executes → back to LLM
-    # The LLM sees the tool results and formulates a final answer.
+    # Three pieces make tool calling work:
+    #
+    #   1. @tool         — defines what the LLM CAN call
+    #   2. bind_tools()  — tells the LLM what's available
+    #   3. ToolNode       — executes the tool the LLM chose
+    #
+    # The conditional edge creates the loop:
+    #   LLM → has tool_calls? → YES → ToolNode → back to LLM
+    #                         → NO  → END (respond to user)
+    #
+    # This is the foundation of the ReAct pattern (lesson 07).
+    # The production orchestrator uses this same loop but calls
+    # MCP servers instead of local Python functions.
     #
     # ── Exercise ─────────────────────────────────────────────────────
     # 1. Add a third tool: translate_greeting(text, language) that
