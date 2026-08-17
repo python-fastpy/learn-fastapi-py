@@ -26,6 +26,25 @@ WHAT YOU'LL LEARN:
   4. How this replaces the manual graph you built in lesson 06
   5. The agent decides when to stop (no more tool_calls = final answer)
 
+Lesson 06 vs Lesson 07 — what's different:
+
+  │                    │ Lesson 06 (Tool Calling)       │ Lesson 07 (Agent Loop)       │
+  │────────────────────│───────────────────────────────│──────────────────────────────│
+  │ What you build     │ The loop manually              │ The loop is prebuilt         │
+  │ Lines of code      │ ~15 lines of graph setup       │ 1 function call              │
+  │ Same result?       │ Yes                            │ Yes                          │
+  │ Customizable?      │ Fully — add extra nodes,       │ Limited — standard ReAct     │
+  │                    │ custom routing, max-call limits │ only                         │
+  │ Production use     │ langgraph_mcp_orchestrator.py   │ create_agent_orchestrator.py │
+  │                    │ (needs interrupts, checkpoints) │ (simpler PoC)                │
+
+  When to use which:
+    - create_react_agent: standard agent, no custom logic needed
+    - Manual graph (06): need interrupt handling, validation nodes,
+      error routing, or DynamoDB checkpointing
+
+  Lesson 06 teaches how the engine works. Lesson 07 gives you the shortcut.
+
 Concepts:
   - create_react_agent(model, tools, prompt): prebuilt ReAct agent
   - ReAct loop: reason → act → observe → repeat
