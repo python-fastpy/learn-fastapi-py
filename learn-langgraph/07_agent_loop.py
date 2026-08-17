@@ -1,41 +1,87 @@
 """Lesson 07 — Agent Loop (ReAct Pattern)
 =========================================
+
+WHY THIS MATTERS:
+  In lesson 06 you built the LLM ↔ tool loop by hand — two nodes,
+  a conditional edge, and a routing function. That's useful to understand,
+  but in practice you'd do it for every agent you build. LangGraph's
+  create_react_agent does all of that in one call. This is the pattern
+  your production backend uses: give the agent tools and a prompt, and
+  it figures out the order of calls on its own.
+
+  The "ReAct" pattern (Reason + Act) means the agent:
+    1. REASONS about what to do next  (reads the conversation so far)
+    2. ACTS by calling a tool          (greet, translate, farewell)
+    3. OBSERVES the result             (tool output comes back as a message)
+    4. REPEATS until it can answer     (no more tool_calls → done)
+
+  This is how the production assistant handles multi-step requests like
+  "draft a story, validate the RIC, then generate a bulletin" — the LLM
+  chains tools in the right order without anyone hard-coding the sequence.
+
+WHAT YOU'LL LEARN:
+  1. create_react_agent: builds the full LLM ↔ tool loop in one call
+  2. How the ReAct loop decides tool order automatically
+  3. System prompts to steer the agent's behavior
+  4. How this replaces the manual graph you built in lesson 06
+  5. The agent decides when to stop (no more tool_calls = final answer)
+
 Concepts:
-  - The ReAct loop: Reason -> Act -> Observe -> repeat
-  - create_react_agent: LangGraph's prebuilt agent
-  - How the agent decides when to stop calling tools
-  - System prompts to control agent behavior
+  - create_react_agent(model, tools, prompt): prebuilt ReAct agent
+  - ReAct loop: reason → act → observe → repeat
+  - prompt parameter: system message that shapes how the agent behaves
+  - The graph built by create_react_agent is identical to lesson 06's
+    manual graph — same nodes, same conditional edge, same loop
 
 Graph (built automatically by create_react_agent):
-  +-------+     +-------+
-  | START | --> | agent |
-  +-------+     +-------+
-                   |
-            has tool_calls?
-              /         \\
-             v           v
-        +-------+    +-----+
-        | tools |    | END |
-        +-------+    +-----+
-             |
-             +-----> agent
-           (loop back with tool results)
 
-  The agent reasons about the request, calls greet/farewell/translate
-  tools as needed, observes results, and loops until it has a final answer.
+  +-------+     +-------+     has tool_calls?     +-------+
+  | START | --> | agent | ----------------------> | tools |
+  +-------+     +-------+        YES              +-------+
+                   ^                                  |
+                   |       (loop back with results)   |
+                   +----------------------------------+
+                   |
+                   |  NO tool_calls (agent is done)
+                   v
+                +-----+
+                | END |
+                +-----+
+
+  For "Greet Alice, translate to Spanish, say goodbye":
+    Loop 1: agent → calls greet("Alice")        → tools → agent
+    Loop 2: agent → calls translate_greeting()   → tools → agent
+    Loop 3: agent → calls farewell("Alice")      → tools → agent
+    Loop 4: agent → no tool_calls, gives summary → END
+
+  Maps to:
+    langgraph_mcp_orchestrator.py  → same ReAct loop with MCP tools
+    create_agent_orchestrator.py   → uses create_react_agent directly
+    story-drafting tools           → the tools the production agent calls
+
+PREREQUISITES: Lesson 06 (tool calling — the manual version of this loop)
 
 ** Requires .env with orchestrator credentials **
 
 Run:  uv run python 07_agent_loop.py
 
-Expected output:
+EXPECTED OUTPUT:
+  === Graph Diagram (Mermaid) ===
+  (mermaid graph text)
+
+  === Agent Execution ===
+
   [Tool Call] greet({"name": "Alice"})
-  [Tool Result: greet] Hello, Alice! Welcome!
+  [Tool Result: greet] Hello, Alice! Welcome!...
+
   [Tool Call] translate_greeting({"text": "Hello, Alice! Welcome!", "language": "Spanish"})
-  [Tool Result: translate_greeting] [Spanish] Hello, Alice! Welcome!
+  [Tool Result: translate_greeting] [Spanish] Hello, Alice! Welcome!...
+
   [Tool Call] farewell({"name": "Alice"})
-  [Tool Result: farewell] Goodbye, Alice! See you soon!
-  [Agent Response] ...summary of all three actions...
+  [Tool Result: farewell] Goodbye, Alice! See you soon!...
+
+  [Agent Response]
+  I've completed all three tasks: greeted Alice, translated ...
 """
 
 from langgraph.prebuilt import create_react_agent
@@ -44,7 +90,9 @@ from langchain_core.messages import HumanMessage
 from llm_helper import get_llm
 
 
-# -- Tools for the agent ------------------------------------------------------
+# ── Step 1: Define tools ─────────────────────────────────────────────
+# Same @tool pattern as lesson 06 — the agent reads the docstring
+# to know when each tool is appropriate.
 
 @tool
 def greet(name: str) -> str:
@@ -64,12 +112,21 @@ def translate_greeting(text: str, language: str) -> str:
     return f"[{language}] {text}"
 
 
-# -- Create the agent ---------------------------------------------------------
-# create_react_agent builds the full ReAct loop automatically:
-#   LLM -> tool call? -> execute tool -> back to LLM -> done?
+# ── Step 2: Create the agent ─────────────────────────────────────────
+# create_react_agent replaces the ENTIRE manual setup from lesson 06:
+#   - No StateGraph()
+#   - No add_node(), add_edge(), add_conditional_edges()
+#   - No should_use_tool routing function
+#   - No ToolNode
+#
+# It builds the same graph internally — agent node, tools node,
+# conditional edge, and the loop-back edge. One function call.
 
 llm = get_llm(model="gpt-4o")
 
+# prompt = system message that shapes the agent's behavior.
+# The agent sees this + the user message + tool schemas, and
+# uses all three to decide what to do.
 agent = create_react_agent(
     model=llm,
     tools=[greet, farewell, translate_greeting],
@@ -107,17 +164,31 @@ if __name__ == "__main__":
             print(f"[{role}] {msg.content[:150]}")
         print()
 
-    # -- Key takeaway ----------------------------------------------------------
-    # create_react_agent handles the full loop:
-    #   1. LLM reasons about what to do
-    #   2. LLM calls one or more tools (greet, farewell, translate_greeting)
-    #   3. Tool results feed back to LLM
-    #   4. LLM either calls more tools or gives a final answer
+    # ── Key takeaway ─────────────────────────────────────────────────
+    # Lesson 06 (manual)  vs  Lesson 07 (create_react_agent):
     #
-    # The agent autonomously decided the order: greet first, then translate
-    # the greeting, then farewell — all from a single natural-language request.
+    #   Manual (06):                  ReAct (07):
+    #   ─────────────────────────     ────────────────────────
+    #   StateGraph(MessagesState)     create_react_agent(
+    #   add_node("llm", call_llm)         model=llm,
+    #   add_node("tools", ToolNode)       tools=[...],
+    #   add_conditional_edges(...)        prompt="...",
+    #   add_edge("tools", "llm")     )
+    #   graph.compile()
     #
-    # -- Exercise --------------------------------------------------------------
+    # Same graph, same loop, same result — but one function call.
+    #
+    # WHY USE create_react_agent:
+    #   - Less boilerplate for standard ReAct agents
+    #   - The production create_agent_orchestrator.py uses it directly
+    #
+    # WHY STILL LEARN THE MANUAL WAY (lesson 06):
+    #   - Custom routing logic (e.g., max 3 tool calls, then stop)
+    #   - Extra nodes (validation, logging, interrupts)
+    #   - The main langgraph_mcp_orchestrator.py uses the manual approach
+    #     because it needs interrupt handling and DynamoDB checkpointing
+    #
+    # ── Exercise ─────────────────────────────────────────────────────
     # 1. Add a `personalize_greeting` tool that takes a name and a hobby,
     #    returning a greeting that mentions the hobby
     # 2. Ask the agent: "Greet Bob who loves painting, translate it to
