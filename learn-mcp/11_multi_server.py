@@ -2,12 +2,13 @@
 ======================================
 
 WHY THIS MATTERS:
-  The Reuters AI Assistant doesn't have one MCP server — it has three
-  (story-drafting, urgent-drafting, text-archive), each on a different
-  port. When the agent says "call search_archive," the backend needs
-  to know that tool lives on the text-archive server, not story-drafting.
+  Real MCP deployments don't stop at a single server. You might have one
+  server for greetings, another for translations, and a third for
+  formatting -- each running independently on a different port. When
+  the orchestrator says "call translate," something needs to know that
+  tool lives on the translation-server, not on the greeting-server.
   The ServerRegistry solves this: it discovers all tools from all servers
-  at startup and builds a routing table (tool_name → server).
+  at startup and builds a routing table (tool_name -> server).
 
 WHAT YOU'LL LEARN:
   1. Register multiple MCP servers in a central registry
@@ -26,9 +27,9 @@ Flow:
   | Server Registry   |
   +-------------------+
   | Servers:          |
-  |  story-drafting   |-----> Client A --> [draft_story, search_rics]
-  |  text-archive     |-----> Client B --> [search_archive]
-  |  urgent-drafting   |-----> Client C --> [generate_urgent]
+  |  greeting-server  |-----> Client A --> [greet, farewell]
+  |  translation-srv  |-----> Client B --> [translate, detect_language]
+  |  format-server    |-----> Client C --> [format_card]
   +-------------------+
          |
          v
@@ -50,34 +51,35 @@ PREREQUISITES: Lesson 05 (HTTP transport), Lesson 06 (client patterns)
 Run:  uv run python 11_multi_server.py
 
 EXPECTED OUTPUT:
-  === Multi-Server Registry Demo ===
+  === Server Registry ===
 
-  Discovering tools from 3 servers...
-    story-drafting: 2 tools [draft_story, search_rics]
-    text-archive: 2 tools [search_archive, get_article]
-    urgent-drafting: 1 tools [generate_urgent]
+    Servers: ['greeting-server', 'translation-server', 'format-server']
 
   === Tool Routing Table ===
-    draft_story     -> story-drafting
-    search_rics     -> story-drafting
-    search_archive  -> text-archive
-    get_article     -> text-archive
-    generate_urgent -> urgent-drafting
+
+    detect_language        -> translation-server
+    farewell               -> greeting-server
+    format_card            -> format-server
+    greet                  -> greeting-server
+    translate              -> translation-server
 
   === Routed Tool Calls ===
 
-    draft_story(topic=oil)      -> story-drafting -> {draft: ..., topic: 'oil'}
-    search_archive(query=OPEC)  -> text-archive   -> {results: [...], query: 'OPEC'}
-    generate_urgent(headline=..)-> urgent-drafting -> {urgent: ..., priority: 'FLASH'}
+    greet -> routed to 'greeting-server': ...
+    translate -> routed to 'translation-server': ...
+    format_card -> routed to 'format-server': ...
 
-  === Error: Unknown Tool ===
-    nonexistent_tool -> Error: Tool 'nonexistent_tool' not found ...
+  === Unknown Tool ===
+
+    nonexistent -> {'error': "No server found for tool 'nonexistent'"}
 
   === Parallel Calls Across Servers ===
-    3 calls completed in parallel:
-      draft_story: {draft: ...}
-      search_archive: {results: ...}
-      generate_urgent: {urgent: ...}
+
+    [greeting-server] greet: done
+    [translation-server] translate: done
+    [format-server] format_card: done
+
+    All 3 calls completed in parallel.
 """
 
 import asyncio
@@ -87,75 +89,85 @@ from fastmcp import FastMCP, Client
 
 
 # ============================================================================
-# Server 1: Story Drafting
+# Server 1: Greeting Server
 # ============================================================================
 
-story_server = FastMCP(name="story-drafting")
+greeting_server = FastMCP(name="greeting-server")
 
 
-@story_server.tool
-async def draft_story(
-    topic: Annotated[str, Field(description="Topic for the story")],
+@greeting_server.tool
+async def greet(
+    name: Annotated[str, Field(description="Name of the person to greet")],
 ) -> dict:
-    """Draft a spot news story."""
+    """Greet someone with a friendly hello."""
     return {
-        "source": "story-drafting",
-        "draft": f"REUTERS - Story about {topic}...",
-        "style": "spot",
+        "source": "greeting-server",
+        "message": f"Hello, {name}!",
     }
 
 
-@story_server.tool
-async def search_rics(
-    query: Annotated[str, Field(description="RIC search query")],
+@greeting_server.tool
+async def farewell(
+    name: Annotated[str, Field(description="Name of the person to bid farewell")],
 ) -> dict:
-    """Search for Reuters Instrument Codes."""
+    """Say goodbye to someone."""
     return {
-        "source": "story-drafting",
-        "results": [f"{query}.O", f"{query}.L"],
-    }
-
-
-# ============================================================================
-# Server 2: Text Archive
-# ============================================================================
-
-archive_server = FastMCP(name="text-archive")
-
-
-@archive_server.tool
-async def search_archive(
-    query: Annotated[str, Field(description="Search query for the archive")],
-    limit: Annotated[int, Field(default=10, description="Max results")] = 10,
-) -> dict:
-    """Search the Reuters Text Archive."""
-    return {
-        "source": "text-archive",
-        "query": query,
-        "results": [
-            {"title": f"Archive: {query} #{i+1}", "date": f"2024-12-{20-i}"}
-            for i in range(min(limit, 5))
-        ],
+        "source": "greeting-server",
+        "message": f"Goodbye, {name}!",
     }
 
 
 # ============================================================================
-# Server 3: Urgent Drafting
+# Server 2: Translation Server
 # ============================================================================
 
-urgent_server = FastMCP(name="urgent-drafting")
+translation_server = FastMCP(name="translation-server")
 
 
-@urgent_server.tool
-async def generate_urgent(
-    headline: Annotated[str, Field(description="Breaking news headline")],
-    details: Annotated[str, Field(default="", description="Additional details")] = "",
+@translation_server.tool
+async def translate(
+    text: Annotated[str, Field(description="Text to translate")],
+    language: Annotated[str, Field(description="Target language")],
 ) -> dict:
-    """Generate an urgent/breaking news alert."""
+    """Translate text into another language."""
     return {
-        "source": "urgent-drafting",
-        "urgent": f"URGENT: {headline}",
-        "details": details or "No additional details.",
+        "source": "translation-server",
+        "original": text,
+        "translated": f"[{language}] {text}",
+        "language": language,
+    }
+
+
+@translation_server.tool
+async def detect_language(
+    text: Annotated[str, Field(description="Text to detect language of")],
+) -> dict:
+    """Detect the language of a text."""
+    return {
+        "source": "translation-server",
+        "text": text,
+        "detected": "en",
+        "confidence": 0.95,
+    }
+
+
+# ============================================================================
+# Server 3: Format Server
+# ============================================================================
+
+format_server = FastMCP(name="format-server")
+
+
+@format_server.tool
+async def format_card(
+    name: Annotated[str, Field(description="Name for the card")],
+    message: Annotated[str, Field(description="Message content")],
+) -> dict:
+    """Format a greeting card."""
+    return {
+        "source": "format-server",
+        "card": f"=== Card for {name} ===\n{message}\n=================",
+        "name": name,
     }
 
 
@@ -241,9 +253,9 @@ class ServerRegistry:
 async def main():
     # -- 1. Build the registry --
     registry = ServerRegistry()
-    registry.register("story-drafting", story_server)
-    registry.register("text-archive", archive_server)
-    registry.register("urgent-drafting", urgent_server)
+    registry.register("greeting-server", greeting_server)
+    registry.register("translation-server", translation_server)
+    registry.register("format-server", format_server)
 
     # -- 2. Discover all capabilities --
     await registry.discover_all()
@@ -261,14 +273,14 @@ async def main():
     # -- 3. Route individual tool calls --
     print("=== Routed Tool Calls ===\n")
 
-    r1 = await registry.call_tool("draft_story", {"topic": "Fed rate decision"})
-    print(f"  draft_story -> routed to '{r1['server']}': {r1['result']}")
+    r1 = await registry.call_tool("greet", {"name": "Alice"})
+    print(f"  greet -> routed to '{r1['server']}': {r1['result']}")
 
-    r2 = await registry.call_tool("search_archive", {"query": "OPEC", "limit": 3})
-    print(f"  search_archive -> routed to '{r2['server']}': {r2['result']}")
+    r2 = await registry.call_tool("translate", {"text": "Hello!", "language": "French"})
+    print(f"  translate -> routed to '{r2['server']}': {r2['result']}")
 
-    r3 = await registry.call_tool("generate_urgent", {"headline": "Fed cuts rates"})
-    print(f"  generate_urgent -> routed to '{r3['server']}': {r3['result']}")
+    r3 = await registry.call_tool("format_card", {"name": "Bob", "message": "Best wishes!"})
+    print(f"  format_card -> routed to '{r3['server']}': {r3['result']}")
     print()
 
     # -- 4. Unknown tool --
@@ -280,9 +292,9 @@ async def main():
     # -- 5. Parallel calls across servers --
     print("=== Parallel Calls Across Servers ===\n")
     results = await registry.call_tools_parallel([
-        ("draft_story", {"topic": "AI regulation"}),
-        ("search_archive", {"query": "regulation", "limit": 2}),
-        ("generate_urgent", {"headline": "EU passes AI Act"}),
+        ("greet", {"name": "Alice"}),
+        ("translate", {"text": "Hello!", "language": "French"}),
+        ("format_card", {"name": "Bob", "message": "Best wishes!"}),
     ])
     for r in results:
         print(f"  [{r['server']}] {r['tool']}: done")
@@ -295,9 +307,9 @@ if __name__ == "__main__":
 
     # -- Key takeaway --------------------------------------------------------
     # In production, multiple MCP servers run on different ports/URLs:
-    #   story-drafting  -> :8004
-    #   urgent-drafting -> :8003
-    #   text-archive    -> :8000
+    #   greeting-server     -> :8001
+    #   translation-server  -> :8002
+    #   format-server       -> :8003
     #
     # The ServerRegistry:
     #   1. Tracks which servers are available

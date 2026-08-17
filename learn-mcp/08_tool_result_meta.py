@@ -2,14 +2,15 @@
 ===============================================
 
 WHY THIS MATTERS:
-  When a tool generates a 500-word draft, the LLM agent doesn't need
-  to see all of it in its context window — that wastes tokens and
-  confuses the agent. But the *frontend* needs the full draft to
-  display it to the user. Forwarded blocks solve this: the agent
-  sees a short summary ("Draft generated, 500 words, spot style"),
-  while the UI gets the full text via _meta.forwarded_blocks.
+  When a tool generates a greeting card with creative text, the LLM
+  agent doesn't need to see all of it in its context window -- that
+  wastes tokens and confuses the agent. But the *frontend* needs the
+  full card to display it to the user. Forwarded blocks solve this:
+  the agent sees a short summary ("Greeting card created for Alice"),
+  while the UI gets the full formatted card via _meta.forwarded_blocks.
 
-  This is the key mechanism behind all story/buzz/bulletin drafts.
+  This is the key mechanism behind all story/buzz/bulletin drafts
+  in the production system.
 
 WHAT YOU'LL LEARN:
   1. Return rich results with content + metadata
@@ -26,16 +27,16 @@ Concepts:
 Flow:
   +--------+     +------------------+     +---------------------+
   | Client | --> | MCP Server       | --> | Tool                |
-  +--------+     +------------------+     |   draft_story()     |
+  +--------+     +------------------+     |   greet_card()      |
        |                                  |                     |
        |                                  | Returns:            |
        |         +-- agent text ------+   |  content: [{text}]  |
        |         |   (summary for     |   |  _meta:             |
        |         |    LLM context)    |   |   forwarded_blocks: |
-       |         +--------------------+   |    [{full draft}]   |
+       |         +--------------------+   |    [{full card}]    |
        |                                  +---------------------+
        |         +-- forwarded -------+
-       |         |   (full draft for  |
+       |         |   (full card for   |
        |         |    UI rendering)   |
        |         +--------------------+
 
@@ -51,28 +52,28 @@ PREREQUISITES: Lesson 07 (LLM tools), Lesson 04 (resources/primitives)
 Run:  uv run python 08_tool_result_meta.py
 
 EXPECTED OUTPUT (without .env -- mock mode):
-  === 1. Simple Tool (word_count) ===
+  === 1. Simple Tool (greet) ===
 
-    Result: [TextContent(... word_count: 7, char_count: 45 ...)]
+    Result: [TextContent(... "message": "Hello, Alice!" ...)]
 
   === 2. Forwarded Blocks via call_tool (agent view only) ===
 
-    Agent sees: [TextContent(... summary: 'Draft generated', word_count: <N> ...)]
+    Agent sees: [TextContent(... "Greeting card created for Bob" ...)]
     (Forwarded blocks are invisible to call_tool -- use call_tool_mcp to access them)
 
   === 3. Forwarded Blocks via call_tool_mcp (full result) ===
 
     Content blocks (agent-visible): 1
-      [0] TextContent: {"summary": "Draft generated", ...}
+      [0] TextContent: {"summary": "Greeting card created for Bob", ...}
 
     Forwarded blocks (UI-only): 1
-      event_type: SPOT_STORY_REVIEW
+      event_type: GREETING_CARD_REVIEW
       word_count: <N>
-      draft preview: <first 200 chars of mock/LLM draft>...
+      card preview: <first 200 chars of mock/LLM card text>...
 
-EXPECTED OUTPUT (with .env -- real LLM draft):
-  Same structure, but draft_story returns a real LLM-generated draft
-  instead of a mock placeholder.
+EXPECTED OUTPUT (with .env -- real LLM card):
+  Same structure, but greet_card returns a real LLM-generated greeting
+  card instead of a mock placeholder.
 """
 
 import asyncio
@@ -127,63 +128,64 @@ def forwarded_tool_result(agent_text: str, forwarded_data: dict) -> list:
 # Tools that use forwarded blocks
 # ============================================================================
 
-async def _draft_story(
-    topic: Annotated[str, Field(description="News topic to draft a story about")],
-    style: Annotated[str, Field(default="spot", description="Story style: spot, bulletin, urgent")] = "spot",
+async def _greet_card(
+    name: Annotated[str, Field(description="Name of the person to create a greeting card for")],
+    occasion: Annotated[str, Field(default="general", description="Occasion: general, birthday, farewell, congratulations")] = "general",
 ) -> list:
-    """Draft a news story. Returns summary to agent + full draft to UI."""
+    """Generate a greeting card. Returns summary to agent + full card to UI."""
     if _has_env():
         from llm_helper import get_llm
-        llm = get_llm(model="gpt-4o", temperature=0.3)
+        llm = get_llm(model="gpt-4o", temperature=0.7)
         messages = [
             {
                 "role": "system",
                 "content": (
-                    f"You are a Reuters journalist. Write a short {style} story about the topic. "
-                    "Include a headline, dateline, and 2-3 paragraphs. Use Reuters style."
+                    f"You are a creative greeting card writer. Write a heartfelt {occasion} "
+                    f"greeting card for {name}. Include a title line, a warm message (2-3 sentences), "
+                    "and a closing. Keep it sincere and personal."
                 ),
             },
-            {"role": "user", "content": f"Write a {style} story about: {topic}"},
+            {"role": "user", "content": f"Write a {occasion} greeting card for: {name}"},
         ]
         response = await llm.ainvoke(messages)
-        draft_text = response.content
+        card_text = response.content
     else:
-        draft_text = (
-            f"HEADLINE: {topic.title()} - Reuters\n\n"
-            f"LONDON (Reuters) - This is a mock {style} story about {topic}. "
-            f"In production, this would be generated by the LLM.\n\n"
-            f"The story would contain 2-3 paragraphs of Reuters-style reporting."
+        card_text = (
+            f"--- Greeting Card ---\n\n"
+            f"Dear {name},\n\n"
+            f"Wishing you all the best on this {occasion} occasion! "
+            f"May your day be filled with joy and happiness.\n\n"
+            f"With warm regards,\n"
+            f"Your AI Assistant"
         )
 
-    headline = draft_text.split("\n")[0][:80]
-
     # Agent sees a short summary (saves context window)
-    agent_summary = f"Draft {style} story generated about '{topic}'. Headline: {headline}"
+    agent_summary = f"Greeting card created for {name}"
 
-    # UI sees the full draft (for rendering in the assistant panel)
+    # UI sees the full card (for rendering in the assistant panel)
     forwarded = {
-        "event_type": "SPOT_STORY_REVIEW",
-        "draft": draft_text,
+        "event_type": "GREETING_CARD_REVIEW",
+        "card_text": card_text,
         "metadata": {
-            "topic": topic,
-            "style": style,
-            "word_count": len(draft_text.split()),
+            "name": name,
+            "occasion": occasion,
+            "word_count": len(card_text.split()),
         },
     }
 
     return forwarded_tool_result(agent_summary, forwarded)
 
-mcp.tool(name="draft_story", meta={"display_name": "Draft Story"})(_draft_story)
+mcp.tool(name="greet_card", meta={"display_name": "Greeting Card"})(_greet_card)
 
 
 # -- Simple tool (no forwarded blocks, for comparison) -------------------------
 
 @mcp.tool
-async def word_count(
-    text: Annotated[str, Field(description="Text to count words in")],
+async def greet(
+    name: Annotated[str, Field(description="The person's name to greet")],
 ) -> dict:
-    """Count words -- simple tool with no forwarded blocks."""
-    return {"word_count": len(text.split())}
+    """Generate a greeting -- simple tool with no forwarded blocks."""
+    return {"message": f"Hello, {name}!"}
 
 
 # ============================================================================
@@ -194,20 +196,20 @@ async def main():
     async with Client(mcp) as client:
         # -- 1. Simple tool (no meta) -----------------------------------------
         print("=== 1. Simple Tool (call_tool) ===\n")
-        r1 = await client.call_tool("word_count", {"text": "hello world from MCP"})
+        r1 = await client.call_tool("greet", {"name": "Alice"})
         print(f"  call_tool result: {r1}")
         print()
 
-        # -- 2. Draft story with forwarded blocks -----------------------------
-        print("=== 2. Draft Story (call_tool - agent sees summary only) ===\n")
-        r2 = await client.call_tool("draft_story", {"topic": "oil prices", "style": "spot"})
+        # -- 2. Greeting card with forwarded blocks ---------------------------
+        print("=== 2. Greeting Card (call_tool - agent sees summary only) ===\n")
+        r2 = await client.call_tool("greet_card", {"name": "Bob", "occasion": "birthday"})
         print(f"  call_tool result (agent view):")
         print(f"    {r2}")
         print()
 
         # -- 3. call_tool_mcp preserves _meta ---------------------------------
-        print("=== 3. Draft Story (call_tool_mcp - preserves _meta) ===\n")
-        r3 = await client.call_tool_mcp("draft_story", {"topic": "tech stocks"})
+        print("=== 3. Greeting Card (call_tool_mcp - preserves _meta) ===\n")
+        r3 = await client.call_tool_mcp("greet_card", {"name": "Bob"})
         print(f"  call_tool_mcp result type: {type(r3).__name__}")
         print(f"  Content blocks: {len(r3.content)}")
 
@@ -227,7 +229,7 @@ async def main():
                             parsed = json.loads(fb_text)
                             print(f"      Block {j} event_type: {parsed.get('event_type')}")
                             print(f"      Block {j} word_count: {parsed.get('metadata', {}).get('word_count')}")
-                            print(f"      Block {j} draft preview: {parsed.get('draft', '')[:80]}...")
+                            print(f"      Block {j} card preview: {parsed.get('card_text', '')[:200]}...")
                         except (json.JSONDecodeError, AttributeError):
                             print(f"      Block {j}: {str(fb_text)[:100]}...")
                 else:
@@ -241,10 +243,10 @@ if __name__ == "__main__":
     # -- Key takeaway --------------------------------------------------------
     # Forwarded blocks solve the "agent context vs UI display" problem:
     #
-    #   Agent sees:  "Draft generated about oil prices. Headline: ..."
+    #   Agent sees:  "Greeting card created for Bob"
     #                (short, saves context window)
     #
-    #   UI sees:     Full draft text + event_type + metadata
+    #   UI sees:     Full card text + event_type + metadata
     #                (rich, for rendering in the assistant panel)
     #
     # Production uses this for ALL story drafts:
@@ -256,6 +258,6 @@ if __name__ == "__main__":
     # and sends them to the frontend separately from the agent's context.
     #
     # -- Exercise -------------------------------------------------------------
-    # 1. Add a "draft_bulletin" tool using the same forwarded pattern
-    # 2. Include multiple forwarded blocks (e.g., draft + metadata block)
+    # 1. Add a "farewell_card" tool using the same forwarded pattern
+    # 2. Include multiple forwarded blocks (e.g., card + metadata block)
     # 3. Compare call_tool() output vs call_tool_mcp() in detail

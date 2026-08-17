@@ -7,18 +7,35 @@ Concepts:
   - Useful for accumulating results from multiple nodes or parallel branches
 
 Graph:
-  +-------+     +----------+     +-------+     +--------+     +-----+
-  | START | --> | research | --> | draft | --> | review | --> | END |
-  +-------+     +----------+     +-------+     +--------+     +-----+
+  +-------+     +-------+     +----------+     +--------+     +-----+
+  | START | --> | greet | --> | decorate | --> | review | --> | END |
+  +-------+     +-------+     +----------+     +--------+     +-----+
 
   State key `log: Annotated[list[str], operator.add]` accumulates across all nodes:
-    research appends: ["Researched 'topic'"]
-    draft    appends: ["Drafted initial version"]
+    greet    appends: ["Greeted 'Alice'"]
+    decorate appends: ["Added decoration"]
     review   appends: ["Reviewed and approved"]
 
 No LLM needed -- demonstrates accumulating log entries.
 
 Run:  uv run python 04_state_reducers.py
+
+Expected output:
+  Final greeting: *** Hello, Alice! *** [APPROVED]
+
+  Execution log:
+    - Greeted 'Alice'
+    - Added decoration
+    - Reviewed and approved
+
+Key takeaway:
+  Without Annotated[list, operator.add], each node would REPLACE
+  the log list. With the reducer, entries accumulate across nodes.
+
+Exercise:
+  1. Add a `farewell` node between review and END
+  2. Have it return {"log": ["Said farewell"], "greeting": state["greeting"] + " Goodbye!"}
+  3. Run the graph and observe the log growing to four entries
 """
 
 import operator
@@ -27,41 +44,33 @@ from langgraph.graph import StateGraph, START, END
 
 
 class State(TypedDict):
-    topic: str
+    name: str
     # This is the key idea: Annotated with operator.add means
     # each node's return value gets APPENDED, not replaced.
     log: Annotated[list[str], operator.add]
-    result: str
+    greeting: str
 
 
-def research(state: State) -> dict:
-    return {
-        "log": [f"Researched '{state['topic']}'"],
-    }
+def greet(state: State) -> dict:
+    return {"log": [f"Greeted '{state['name']}'"], "greeting": f"Hello, {state['name']}!"}
 
 
-def draft(state: State) -> dict:
-    return {
-        "log": ["Drafted initial version"],
-        "result": f"Draft about {state['topic']}",
-    }
+def decorate(state: State) -> dict:
+    return {"log": ["Added decoration"], "greeting": f"*** {state['greeting']} ***"}
 
 
 def review(state: State) -> dict:
-    return {
-        "log": ["Reviewed and approved"],
-        "result": state["result"] + " [REVIEWED]",
-    }
+    return {"log": ["Reviewed and approved"], "greeting": state["greeting"] + " [APPROVED]"}
 
 
 graph = StateGraph(State)
-graph.add_node("research", research)
-graph.add_node("draft", draft)
+graph.add_node("greet", greet)
+graph.add_node("decorate", decorate)
 graph.add_node("review", review)
 
-graph.add_edge(START, "research")
-graph.add_edge("research", "draft")
-graph.add_edge("draft", "review")
+graph.add_edge(START, "greet")
+graph.add_edge("greet", "decorate")
+graph.add_edge("decorate", "review")
 graph.add_edge("review", END)
 
 app = graph.compile()
@@ -72,18 +81,18 @@ if __name__ == "__main__":
     print(app.get_graph().draw_mermaid())
     print()
 
-    result = app.invoke({"topic": "Reuters Q3 Earnings"})
+    result = app.invoke({"name": "Alice"})
 
-    print("Final result:", result["result"])
+    print("Final greeting:", result["greeting"])
     print("\nExecution log:")
     for entry in result["log"]:
         print(f"  - {entry}")
 
     # Output:
-    #   Final result: Draft about Reuters Q3 Earnings [REVIEWED]
+    #   Final greeting: *** Hello, Alice! *** [APPROVED]
     #   Execution log:
-    #     - Researched 'Reuters Q3 Earnings'
-    #     - Drafted initial version
+    #     - Greeted 'Alice'
+    #     - Added decoration
     #     - Reviewed and approved
 
     # ── Key takeaway ─────────────────────────────────────────────────
@@ -91,7 +100,6 @@ if __name__ == "__main__":
     # the log list. With the reducer, entries accumulate across nodes.
     #
     # ── Exercise ─────────────────────────────────────────────────────
-    # 1. Add a `revisions: Annotated[list[str], operator.add]` key
-    # 2. Make the review node sometimes return a revision request
-    # 3. Use conditional edges to loop back to draft if revision needed
-    # 4. Verify that revisions accumulate across loop iterations
+    # 1. Add a `farewell` node between review and END
+    # 2. Have it return {"log": ["Said farewell"], "greeting": state["greeting"] + " Goodbye!"}
+    # 3. Run the graph and observe the log growing to four entries

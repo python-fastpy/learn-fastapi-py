@@ -16,11 +16,17 @@ Graph:
 
   Same graph as lesson 05, but compiled with a checkpointer.
   Each thread_id gets its own isolated message history.
-  Your backend uses DynamoDB checkpointer for the same purpose!
+  Turn 2 (same thread) remembers Alice prefers formal greetings.
+  Turn 3 (different thread) has no idea who Alice is.
 
 ** Requires .env with orchestrator credentials **
 
 Run:  uv run python 08_checkpointers.py
+
+Expected output:
+  Turn 1 — AI acknowledges Alice and her formal greeting preference
+  Turn 2 — AI recalls "Alice" and "formal greetings" (same thread)
+  Turn 3 — AI does NOT know the name (different thread, fresh memory)
 """
 
 from langgraph.graph import StateGraph, MessagesState, START, END
@@ -59,8 +65,11 @@ if __name__ == "__main__":
     print("=== Turn 1 ===")
     result1 = app.invoke(
         {"messages": [
-            SystemMessage(content="You are a helpful Reuters editor. Be concise."),
-            HumanMessage(content="My name is Shubham. I work on the AI assistant."),
+            SystemMessage(content=(
+                "You are a friendly greeting assistant. "
+                "Remember names and preferred greeting styles."
+            )),
+            HumanMessage(content="My name is Alice. I prefer formal greetings."),
         ]},
         config=config,
     )
@@ -70,7 +79,7 @@ if __name__ == "__main__":
     print("=== Turn 2 (same thread) ===")
     result2 = app.invoke(
         {"messages": [
-            HumanMessage(content="What's my name and what do I work on?"),
+            HumanMessage(content="What's my name and how should you greet me?"),
         ]},
         config=config,
     )
@@ -88,10 +97,11 @@ if __name__ == "__main__":
     print(f"AI: {result3['messages'][-1].content[:200]}\n")
 
     # ── Key takeaway ─────────────────────────────────────────────────
-    # - Same thread_id → messages accumulate, LLM has memory
-    # - Different thread_id → fresh conversation, no memory
-    # - Your backend uses DynamoDB instead of MemorySaver but the
-    #   pattern is identical (see dynamodb_checkpointer.py)
+    # - Same thread_id → messages accumulate, LLM remembers Alice
+    #   and her preference for formal greetings
+    # - Different thread_id → fresh conversation, no memory of Alice
+    # - MemorySaver is in-process only; production systems use
+    #   persistent stores (e.g., DynamoDB, PostgreSQL)
     #
     # ── Exercise ─────────────────────────────────────────────────────
     # 1. Use app.get_state(config) to inspect the checkpoint

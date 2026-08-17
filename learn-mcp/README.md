@@ -139,7 +139,7 @@ uv run python 07_llm_tool_server.py
 |------|---------------|
 | **MCP** | Model Context Protocol — a standard for LLM agents to discover and call tools on external servers |
 | **FastMCP** | Python framework for building MCP-compliant servers (like FastAPI for MCP) |
-| **Tool** | A function the LLM agent can call — e.g., `draft_story`, `search_archive` |
+| **Tool** | A function the LLM agent can call — e.g., `greet`, `farewell`, `translate` |
 | **Resource** | Read-only data the agent can fetch — e.g., a config file, a list of templates |
 | **Prompt** | A reusable message template the agent can use — e.g., "summarize this article" |
 | **Client** | Connects to an MCP server and calls its tools — `Client(server)` or `Client(transport=...)` |

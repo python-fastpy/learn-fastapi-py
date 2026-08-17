@@ -12,7 +12,7 @@ Graph:
   +-------+     +-----+
                   |
           should_use_tool()
-            /          \\
+            /          \
            v            v
       +-------+      +-----+
       | tools | ---> | END |
@@ -43,29 +43,18 @@ from llm_helper import get_llm
 # The docstring becomes the tool description the LLM sees.
 
 @tool
-def get_stock_price(ticker: str) -> str:
-    """Look up the current stock price for a given ticker symbol."""
-    prices = {
-        "AAPL": "$198.50",
-        "MSFT": "$415.20",
-        "GOOGL": "$175.80",
-        "TSLA": "$248.90",
-    }
-    return prices.get(ticker.upper(), f"Unknown ticker: {ticker}")
+def greet(name: str) -> str:
+    """Greet someone by name."""
+    return f"Hello, {name}! Welcome!"
 
 
 @tool
-def get_company_info(company_name: str) -> str:
-    """Get basic info about a company including sector and market cap."""
-    companies = {
-        "apple": "Apple Inc. | Tech | Market Cap: $3.1T",
-        "microsoft": "Microsoft Corp. | Tech | Market Cap: $3.0T",
-        "google": "Alphabet Inc. | Tech | Market Cap: $2.1T",
-    }
-    return companies.get(company_name.lower(), f"No info for: {company_name}")
+def farewell(name: str) -> str:
+    """Say goodbye to someone."""
+    return f"Goodbye, {name}! See you soon!"
 
 
-tools = [get_stock_price, get_company_info]
+tools = [greet, farewell]
 
 
 # ── Step 2: Bind tools to the LLM ───────────────────────────────────
@@ -114,10 +103,10 @@ if __name__ == "__main__":
     print(app.get_graph().draw_mermaid())
     print()
 
-    # The LLM will decide to call get_stock_price
+    # The LLM will decide to call greet and farewell
     result = app.invoke({
         "messages": [
-            HumanMessage(content="What's Apple's stock price?")
+            HumanMessage(content="Greet Alice and then say goodbye to her")
         ]
     })
 
@@ -137,7 +126,7 @@ if __name__ == "__main__":
     # The LLM sees the tool results and formulates a final answer.
     #
     # ── Exercise ─────────────────────────────────────────────────────
-    # 1. Add a third tool: get_latest_headline(ticker) that returns a
-    #    fake headline for that company
-    # 2. Ask: "Tell me about Microsoft — price, info, and latest news"
+    # 1. Add a third tool: translate_greeting(text, language) that
+    #    returns a fake translation of the greeting into that language
+    # 2. Ask: "Greet Bob, translate it to French, then say goodbye"
     # 3. Watch the LLM call all three tools in sequence

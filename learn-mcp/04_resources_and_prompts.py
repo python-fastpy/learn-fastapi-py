@@ -35,9 +35,9 @@ Flow:
        |
        +-- list_resources() -> discover what data is available
        +-- read_resource("config://settings") -> get static data
-       +-- read_resource("topic://markets") -> get dynamic data
+       +-- read_resource("language://fr") -> get dynamic data
        +-- list_prompts() -> discover prompt templates
-       +-- get_prompt("summarize", {topic: "oil"}) -> get rendered prompt
+       +-- get_prompt("welcome", {name: "Alice"}) -> get rendered prompt
 
   Maps to:
     shared/workflows/routes.py (workflows are effectively resources via REST)
@@ -53,32 +53,32 @@ EXPECTED OUTPUT:
   Available resources:
     - config://settings: get_settings
 
-  config://settings -> ["...version: 2.1.0, region: eu-west-1..."]
+  config://settings -> ["...default_style: casual, max_name_length: 50..."]
 
-  topic://markets -> ["...S&P 500...+1.2%..."]
-  topic://energy  -> ["...Brent Crude...78.50...-0.5%..."]
+  language://fr -> ["...hello: Bonjour...goodbye: Au revoir..."]
+  language://de -> ["...hello: Hallo...goodbye: Auf Wiedersehen..."]
 
   === Resource Templates ===
 
   Available templates:
-    - topic://{topic}: get_topic_data
+    - language://{code}: get_language_phrases
 
   === Prompts ===
 
   Available prompts:
-    - summarize: Generate a prompt for summarizing news about a topic.
-    - draft_headline: Generate a prompt for drafting a news headline.
+    - welcome: Generate a prompt for composing a welcome message.
+    - farewell_speech: Generate a prompt for composing a farewell speech.
 
-  summarize(oil prices, bullet):
-    Summarize the latest news about oil prices as 5 bullet points. ...
+  welcome(Alice, warm):
+    Compose a warm welcome message for Alice. ...
 
-  draft_headline(Fed raises rates):
-    Write a Reuters-style headline for the following event: ...
+  farewell_speech(Bob, retirement):
+    Write a heartfelt farewell speech for Bob. ...
 
   === Tools (for comparison) ===
 
-  Tools: ['analyze_topic']
-  analyze_topic('markets') -> [TextContent(... sentiment: positive ...)]
+  Tools: ['greet']
+  greet('Alice') -> [TextContent(... Hello, Alice! ...)]
 """
 
 import asyncio
@@ -86,7 +86,7 @@ import json
 from fastmcp import FastMCP, Client
 
 
-mcp = FastMCP(name="news-resources")
+mcp = FastMCP(name="greeting-resources")
 
 
 # -- Static Resource -----------------------------------------------------------
@@ -95,28 +95,28 @@ mcp = FastMCP(name="news-resources")
 
 @mcp.resource("config://settings")
 def get_settings() -> str:
-    """Application settings and configuration."""
+    """Greeting service settings and configuration."""
     return json.dumps({
-        "version": "2.1.0",
-        "region": "eu-west-1",
-        "max_results": 50,
+        "default_style": "casual",
+        "max_name_length": 50,
         "supported_languages": ["en", "fr", "de", "es"],
     })
 
 
 # -- Dynamic Resource Template ------------------------------------------------
-# URI contains a parameter {topic} that gets filled at read time.
-# Useful for serving topic-specific data.
+# URI contains a parameter {code} that gets filled at read time.
+# Useful for serving language-specific greeting phrases.
 
-@mcp.resource("topic://{topic}")
-def get_topic_data(topic: str) -> str:
-    """Get the latest data for a specific news topic."""
-    topics = {
-        "markets": {"index": "S&P 500", "value": 5930.85, "change": "+1.2%"},
-        "energy": {"commodity": "Brent Crude", "price": 78.50, "change": "-0.5%"},
-        "tech": {"sector": "AI/ML", "investment": "$200B", "trend": "accelerating"},
+@mcp.resource("language://{code}")
+def get_language_phrases(code: str) -> str:
+    """Get greeting and farewell phrases for a specific language."""
+    languages = {
+        "en": {"hello": "Hello", "goodbye": "Goodbye", "language": "English"},
+        "fr": {"hello": "Bonjour", "goodbye": "Au revoir", "language": "French"},
+        "de": {"hello": "Hallo", "goodbye": "Auf Wiedersehen", "language": "German"},
+        "es": {"hello": "Hola", "goodbye": "Adios", "language": "Spanish"},
     }
-    data = topics.get(topic.lower(), {"error": f"Unknown topic: {topic}"})
+    data = languages.get(code.lower(), {"error": f"Unknown language: {code}"})
     return json.dumps(data)
 
 
@@ -125,38 +125,38 @@ def get_topic_data(topic: str) -> str:
 # The client calls get_prompt() with arguments to get a rendered prompt.
 
 @mcp.prompt()
-def summarize(topic: str, style: str = "concise") -> str:
-    """Generate a prompt for summarizing news about a topic."""
+def welcome(name: str, style: str = "casual") -> str:
+    """Generate a prompt for composing a welcome message."""
     styles = {
-        "concise": "in 2-3 sentences",
-        "detailed": "in a comprehensive paragraph with key data points",
-        "bullet": "as 5 bullet points",
+        "casual": "a friendly, casual",
+        "formal": "a professional, formal",
+        "warm": "a warm and heartfelt",
     }
-    style_instruction = styles.get(style, styles["concise"])
+    style_description = styles.get(style, styles["casual"])
     return (
-        f"Summarize the latest news about {topic} {style_instruction}. "
-        f"Include specific numbers and data points where available. "
-        f"Write in Reuters news style."
+        f"Compose {style_description} welcome message for {name}. "
+        f"Make it personal and sincere. "
+        f"Keep it to 2-3 sentences."
     )
 
 
 @mcp.prompt()
-def draft_headline(event: str, impact: str = "neutral") -> str:
-    """Generate a prompt for drafting a news headline."""
+def farewell_speech(name: str, occasion: str = "general") -> str:
+    """Generate a prompt for composing a farewell speech."""
     return (
-        f"Write a Reuters-style headline for the following event:\n"
-        f"Event: {event}\n"
-        f"Market impact: {impact}\n\n"
-        f"Rules: Max 80 characters. Start with the key fact. No clickbait."
+        f"Write a heartfelt farewell speech for {name}.\n"
+        f"Occasion: {occasion}\n\n"
+        f"Guidelines: Keep it under 100 words. Be sincere and positive. "
+        f"Mention a memorable quality about the person."
     )
 
 
 # -- A tool for comparison (tools DO things, resources EXPOSE data) ------------
 
 @mcp.tool
-async def analyze_topic(topic: str) -> dict:
-    """Analyze a news topic (this is a tool, not a resource)."""
-    return {"topic": topic, "sentiment": "positive", "confidence": 0.85}
+async def greet(name: str) -> dict:
+    """Greet someone by name (this is a tool, not a resource)."""
+    return {"message": f"Hello, {name}!"}
 
 
 async def main():
@@ -175,12 +175,12 @@ async def main():
         print(f"config://settings -> {settings}")
         print()
 
-        # Read dynamic resource (topic parameter in URI)
-        markets = await client.read_resource("topic://markets")
-        print(f"topic://markets -> {markets}")
+        # Read dynamic resource (language code parameter in URI)
+        french = await client.read_resource("language://fr")
+        print(f"language://fr -> {french}")
 
-        energy = await client.read_resource("topic://energy")
-        print(f"topic://energy  -> {energy}")
+        german = await client.read_resource("language://de")
+        print(f"language://de -> {german}")
         print()
 
         # -- Resource Templates ------------------------------------------------
@@ -202,16 +202,16 @@ async def main():
         print()
 
         # Get rendered prompts
-        p1 = await client.get_prompt("summarize", {"topic": "oil prices", "style": "bullet"})
-        print(f"summarize(oil prices, bullet):")
+        p1 = await client.get_prompt("welcome", {"name": "Alice", "style": "warm"})
+        print(f"welcome(Alice, warm):")
         print(f"  {p1.messages[0].content.text}")
         print()
 
-        p2 = await client.get_prompt("draft_headline", {
-            "event": "Fed raises rates by 25bps",
-            "impact": "negative",
+        p2 = await client.get_prompt("farewell_speech", {
+            "name": "Bob",
+            "occasion": "retirement",
         })
-        print(f"draft_headline(Fed raises rates):")
+        print(f"farewell_speech(Bob, retirement):")
         print(f"  {p2.messages[0].content.text}")
         print()
 
@@ -220,8 +220,8 @@ async def main():
 
         tools = await client.list_tools()
         print(f"Tools: {[t.name for t in tools]}")
-        r = await client.call_tool("analyze_topic", {"topic": "markets"})
-        print(f"analyze_topic('markets') -> {r}")
+        r = await client.call_tool("greet", {"name": "Alice"})
+        print(f"greet('Alice') -> {r}")
 
 
 if __name__ == "__main__":
@@ -239,6 +239,6 @@ if __name__ == "__main__":
     # (GET /workflows returns read-only data about available workflows).
     #
     # -- Exercise -------------------------------------------------------------
-    # 1. Add a resource template "article://{id}" that returns article data
-    # 2. Add a prompt "fact_check" that generates a fact-checking prompt
+    # 1. Add a resource template "greeting://{name}" that returns a greeting
+    # 2. Add a prompt "thank_you" that generates a thank-you message prompt
     # 3. Combine them: read a resource, then use a prompt with that data

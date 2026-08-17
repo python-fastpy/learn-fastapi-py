@@ -3,8 +3,8 @@
 
 WHY THIS MATTERS:
   This lesson combines everything from lessons 01-11 into a single
-  orchestration loop — the same pattern used by the production backend.
-  When a user says "draft a story about oil," the orchestrator:
+  orchestration loop -- the same pattern used by the production backend.
+  When a user says "create a welcome message for Alice," the orchestrator:
     1. Discovers available workflows from the skill servers
     2. Picks the right workflow (fast-path regex or LLM fallback)
     3. Gates tools to only those listed in the workflow
@@ -30,12 +30,12 @@ Concepts:
 Flow:
   +-----------+     +--------------------+     +------------------+
   | User      | --> | Orchestrator       | --> | MCP Servers      |
-  | "draft a  |     |                    |     |                  |
-  |  story    |     | 1. Discover wfs    |     | story-drafting   |
-  |  about    |     | 2. LLM selects wf  |     | text-archive     |
-  |  oil"     |     | 3. Load wf tools   |     +------------------+
-  +-----------+     | 4. LLM plans steps |
-                    | 5. Execute tools   |
+  | "create a |     |                    |     |                  |
+  |  welcome  |     | 1. Discover wfs    |     | greeting-server  |
+  |  message  |     | 2. LLM selects wf  |     | translation-srv  |
+  |  for      |     | 3. Load wf tools   |     +------------------+
+  |  Alice"   |     | 4. LLM plans steps |
+  +-----------+     | 5. Execute tools   |
                     | 6. Return result   |
                     +--------------------+
                          |         ^
@@ -65,26 +65,28 @@ EXPECTED OUTPUT (mock mode -- no .env):
     Registered 2 servers with 5 tools
     Loaded 3 workflows
 
-  === Test 1: "draft a story about oil prices" ===
-    Fast-path matched -> draft-story
-    Available tools (gated): ['search_articles', 'draft_story']
-    Calling search_articles({query: 'oil prices'})...
-    Calling draft_story({topic: 'oil prices', ...})...
-    Result: Draft about oil prices ... (2 tool calls)
+  === Test 1: "Create a welcome message for Alice" ===
+    Fast-path matched -> welcome-message
+    Available tools (gated): ['greet', 'farewell']
+    Calling greet({name: 'Alice'})...
+    Calling farewell({name: 'Alice'})...
+    Result: Welcome message for Alice (2 tool calls)
 
-  === Test 2: "search for articles about OPEC meeting" ===
-    Fast-path matched -> search-and-summarize
-    Available tools (gated): ['search_articles', 'summarize_text']
-    Calling search_articles({query: 'OPEC meeting'})...
-    Result: Found articles about OPEC meeting (1 tool call)
+  === Test 2: "Translate a greeting into French for Bob" ===
+    Fast-path matched -> translated-greeting
+    Available tools (gated): ['greet', 'translate']
+    Calling greet({name: 'Bob'})...
+    Calling translate({text: 'Hello, Bob!', language: 'French'})...
+    Result: Translated greeting for Bob (2 tool calls)
 
-  === Test 3: "validate RIC AAPL.O" ===
-    Fast-path matched -> ric-resolution
-    Available tools (gated): ['validate_ric']
-    Calling validate_ric({ric: 'AAPL.O'})...
-    Result: RIC AAPL.O validated (1 tool call)
+  === Test 3: "Create a greeting card for Bob" ===
+    Fast-path matched -> greeting-card
+    Available tools (gated): ['greet', 'format_card']
+    Calling greet({name: 'Bob'})...
+    Calling format_card({name: 'Bob', message: 'Hello, Bob!'})...
+    Result: Greeting card for Bob (2 tool calls)
 
-  === Test 4: "what's the weather today?" ===
+  === Test 4: "What's the weather today?" ===
     No workflow matched (no fast-path, no LLM match)
     Falling back to general response.
 """
@@ -109,56 +111,53 @@ load_dotenv()
 # MCP Servers (simplified versions of production servers)
 # ============================================================================
 
-story_server = FastMCP(name="story-drafting")
-archive_server = FastMCP(name="text-archive")
+greeting_server = FastMCP(name="greeting-server")
+translation_server = FastMCP(name="translation-server")
 
 
-@story_server.tool
-async def draft_story(
-    topic: Annotated[str, Field(description="Topic for the story")],
-    style: Annotated[str, Field(default="spot", description="Style: spot, bulletin")] = "spot",
+@greeting_server.tool
+async def greet(
+    name: Annotated[str, Field(description="Name of the person to greet")],
 ) -> dict:
-    """Draft a news story about a given topic."""
+    """Generate a friendly greeting for someone."""
+    return {"message": f"Hello, {name}!", "word_count": 3}
+
+
+@greeting_server.tool
+async def farewell(
+    name: Annotated[str, Field(description="Name of the person to say goodbye to")],
+) -> dict:
+    """Generate a farewell message for someone."""
+    return {"message": f"Goodbye, {name}!", "word_count": 2}
+
+
+@greeting_server.tool
+async def format_card(
+    name: Annotated[str, Field(description="Name for the card")],
+    message: Annotated[str, Field(description="Message to display on the card")],
+) -> dict:
+    """Format a message as a decorative greeting card."""
     return {
-        "draft": (
-            f"HEADLINE: {topic.title()} - Reuters\n\n"
-            f"(Reuters) - This is a {style} story about {topic}. "
-            f"Markets reacted positively to the latest developments."
-        ),
-        "style": style,
-        "word_count": 25,
+        "card": f"=== Card for {name} ===\n{message}\n=======",
+        "name": name,
     }
 
 
-@story_server.tool
-async def generate_headline(
-    event: Annotated[str, Field(description="Event to generate headline for")],
+@translation_server.tool
+async def translate(
+    text: Annotated[str, Field(description="Text to translate")],
+    language: Annotated[str, Field(default="French", description="Target language")] = "French",
 ) -> dict:
-    """Generate a Reuters-style headline."""
-    return {"headline": f"{event.upper()[:60]} - REUTERS"}
+    """Translate text into another language."""
+    return {"original": text, "translated": f"[{language}] {text}", "language": language}
 
 
-@story_server.tool
-async def search_rics(
-    query: Annotated[str, Field(description="Company or instrument name")],
+@translation_server.tool
+async def detect_language(
+    text: Annotated[str, Field(description="Text to detect language of")],
 ) -> dict:
-    """Search for Reuters Instrument Codes."""
-    return {"query": query, "results": [f"{query.upper()}.O", f"{query.upper()}.L"]}
-
-
-@archive_server.tool
-async def search_archive(
-    query: Annotated[str, Field(description="Search query")],
-    limit: Annotated[int, Field(default=5, description="Max results")] = 5,
-) -> dict:
-    """Search the Reuters Text Archive."""
-    return {
-        "query": query,
-        "results": [
-            {"title": f"Archive: {query} #{i+1}", "date": f"2024-12-{20-i}"}
-            for i in range(min(limit, 3))
-        ],
-    }
+    """Detect the language of the given text."""
+    return {"text": text, "detected": "en", "confidence": 0.95}
 
 
 # ============================================================================
@@ -167,36 +166,36 @@ async def search_archive(
 
 WORKFLOWS = [
     {
-        "name": "draft-story",
-        "description": "Draft a news story from a topic or event description",
-        "tools": ["generate_headline", "draft_story"],
-        "trigger_patterns": [r"draft.*story", r"write.*article", r"create.*story"],
+        "name": "welcome-message",
+        "description": "Create a welcome message that greets and bids farewell to someone",
+        "tools": ["greet", "farewell"],
+        "trigger_patterns": [r"welcome.*message", r"say.*hello.*goodbye"],
         "content": (
-            "1. Generate a headline with generate_headline\n"
-            "2. Draft the full story with draft_story\n"
-            "3. Present the draft for review"
+            "1. Greet the person with greet\n"
+            "2. Say farewell with farewell\n"
+            "3. Present the combined welcome message"
         ),
     },
     {
-        "name": "search-and-summarize",
-        "description": "Search the text archive for articles and summarize findings",
-        "tools": ["search_archive"],
-        "trigger_patterns": [r"search.*archive", r"find.*articles", r"look.*up"],
+        "name": "translated-greeting",
+        "description": "Greet someone and translate the greeting into another language",
+        "tools": ["greet", "translate"],
+        "trigger_patterns": [r"translate.*greeting", r"greet.*in.*language"],
         "content": (
-            "1. Search the archive with search_archive\n"
-            "2. Summarize the key findings\n"
-            "3. Present results to the user"
+            "1. Generate a greeting with greet\n"
+            "2. Translate the greeting with translate\n"
+            "3. Present the translated greeting"
         ),
     },
     {
-        "name": "ric-resolution",
-        "description": "Find and validate Reuters Instrument Codes for a company",
-        "tools": ["search_rics"],
-        "trigger_patterns": [r"find.*ric", r"validate.*ric", r"instrument.*code"],
+        "name": "greeting-card",
+        "description": "Create a decorative greeting card for someone",
+        "tools": ["greet", "format_card"],
+        "trigger_patterns": [r"greeting.*card", r"create.*card"],
         "content": (
-            "1. Search for RICs matching the query\n"
-            "2. Present candidates to the user\n"
-            "3. Confirm the selected RIC"
+            "1. Generate a greeting with greet\n"
+            "2. Format as a card with format_card\n"
+            "3. Present the greeting card"
         ),
     },
 ]
@@ -314,15 +313,22 @@ class WorkflowOrchestrator:
     def _build_args(self, tool_name: str, user_message: str) -> dict:
         """Build tool arguments from user message (simplified).
         In production, the LLM extracts parameters from context."""
-        topic = user_message.split("about")[-1].strip() if "about" in user_message else user_message
+        # Extract name from messages like "create a welcome message for Alice"
+        name_match = re.search(r"\bfor\s+([A-Z][a-z]+)", user_message)
+        name = name_match.group(1) if name_match else "World"
+
+        # Extract language from messages like "into French" or "in Spanish"
+        lang_match = re.search(r"(?:into|in)\s+([A-Z][a-z]+)", user_message)
+        language = lang_match.group(1) if lang_match else "French"
 
         arg_map = {
-            "draft_story": {"topic": topic, "style": "spot"},
-            "generate_headline": {"event": topic},
-            "search_archive": {"query": topic, "limit": 3},
-            "search_rics": {"query": topic},
+            "greet": {"name": name},
+            "farewell": {"name": name},
+            "format_card": {"name": name, "message": f"Hello, {name}!"},
+            "translate": {"text": f"Hello, {name}!", "language": language},
+            "detect_language": {"text": user_message},
         }
-        return arg_map.get(tool_name, {"query": topic})
+        return arg_map.get(tool_name, {"name": name})
 
     async def handle_message(self, user_message: str) -> dict:
         """Full orchestration loop for a user message."""
@@ -367,8 +373,8 @@ class WorkflowOrchestrator:
 async def main():
     # -- Setup orchestrator --
     orch = WorkflowOrchestrator()
-    orch.register_server("story-drafting", story_server)
-    orch.register_server("text-archive", archive_server)
+    orch.register_server("greeting-server", greeting_server)
+    orch.register_server("translation-server", translation_server)
     await orch.discover_tools()
 
     print("=== Workflow Orchestrator ===\n")
@@ -377,28 +383,28 @@ async def main():
     print(f"  Workflows: {[wf['name'] for wf in orch._workflows]}")
     print()
 
-    # -- Test 1: Draft story (matches fast-path) --
+    # -- Test 1: Welcome message (matches fast-path) --
     print("=" * 60)
-    print("Test 1: 'Draft a story about oil prices'")
+    print("Test 1: 'Create a welcome message for Alice'")
     print("=" * 60 + "\n")
 
-    r1 = await orch.handle_message("Draft a story about oil prices")
+    r1 = await orch.handle_message("Create a welcome message for Alice")
     _print_result(r1)
 
-    # -- Test 2: Search archive (matches fast-path) --
+    # -- Test 2: Translated greeting (matches fast-path) --
     print("=" * 60)
-    print("Test 2: 'Search the archive for OPEC articles'")
+    print("Test 2: 'Translate a greeting into French for Bob'")
     print("=" * 60 + "\n")
 
-    r2 = await orch.handle_message("Search the archive for OPEC articles")
+    r2 = await orch.handle_message("Translate a greeting into French for Bob")
     _print_result(r2)
 
-    # -- Test 3: RIC resolution (matches fast-path) --
+    # -- Test 3: Greeting card (matches fast-path) --
     print("=" * 60)
-    print("Test 3: 'Find the RIC for Apple'")
+    print("Test 3: 'Create a greeting card for Bob'")
     print("=" * 60 + "\n")
 
-    r3 = await orch.handle_message("Find the RIC for Apple")
+    r3 = await orch.handle_message("Create a greeting card for Bob")
     _print_result(r3)
 
     # -- Test 4: No match --

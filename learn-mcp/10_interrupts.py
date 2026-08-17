@@ -2,19 +2,20 @@
 =============================================
 
 WHY THIS MATTERS:
-  The AI drafts a story — but you can't just publish it without a
-  journalist reviewing it. Interrupts let a tool *pause* and ask the
-  human: "Here's the draft. Approve, refine, or reject?" The entire
+  The AI generates a greeting — but what if the user wants to review
+  it before sending? Interrupts let a tool *pause* and ask the human:
+  "Here's the greeting. Approve, refine, or reject?" The entire
   execution state is saved (checkpointed), and when the user responds,
-  execution resumes exactly where it left off. Every drafting skill
-  uses this for review/approval flows.
+  execution resumes exactly where it left off. Any tool that needs
+  human confirmation uses this pattern.
 
 WHAT YOU'LL LEARN:
   1. Build structured interrupt payloads (what the frontend renders)
   2. Define actions the user can take (approve, refine, reject)
   3. Use the .block() builder to create forwarded blocks
-  4. Understand the full lifecycle: tool → interrupt → checkpoint → resume
-  5. See all production event types (SPOT_STORY_REVIEW, RIC_SELECTION, etc.)
+  4. Understand the full lifecycle: tool -> interrupt -> checkpoint -> resume
+  5. See how different event types drive different UIs
+     (GREETING_REVIEW, LANGUAGE_SELECTION, STYLE_SELECTION)
 
 Concepts:
   - SkillInterrupt: structured payload for pausing execution
@@ -28,13 +29,13 @@ Flow:
   | Client | --> | Orchestr. | --> | Tool   | --> | Interrupt |
   +--------+     +-----------+     +--------+     +-----------+
        |               |               |               |
-       |  user msg     |  call_tool    |  draft story  |
+       |  user msg     |  call_tool    |  greet user   |
        |               |               |               |
        |               |               |  <-- interrupt payload
-       |               |  <-- forwarded block (event_type + draft)
+       |               |  <-- forwarded block (event_type + greeting)
        |  <-- SSE with interrupt data
        |
-       |  User reviews draft, clicks "Approve" or "Refine"
+       |  User reviews greeting, clicks "Approve" or "Refine"
        |
        |  resume msg --+
        |               |  resume tool  |
@@ -47,41 +48,40 @@ Flow:
     story-drafting/src/interrupts/news_buzz_ric_selection.py
     langgraph_mcp_orchestrator.py (interrupt() + checkpoint resume)
 
-PREREQUISITES: Lesson 08 (forwarded blocks — interrupts build on the same _meta mechanism)
+PREREQUISITES: Lesson 08 (forwarded blocks -- interrupts build on the same _meta mechanism)
 
 Run:  uv run python 10_interrupts.py
 
 EXPECTED OUTPUT:
-  === 1. Spot Story Review Interrupt ===
+  === Interrupt Demo ===
 
-    Agent-visible text: Draft ready for review ...
-    Forwarded block:
-      event_type: SPOT_STORY_REVIEW
-      message: Please review this draft before publishing
-      actions: ['approve', 'refine', 'reject']
-      Payload keys: ['draft', 'word_count', 'headline', 'metadata']
+  --- 1. Greeting Review Interrupt ---
 
-  === 2. RIC Selection Interrupt ===
+    Agent sees: [INTERRUPT] GREETING_REVIEW: Please review the formal greeting for 'Alice'
+    Event type: GREETING_REVIEW
+    Message: Please review the formal greeting for 'Alice'
+    Actions: ['Approve', 'Refine', 'Reject']
+    Payload keys: ['greeting', 'name', 'style', 'word_count']
 
-    Agent-visible text: Multiple RICs found. Please select ...
-    Forwarded block:
-      event_type: NEWS_BUZZ.RIC_SELECTION
-      message: We found multiple matches for "AAPL". Please select ...
-      actions: ['select', 'cancel']
-      Payload keys: ['candidates', 'original_query']
+  --- 2. Language Selection Interrupt ---
 
-  === 3. Headline Selection Interrupt ===
+    Agent sees: [INTERRUPT] LANGUAGE_SELECTION: Select a language for greeting 'Bob':
+    Event type: LANGUAGE_SELECTION
+    Message: Select a language for greeting 'Bob':
+    Actions: ['English', 'Spanish', 'French']
+    Payload keys: ['name', 'candidates']
 
-    Agent-visible text: Headlines fetched. Please select ...
-    Forwarded block:
-      event_type: NEWS_BUZZ.HEADLINE_SELECTION
-      message: Select the headlines to include in the buzz
-      actions: ['select', 'select_all', 'cancel']
-      Payload keys: ['headlines', 'ric', 'company_name']
+  --- 3. Style Selection Interrupt ---
 
-  === Interrupt Lifecycle Summary ===
+    Agent sees: [INTERRUPT] STYLE_SELECTION: What greeting style would you like?
+    Event type: STYLE_SELECTION
+    Message: What greeting style would you like?
+    Actions: ['Formal', 'Casual', 'Warm']
+    Payload keys: ['available_styles']
+
+  === Interrupt Lifecycle ===
     1. Tool builds SkillInterrupt ...
-    2. Interrupt creates a forwarded block ...
+    2. .block() creates forwarded blocks ...
     3. Orchestrator checkpoints state (DynamoDB) ...
     4. User responds (approve/refine/reject) ...
     5. Orchestrator resumes from checkpoint ...
@@ -163,41 +163,41 @@ class SkillInterrupt:
 
 
 # ============================================================================
-# Concrete interrupt types (mirrors production interrupts)
+# Concrete interrupt types
 # ============================================================================
 
-class StoryReviewPayload(InterruptPayload):
-    """Payload for story review interrupts."""
-    draft: str
-    headline: str
-    word_count: int
+class GreetingReviewPayload(InterruptPayload):
+    """Payload for greeting review interrupts."""
+    greeting: str
+    name: str
     style: str
+    word_count: int
 
 
-class StoryReviewInterrupt(SkillInterrupt):
-    """Interrupt for reviewing a drafted story."""
-    type = "SPOT_STORY_REVIEW"
+class GreetingReviewInterrupt(SkillInterrupt):
+    """Interrupt for reviewing a generated greeting."""
+    type = "GREETING_REVIEW"
 
 
-class RicSelectionPayload(InterruptPayload):
-    """Payload for RIC selection interrupts."""
-    query: str
+class LanguageSelectionPayload(InterruptPayload):
+    """Payload for language selection interrupts."""
+    name: str
     candidates: list[dict]
 
 
-class RicSelectionInterrupt(SkillInterrupt):
-    """Interrupt for selecting a RIC from candidates."""
-    type = "NEWS_BUZZ.RIC_SELECTION"
+class LanguageSelectionInterrupt(SkillInterrupt):
+    """Interrupt for selecting a language for the greeting."""
+    type = "LANGUAGE_SELECTION"
 
 
-class BuzzTypePayload(InterruptPayload):
-    """Payload for buzz type selection."""
-    available_types: list[str]
+class StyleSelectionPayload(InterruptPayload):
+    """Payload for style selection."""
+    available_styles: list[str]
 
 
-class BuzzTypeSelectionInterrupt(SkillInterrupt):
-    """Interrupt for selecting buzz type."""
-    type = "BUZZ_TYPE_SELECTION"
+class StyleSelectionInterrupt(SkillInterrupt):
+    """Interrupt for selecting greeting style."""
+    type = "STYLE_SELECTION"
 
 
 # ============================================================================
@@ -205,27 +205,19 @@ class BuzzTypeSelectionInterrupt(SkillInterrupt):
 # ============================================================================
 
 @mcp.tool
-async def draft_and_review(
-    topic: Annotated[str, Field(description="Topic for the story")],
-    style: Annotated[str, Field(default="spot", description="Story style")] = "spot",
+async def greet_and_review(
+    name: Annotated[str, Field(description="Name of the person to greet")],
+    style: Annotated[str, Field(default="formal", description="Greeting style")] = "formal",
 ) -> list:
-    """Draft a story and return an interrupt for user review."""
-    draft = (
-        f"HEADLINE: {topic.title()} Developments - Reuters\n\n"
-        f"LONDON (Reuters) - This is a {style} story about {topic}. "
-        f"The story covers recent developments and market implications.\n\n"
-        f"Industry analysts noted the significance of these changes."
+    """Generate a greeting and return an interrupt for user review."""
+    greeting = {"formal": f"Dear {name}, pleased to meet you.", "casual": f"Hey {name}!", "warm": f"Welcome, {name}!"}.get(style, f"Hello, {name}!")
+
+    payload = GreetingReviewPayload(
+        greeting=greeting, name=name, style=style, word_count=len(greeting.split()),
     )
 
-    payload = StoryReviewPayload(
-        draft=draft,
-        headline=draft.split("\n")[0],
-        word_count=len(draft.split()),
-        style=style,
-    )
-
-    interrupt = StoryReviewInterrupt(
-        message=f"Please review the {style} story draft about '{topic}'",
+    interrupt = GreetingReviewInterrupt(
+        message=f"Please review the {style} greeting for '{name}'",
         payload=payload,
         actions=[
             InterruptAction(label="Approve", value="approve", style="primary"),
@@ -238,23 +230,23 @@ async def draft_and_review(
 
 
 @mcp.tool
-async def select_ric(
-    query: Annotated[str, Field(description="Company or instrument to search")],
+async def select_language(
+    name: Annotated[str, Field(description="Name of the person to greet")],
 ) -> list:
-    """Search for RICs and return an interrupt for user selection."""
+    """Present language options and return an interrupt for selection."""
     candidates = [
-        {"ric": f"{query.upper()}.O", "name": f"{query} Inc (NASDAQ)", "exchange": "NASDAQ"},
-        {"ric": f"{query.upper()}.N", "name": f"{query} Inc (NYSE)", "exchange": "NYSE"},
-        {"ric": f"{query.upper()}.L", "name": f"{query} PLC (LSE)", "exchange": "LSE"},
+        {"code": "en", "label": "English"},
+        {"code": "es", "label": "Spanish"},
+        {"code": "fr", "label": "French"},
     ]
 
-    payload = RicSelectionPayload(query=query, candidates=candidates)
+    payload = LanguageSelectionPayload(name=name, candidates=candidates)
 
-    interrupt = RicSelectionInterrupt(
-        message=f"Multiple RICs found for '{query}'. Please select one:",
+    interrupt = LanguageSelectionInterrupt(
+        message=f"Select a language for greeting '{name}':",
         payload=payload,
         actions=[
-            InterruptAction(label=c["ric"], value=c["ric"])
+            InterruptAction(label=c["label"], value=c["code"])
             for c in candidates
         ],
     )
@@ -263,19 +255,19 @@ async def select_ric(
 
 
 @mcp.tool
-async def select_buzz_type() -> list:
-    """Return an interrupt for buzz type selection."""
-    payload = BuzzTypePayload(
-        available_types=["preview_buzz", "news_buzz", "earnings_buzz"]
+async def select_style() -> list:
+    """Return an interrupt for greeting style selection."""
+    payload = StyleSelectionPayload(
+        available_styles=["formal", "casual", "warm"]
     )
 
-    interrupt = BuzzTypeSelectionInterrupt(
-        message="What type of buzz would you like to generate?",
+    interrupt = StyleSelectionInterrupt(
+        message="What greeting style would you like?",
         payload=payload,
         actions=[
-            InterruptAction(label="Preview Buzz", value="preview_buzz"),
-            InterruptAction(label="News Buzz", value="news_buzz"),
-            InterruptAction(label="Earnings Buzz", value="earnings_buzz"),
+            InterruptAction(label="Formal", value="formal"),
+            InterruptAction(label="Casual", value="casual"),
+            InterruptAction(label="Warm", value="warm"),
         ],
     )
 
@@ -292,22 +284,22 @@ async def main():
         print("Interrupts pause execution and ask the user for input.")
         print("The frontend renders different UIs based on event_type.\n")
 
-        # -- Story review interrupt --
-        print("--- 1. Story Review Interrupt ---\n")
-        r1 = await client.call_tool_mcp("draft_and_review", {
-            "topic": "oil prices",
-            "style": "spot",
+        # -- Greeting review interrupt --
+        print("--- 1. Greeting Review Interrupt ---\n")
+        r1 = await client.call_tool_mcp("greet_and_review", {
+            "name": "Alice",
+            "style": "formal",
         })
         _print_interrupt(r1)
 
-        # -- RIC selection interrupt --
-        print("--- 2. RIC Selection Interrupt ---\n")
-        r2 = await client.call_tool_mcp("select_ric", {"query": "AAPL"})
+        # -- Language selection interrupt --
+        print("--- 2. Language Selection Interrupt ---\n")
+        r2 = await client.call_tool_mcp("select_language", {"name": "Bob"})
         _print_interrupt(r2)
 
-        # -- Buzz type selection interrupt --
-        print("--- 3. Buzz Type Selection Interrupt ---\n")
-        r3 = await client.call_tool_mcp("select_buzz_type", {})
+        # -- Style selection interrupt --
+        print("--- 3. Style Selection Interrupt ---\n")
+        r3 = await client.call_tool_mcp("select_style", {})
         _print_interrupt(r3)
 
         # -- Interrupt lifecycle summary --
@@ -367,20 +359,20 @@ if __name__ == "__main__":
     asyncio.run(main())
 
     # -- Key takeaway --------------------------------------------------------
-    # Interrupts are how skills pause for human input:
+    # Interrupts are how tools pause for human input:
     #
     #   SkillInterrupt(type, message, payload, actions)
-    #     |-- type: maps to frontend component (SPOT_STORY_REVIEW, etc.)
-    #     |-- payload: typed data (draft text, RIC candidates, etc.)
+    #     |-- type: maps to frontend component (GREETING_REVIEW, etc.)
+    #     |-- payload: typed data (greeting text, language candidates, etc.)
     #     |-- actions: buttons the user can click
     #     |-- .block(): builds the forwarded block format
     #
-    # Production event types include:
-    #   SPOT_STORY_REVIEW, NEWS_BULLETIN_REVIEW, PREVIEW_BUZZ_REVIEW,
-    #   URGENT_BUILDER_REVIEW, NEWS_BUZZ.RIC_SELECTION,
-    #   NEWS_BUZZ.HEADLINE_SELECTION, BUZZ_TYPE_SELECTION, etc.
+    # The pattern works for any review or selection flow:
+    #   GREETING_REVIEW  -- approve/refine/reject a generated greeting
+    #   LANGUAGE_SELECTION -- pick from language candidates
+    #   STYLE_SELECTION  -- choose a greeting style
     #
     # -- Exercise -------------------------------------------------------------
-    # 1. Create a HeadlineSelectionInterrupt with multiple headline options
+    # 1. Create a ToneSelectionInterrupt with options like "friendly", "professional"
     # 2. Simulate the "resume" side: process user's action choice
-    # 3. Chain interrupts: RIC selection -> headline selection -> review
+    # 3. Chain interrupts: style selection -> language selection -> review

@@ -52,8 +52,8 @@ if __name__ == "__main__":
 
     result = app.invoke({
         "messages": [
-            SystemMessage(content="You are a Reuters news editor. Be concise."),
-            HumanMessage(content="What makes a good news headline?"),
+            SystemMessage(content="You are a friendly greeting assistant. Keep responses concise."),
+            HumanMessage(content="Write a warm greeting for Alice who is visiting from Paris."),
         ]
     })
 
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     # appends it to the list via the add_messages reducer.
     #
     # ── Exercise ─────────────────────────────────────────────────────
-    # 1. Add a second node `fact_check` after chatbot that sends a
-    #    follow-up question asking the LLM to verify its own claims
-    # 2. Wire: START → chatbot → fact_check → END
+    # 1. Add a second node `translate` after chatbot that sends a
+    #    follow-up asking the LLM to translate the greeting to French
+    # 2. Wire: START → chatbot → translate → END
     # 3. Observe how messages accumulate across both nodes

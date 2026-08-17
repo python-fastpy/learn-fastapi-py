@@ -5,12 +5,11 @@ Concepts:
   - stream_mode="values": stream the full state after each step
   - stream_mode="updates": stream only the changes from each node
   - stream_mode="messages": stream LLM tokens as they arrive
-  - Your backend uses SSE streaming to send responses to the frontend
 
 Graph:
-  +-------+     +----------+     +-------+     +-----+
-  | START | --> | research | --> | draft | --> | END |
-  +-------+     +----------+     +-------+     +-----+
+  +-------+     +---------+     +-----------+     +-----+
+  | START | --> | compose | --> | translate | --> | END |
+  +-------+     +---------+     +-----------+     +-----+
 
   Streaming modes control WHAT you see as the graph runs:
     "updates"  -> which node produced what change
@@ -29,26 +28,26 @@ from llm_helper import get_llm
 llm = get_llm(model="gpt-4o")
 
 
-def research(state: MessagesState) -> dict:
+def compose(state: MessagesState) -> dict:
     response = llm.invoke(state["messages"] + [
-        HumanMessage(content="List 3 key facts about this topic. Be brief.")
+        HumanMessage(content="Write a warm greeting for this person. Be creative.")
     ])
     return {"messages": [response]}
 
 
-def draft(state: MessagesState) -> dict:
+def translate(state: MessagesState) -> dict:
     response = llm.invoke(state["messages"] + [
-        HumanMessage(content="Now write a 2-sentence news summary using those facts.")
+        HumanMessage(content="Now translate that greeting into French.")
     ])
     return {"messages": [response]}
 
 
 graph = StateGraph(MessagesState)
-graph.add_node("research", research)
-graph.add_node("draft", draft)
-graph.add_edge(START, "research")
-graph.add_edge("research", "draft")
-graph.add_edge("draft", END)
+graph.add_node("compose", compose)
+graph.add_node("translate", translate)
+graph.add_edge(START, "compose")
+graph.add_edge("compose", "translate")
+graph.add_edge("translate", END)
 
 app = graph.compile()
 
@@ -60,13 +59,13 @@ if __name__ == "__main__":
 
     initial = {
         "messages": [
-            SystemMessage(content="You are a Reuters journalist. Be concise."),
-            HumanMessage(content="Topic: renewable energy investment in 2024"),
+            SystemMessage(content="You are a greeting assistant. Be concise and creative."),
+            HumanMessage(content="Person: Alice, visiting from London"),
         ]
     }
 
-    # ── Mode 1: stream_mode="updates" ────────────────────────────────
-    # Shows WHICH node produced WHAT change — great for progress tracking
+    # -- Mode 1: stream_mode="updates" ------------------------------------
+    # Shows WHICH node produced WHAT change -- great for progress tracking
     print("=== Stream Mode: updates ===\n")
     for chunk in app.stream(initial, stream_mode="updates"):
         for node_name, update in chunk.items():
@@ -74,8 +73,8 @@ if __name__ == "__main__":
             print(f"[{node_name}] {msg.content[:100]}...")
             print()
 
-    # ── Mode 2: stream_mode="values" ─────────────────────────────────
-    # Shows the complete state after each node — good for debugging
+    # -- Mode 2: stream_mode="values" -------------------------------------
+    # Shows the complete state after each node -- good for debugging
     print("\n=== Stream Mode: values ===\n")
     for state_snapshot in app.stream(initial, stream_mode="values"):
         n = len(state_snapshot["messages"])
@@ -84,23 +83,23 @@ if __name__ == "__main__":
         print(f"[State has {n} messages] Latest: [{role}] {last.content[:80]}...")
         print()
 
-    # ── Mode 3: Token-by-token streaming ─────────────────────────────
-    # For real-time typing effect (what your frontend SSE does)
+    # -- Mode 3: Token-by-token streaming ---------------------------------
+    # For real-time typing effect (what a frontend SSE stream does)
     print("\n=== Token-by-Token (messages mode) ===\n")
     for msg, metadata in app.stream(initial, stream_mode="messages"):
         if hasattr(msg, "content") and msg.content:
             print(msg.content, end="", flush=True)
     print("\n")
 
-    # ── Key takeaway ─────────────────────────────────────────────────
-    # - "updates" → see which node did what (progress tracking)
-    # - "values"  → see full state after each step (debugging)
-    # - "messages"→ token-by-token LLM output (live UI)
+    # -- Key takeaway ------------------------------------------------------
+    # - "updates" -> see which node did what (progress tracking)
+    # - "values"  -> see full state after each step (debugging)
+    # - "messages"-> token-by-token LLM output (live UI)
     #
-    # Your backend's chat.py uses SSE streaming, which maps to the
-    # "messages" mode — tokens flow to the frontend as they arrive.
+    # All three modes run the same graph; they only change what you
+    # observe while it runs. Pick the mode that fits your use case.
     #
-    # ── Exercise ─────────────────────────────────────────────────────
-    # 1. Add a third node "edit" after draft
+    # -- Exercise ----------------------------------------------------------
+    # 1. Add a third node "farewell" after translate that writes a goodbye
     # 2. Stream with mode="updates" and observe all three steps
     # 3. Try streaming with a checkpointer + thread_id

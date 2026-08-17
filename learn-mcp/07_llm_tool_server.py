@@ -4,7 +4,7 @@
 WHY THIS MATTERS:
   An MCP tool doesn't have to be a simple function. In production,
   generate_spot_story calls GPT-4o to actually *write* the story.
-  The LLM is an implementation detail — the client just calls
+  The LLM is an implementation detail -- the client just calls
   "generate_spot_story" and gets back a draft. It doesn't know or
   care that an LLM was involved. This pattern is the core of every
   drafting skill.
@@ -24,7 +24,7 @@ Concepts:
 Flow:
   +--------+     +------------------+     +-------------------+
   | Client | --> | MCP Server       | --> | Tool              |
-  +--------+     | "llm-tools"      |     |   summarize()     |
+  +--------+     | "llm-tools"      |     |   creative_greet()|
                  +------------------+     |   +-- get_llm() --|---> TR Orchestrator
                                           |   |               |     (Azure OpenAI)
                                           |   <-- LLM resp ---|
@@ -44,16 +44,16 @@ Run:  uv run python 07_llm_tool_server.py
 EXPECTED OUTPUT (without .env -- schema-only mode):
   === LLM Tools Demo (NO .env - showing tool schemas only) ===
 
-  Tool: summarize_text
-    Description: Summarize text using an LLM. ...
-    Parameters: ['text', 'style']
+  Tool: creative_greet
+    Description: Generate a creative, personalized greeting using an LLM. ...
+    Parameters: ['name', 'occasion']
 
-  Tool: generate_headline
-    Description: Generate a Reuters-style headline using LLM.
-    Parameters: ['event', 'max_length']
+  Tool: farewell_poem
+    Description: Generate a short farewell poem using an LLM. ...
+    Parameters: ['name']
 
-  Tool: classify_content
-    Description: Classify news content by topic and sentiment using LLM.
+  Tool: detect_mood
+    Description: Detect the mood/sentiment of text using an LLM. ...
     Parameters: ['text']
 
   To run with real LLM calls, create a .env file from .env.example
@@ -61,19 +61,19 @@ EXPECTED OUTPUT (without .env -- schema-only mode):
 EXPECTED OUTPUT (with .env -- real LLM calls):
   === LLM Tools Demo (with real LLM calls) ===
 
-  --- summarize_text ---
-    [TextContent(... summary: <LLM-generated summary> ...)]
+  --- creative_greet ---
+    [TextContent(... greeting: <LLM-generated creative greeting for Alice's birthday> ...)]
 
-  --- generate_headline ---
-    [TextContent(... headline: <LLM-generated headline> ...)]
+  --- farewell_poem ---
+    [TextContent(... poem: <LLM-generated 2-4 line farewell poem for Bob> ...)]
 
-  --- classify_content ---
-    [TextContent(... topic: 'tech', sentiment: 'positive' ...)]
+  --- detect_mood ---
+    [TextContent(... mood: 'excited', confidence: 0.95 ...)]
 """
 
 import asyncio
 import os
-from typing import Annotated, Optional
+from typing import Annotated
 from pydantic import Field
 from fastmcp import FastMCP, Client
 from dotenv import load_dotenv
@@ -89,82 +89,76 @@ def _has_env():
     return bool(os.getenv("ORCHESTRATOR_ENDPOINT"))
 
 
-# -- Tool 1: Summarize text using LLM -----------------------------------------
+# -- Tool 1: Creative greeting using LLM ------------------------------------
 
-async def _summarize_text(
-    text: Annotated[str, Field(description="Text to summarize")],
-    style: Annotated[str, Field(default="concise", description="Style: concise, detailed, or bullet")] = "concise",
+async def _creative_greet(
+    name: Annotated[str, Field(description="Name of the person to greet")],
+    occasion: Annotated[str, Field(default="general", description="Occasion: general, birthday, promotion, farewell, holiday")] = "general",
 ) -> dict:
-    """Summarize text using an LLM. Demonstrates LLM-as-implementation-detail."""
+    """Generate a creative, personalized greeting using an LLM. Demonstrates LLM-as-implementation-detail."""
     from llm_helper import get_llm
 
-    llm = get_llm(model="gpt-4o", temperature=0.1)
-
-    style_instructions = {
-        "concise": "Summarize in 1-2 sentences.",
-        "detailed": "Provide a detailed summary with key points.",
-        "bullet": "Summarize as 3-5 bullet points.",
-    }
-    instruction = style_instructions.get(style, style_instructions["concise"])
-
-    messages = [
-        {"role": "system", "content": f"You are a Reuters news editor. {instruction}"},
-        {"role": "user", "content": f"Summarize this text:\n\n{text}"},
-    ]
-
-    response = await llm.ainvoke(messages)
-
-    return {
-        "summary": response.content,
-        "style": style,
-        "input_length": len(text),
-        "output_length": len(response.content),
-    }
-
-mcp.tool(name="summarize_text", meta={"display_name": "Summarize Text"})(_summarize_text)
-
-
-# -- Tool 2: Generate headline from event description -------------------------
-
-async def _generate_headline(
-    event: Annotated[str, Field(description="Description of the news event")],
-    max_length: Annotated[int, Field(default=80, description="Max headline length")] = 80,
-) -> dict:
-    """Generate a Reuters-style headline using LLM."""
-    from llm_helper import get_llm
-
-    llm = get_llm(model="gpt-4o", temperature=0.3)
+    llm = get_llm(model="gpt-4o", temperature=0.7)
 
     messages = [
         {
             "role": "system",
             "content": (
-                f"You are a Reuters headline writer. Write a single headline, "
-                f"max {max_length} characters. Start with the key fact. "
-                f"No clickbait. No quotes around the headline. Just the headline text."
+                f"You are a greeting writer. Write a short, creative greeting "
+                f"for {name} for the occasion: {occasion}. Keep it to 1-2 sentences."
             ),
         },
-        {"role": "user", "content": f"Write a headline for: {event}"},
+        {"role": "user", "content": f"Write a creative greeting for {name}."},
     ]
 
     response = await llm.ainvoke(messages)
-    headline = response.content.strip().strip('"').strip("'")
 
     return {
-        "headline": headline,
-        "length": len(headline),
-        "within_limit": len(headline) <= max_length,
+        "greeting": response.content,
+        "name": name,
+        "occasion": occasion,
     }
 
-mcp.tool(name="generate_headline", meta={"display_name": "Generate Headline"})(_generate_headline)
+mcp.tool(name="creative_greet", meta={"display_name": "Creative Greet"})(_creative_greet)
 
 
-# -- Tool 3: Classify content (non-generative LLM use) ------------------------
+# -- Tool 2: Farewell poem using LLM ----------------------------------------
 
-async def _classify_content(
-    text: Annotated[str, Field(description="Text to classify")],
+async def _farewell_poem(
+    name: Annotated[str, Field(description="Name of the person to say farewell to")],
 ) -> dict:
-    """Classify news content by topic and sentiment using LLM."""
+    """Generate a short farewell poem using an LLM."""
+    from llm_helper import get_llm
+
+    llm = get_llm(model="gpt-4o", temperature=0.8)
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                f"Write a short farewell poem (2-4 lines) for {name}. "
+                f"Keep it warm and brief."
+            ),
+        },
+        {"role": "user", "content": f"Write a farewell poem for {name}."},
+    ]
+
+    response = await llm.ainvoke(messages)
+
+    return {
+        "poem": response.content,
+        "name": name,
+    }
+
+mcp.tool(name="farewell_poem", meta={"display_name": "Farewell Poem"})(_farewell_poem)
+
+
+# -- Tool 3: Detect mood (non-generative LLM use) ---------------------------
+
+async def _detect_mood(
+    text: Annotated[str, Field(description="Text to analyze for mood/sentiment")],
+) -> dict:
+    """Detect the mood/sentiment of text using an LLM."""
     from llm_helper import get_llm
 
     llm = get_llm(model="gpt-4o", temperature=0.0)
@@ -173,10 +167,9 @@ async def _classify_content(
         {
             "role": "system",
             "content": (
-                "Classify the following text. Respond with ONLY a JSON object "
+                "Classify the mood of the following text. Respond with ONLY a JSON object "
                 "(no markdown, no code fences) with these exact keys: "
-                '"topic" (one of: markets, energy, politics, tech, other), '
-                '"sentiment" (one of: positive, negative, neutral), '
+                '"mood" (one of: happy, sad, neutral, excited), '
                 '"confidence" (float 0-1).'
             ),
         },
@@ -193,7 +186,7 @@ async def _classify_content(
 
     return {"text_preview": text[:100], "classification": classification}
 
-mcp.tool(name="classify_content", meta={"display_name": "Classify Content"})(_classify_content)
+mcp.tool(name="detect_mood", meta={"display_name": "Detect Mood"})(_detect_mood)
 
 
 # ============================================================================
@@ -216,32 +209,25 @@ async def main():
     print("=== LLM Tools Demo (with real LLM calls) ===\n")
 
     async with Client(mcp) as client:
-        # Tool 1: Summarize
-        print("--- summarize_text ---")
-        r1 = await client.call_tool("summarize_text", {
-            "text": (
-                "Oil prices rose more than 2% on Monday after OPEC+ agreed to extend "
-                "production cuts through the end of 2025. Brent crude futures settled at "
-                "$78.50 a barrel, up $1.65. The decision came after weekend talks in Vienna "
-                "where Saudi Arabia pushed for deeper cuts to support prices amid concerns "
-                "about slowing Chinese demand."
-            ),
-            "style": "bullet",
+        # Tool 1: Creative greeting
+        print("--- creative_greet ---")
+        r1 = await client.call_tool("creative_greet", {
+            "name": "Alice",
+            "occasion": "birthday",
         })
         print(f"  {r1}\n")
 
-        # Tool 2: Generate headline
-        print("--- generate_headline ---")
-        r2 = await client.call_tool("generate_headline", {
-            "event": "Federal Reserve raises interest rates by 25 basis points, signals pause in tightening cycle",
-            "max_length": 80,
+        # Tool 2: Farewell poem
+        print("--- farewell_poem ---")
+        r2 = await client.call_tool("farewell_poem", {
+            "name": "Bob",
         })
         print(f"  {r2}\n")
 
-        # Tool 3: Classify
-        print("--- classify_content ---")
-        r3 = await client.call_tool("classify_content", {
-            "text": "Tesla stock surged 8% after the company reported record quarterly deliveries, beating analyst expectations.",
+        # Tool 3: Detect mood
+        print("--- detect_mood ---")
+        r3 = await client.call_tool("detect_mood", {
+            "text": "I just got promoted! This is the best day ever!",
         })
         print(f"  {r3}\n")
 
@@ -259,11 +245,12 @@ if __name__ == "__main__":
     #   generate_news_buzz  -> calls Gemini to draft buzz
     #
     # The MCP boundary keeps it clean:
-    #   Client sees: call_tool("summarize_text", {text: "..."})
+    #   Client sees: call_tool("creative_greet", {name: "Alice", occasion: "birthday"})
     #   Tool does:   llm.ainvoke(prompt) internally
-    #   Client gets: {summary: "...", style: "...", ...}
+    #   Client gets: {greeting: "...", name: "Alice", occasion: "birthday"}
     #
     # -- Exercise -------------------------------------------------------------
-    # 1. Add a "translate" tool that translates text to a target language
-    # 2. Add a "fact_check" tool that asks the LLM to verify claims
+    # 1. Add a "greeting_card" tool that generates a full greeting card with
+    #    a title, body, and sign-off using the LLM
+    # 2. Add a "roast" tool that generates a playful, friendly roast greeting
     # 3. Try different models (gpt-4-1, o4-mini) and compare outputs

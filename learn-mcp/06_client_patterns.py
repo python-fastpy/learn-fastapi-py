@@ -27,9 +27,9 @@ Flow:
   | Client   | --> | MCP Server       |
   +----------+     +------------------+
   | Patterns:|     | Tools:           |
-  |  discover|     |  slow_tool       |
-  |  retry   |     |  flaky_tool      |
-  |  timeout |     |  echo            |
+  |  discover|     |  greet           |
+  |  retry   |     |  slow_greet      |
+  |  timeout |     |  flaky_greet     |
   |  one-shot|     +------------------+
   +----------+
 
@@ -46,21 +46,21 @@ EXPECTED OUTPUT:
   === 1. Discovery ===
 
     Tools (3):
-      - echo(message): Echo a message back (always succeeds).
-      - slow_tool(seconds): Simulate a slow operation.
-      - flaky_tool(message): Fails 50% of the time to demonstrate retry logic.
+      - greet(name): Greet someone by name (always succeeds).
+      - slow_greet(name, seconds): Simulate a slow greeting that takes a while to arrive.
+      - flaky_greet(name): Greet someone, but fail 50% of the time to demonstrate retry logic.
 
     Resources (0):
     Prompts (0):
 
   === 2. Timeout Handling ===
 
-    slow_tool(0.1s): [TextContent(... 'done' ...)]
-    slow_tool(5.0s): TIMED OUT (expected)
+    slow_greet(0.1s): [TextContent(... 'Hello, Alice!' ...)]
+    slow_greet(5.0s): TIMED OUT (expected)
 
   === 3. Retry with Backoff ===
 
-      Attempt 1 failed: Random failure on call #1
+      Attempt 1 failed: Random failure greeting Bob on call #1
       Retrying in 0.2s...
     Final result: {'result': [TextContent(...)], 'attempt': 2}
 
@@ -71,9 +71,9 @@ EXPECTED OUTPUT:
 
   === 4. One-Shot Client Pattern ===
 
-    One-shot #1: [TextContent(... 'request #1' ...)]
-    One-shot #2: [TextContent(... 'request #2' ...)]
-    One-shot #3: [TextContent(... 'request #3' ...)]
+    One-shot #1: [TextContent(... 'Hello, User-1!' ...)]
+    One-shot #2: [TextContent(... 'Hello, User-2!' ...)]
+    One-shot #3: [TextContent(... 'Hello, User-3!' ...)]
 
     (Each call was a separate client session)
 """
@@ -92,32 +92,33 @@ _call_count = 0
 
 
 @mcp.tool
-async def echo(
-    message: Annotated[str, Field(description="Message to echo back")],
+async def greet(
+    name: Annotated[str, Field(description="Name of the person to greet")],
 ) -> dict:
-    """Echo a message back (always succeeds)."""
-    return {"echo": message}
+    """Greet someone by name (always succeeds)."""
+    return {"message": f"Hello, {name}!"}
 
 
 @mcp.tool
-async def slow_tool(
-    seconds: Annotated[float, Field(default=2.0, description="Seconds to sleep")] = 2.0,
+async def slow_greet(
+    name: Annotated[str, Field(description="Name of the person to greet")],
+    seconds: Annotated[float, Field(default=2.0, description="Seconds to sleep before greeting")] = 2.0,
 ) -> dict:
-    """Simulate a slow operation."""
+    """Simulate a slow greeting that takes a while to arrive."""
     await asyncio.sleep(seconds)
-    return {"status": "done", "slept_for": seconds}
+    return {"message": f"Hello, {name}!", "waited": seconds}
 
 
 @mcp.tool
-async def flaky_tool(
-    message: Annotated[str, Field(description="Message to process")],
+async def flaky_greet(
+    name: Annotated[str, Field(description="Name of the person to greet")],
 ) -> dict:
-    """Fails 50% of the time to demonstrate retry logic."""
+    """Greet someone, but fail 50% of the time to demonstrate retry logic."""
     global _call_count
     _call_count += 1
     if _call_count % 2 == 1:  # odd calls fail
-        raise Exception(f"Random failure on call #{_call_count}")
-    return {"processed": message, "attempt": _call_count}
+        raise Exception(f"Random failure greeting {name} on call #{_call_count}")
+    return {"message": f"Hello, {name}!", "attempt": _call_count}
 
 
 # ============================================================================
@@ -153,22 +154,22 @@ async def demo_timeout(client: Client):
     # This will succeed (short timeout target)
     try:
         result = await asyncio.wait_for(
-            client.call_tool("slow_tool", {"seconds": 0.1}),
+            client.call_tool("slow_greet", {"name": "Alice", "seconds": 0.1}),
             timeout=2.0,
         )
-        print(f"  slow_tool(0.1s): {result}")
+        print(f"  slow_greet(0.1s): {result}")
     except asyncio.TimeoutError:
-        print("  slow_tool(0.1s): TIMED OUT")
+        print("  slow_greet(0.1s): TIMED OUT")
 
     # This will time out
     try:
         result = await asyncio.wait_for(
-            client.call_tool("slow_tool", {"seconds": 5.0}),
+            client.call_tool("slow_greet", {"name": "Alice", "seconds": 5.0}),
             timeout=1.0,
         )
-        print(f"  slow_tool(5.0s): {result}")
+        print(f"  slow_greet(5.0s): {result}")
     except asyncio.TimeoutError:
-        print("  slow_tool(5.0s): TIMED OUT (expected)")
+        print("  slow_greet(5.0s): TIMED OUT (expected)")
     print()
 
 
@@ -206,7 +207,7 @@ async def demo_retry(client: Client):
     _call_count = 0  # reset for demo
 
     result = await call_with_retry(
-        client, "flaky_tool", {"message": "hello"}, max_retries=3, base_delay=0.2
+        client, "flaky_greet", {"name": "Bob"}, max_retries=3, base_delay=0.2
     )
     print(f"  Final result: {result}")
     print()
@@ -225,7 +226,7 @@ async def demo_one_shot():
     # Each call creates a fresh client connection
     for i in range(3):
         async with Client(mcp) as client:
-            result = await client.call_tool("echo", {"message": f"request #{i+1}"})
+            result = await client.call_tool("greet", {"name": f"User-{i+1}"})
             print(f"  One-shot #{i+1}: {result}")
 
     print()
@@ -245,7 +246,7 @@ async def demo_error_handling(client: Client):
 
     # Call with missing required parameter
     try:
-        await client.call_tool("echo", {})
+        await client.call_tool("greet", {})
     except Exception as e:
         print(f"  Missing param: {type(e).__name__}: {str(e)[:80]}")
 

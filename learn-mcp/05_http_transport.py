@@ -3,7 +3,7 @@
 
 WHY THIS MATTERS:
   Up to now, the client and server lived in the same Python process
-  (Client(mcp) — "in-process"). In production, each skill is a Docker
+  (Client(mcp) -- "in-process"). In production, each skill is a Docker
   container on ECS behind an ALB. This lesson bridges that gap: you'll
   run a real HTTP server and connect to it over the network, exactly
   like the backend does when it calls story-drafting on port 8004.
@@ -51,14 +51,14 @@ EXPECTED OUTPUT:
     GET /health -> 200: {'status': 'healthy', 'server': 'http-demo'}
 
   === Tools (via HTTP) ===
-    - word_count: Count words in the given text.
-    - uppercase: Convert text to uppercase.
+    - greet: Greet someone by name.
+    - farewell: Say goodbye to someone by name.
 
-  === word_count ===
-    [TextContent(... word_count: 7, char_count: 45 ...)]
+  === greet ===
+    [TextContent(... 'message': 'Hello, Alice!' ...)]
 
-  === uppercase ===
-    [TextContent(... 'uppercased': 'BREAKING NEWS' ...)]
+  === farewell ===
+    [TextContent(... 'message': 'Goodbye, Bob!' ...)]
 
   Server stopped.
 """
@@ -91,20 +91,19 @@ async def health_check(request):
 
 
 @mcp.tool
-async def word_count(
-    text: Annotated[str, Field(description="Text to count words in")],
+async def greet(
+    name: Annotated[str, Field(description="Name to greet")],
 ) -> dict:
-    """Count words in the given text."""
-    words = text.split()
-    return {"word_count": len(words), "char_count": len(text)}
+    """Greet someone by name."""
+    return {"message": f"Hello, {name}!"}
 
 
 @mcp.tool
-async def uppercase(
-    text: Annotated[str, Field(description="Text to convert to uppercase")],
+async def farewell(
+    name: Annotated[str, Field(description="Name to say goodbye to")],
 ) -> dict:
-    """Convert text to uppercase."""
-    return {"original": text, "uppercased": text.upper()}
+    """Say goodbye to someone by name."""
+    return {"message": f"Goodbye, {name}!"}
 
 
 def run_server():
@@ -150,16 +149,12 @@ async def run_client():
         print()
 
         # Call tools
-        print("=== word_count ===")
-        r1 = await client.call_tool("word_count", {
-            "text": "Reuters reports that oil prices surged today"
-        })
+        print("=== greet ===")
+        r1 = await client.call_tool("greet", {"name": "Alice"})
         print(f"  {r1}")
 
-        print("\n=== uppercase ===")
-        r2 = await client.call_tool("uppercase", {
-            "text": "breaking news"
-        })
+        print("\n=== farewell ===")
+        r2 = await client.call_tool("farewell", {"name": "Bob"})
         print(f"  {r2}")
 
 

@@ -10,21 +10,35 @@ Graph:
   | START | --> | classify |
   +-------+     +----------+
                      |
-            route_by_priority()
-               /            \\
+             route_by_style()
+               /            \
               v               v
-  +---------------+   +---------------+
-  | handle_urgent |   | handle_normal |
-  +---------------+   +---------------+
-              \\            /
+  +----------------+   +----------------+
+  | formal_greet   |   | casual_greet   |
+  +----------------+   +----------------+
+              \            /
                v          v
               +-----+
               | END |
               +-----+
 
-No LLM needed -- demonstrates branching based on a "priority" field.
+No LLM needed -- demonstrates branching based on a "style" field.
 
 Run:  uv run python 03_conditional_edges.py
+
+Expected output:
+  Dear Alice, it is a pleasure to meet you.
+  Hey Bob! What's up?
+
+Key takeaway:
+  add_conditional_edges() lets a routing function inspect state and return
+  the name of the next node. The graph branches without any if/else inside
+  the nodes themselves — the routing logic lives in one small function.
+
+Exercise:
+  1. Add a third style: "warm"
+  2. Add a warm_greet node: "So lovely to see you, {name}!"
+  3. Update route_by_style to return Literal["formal_greet", "casual_greet", "warm_greet"]
 """
 
 from typing import TypedDict, Literal
@@ -32,45 +46,40 @@ from langgraph.graph import StateGraph, START, END
 
 
 class State(TypedDict):
-    headline: str
-    priority: str   # "urgent" | "normal"
-    result: str
+    name: str
+    style: str        # "formal" | "casual"
+    greeting: str
 
 
 def classify(state: State) -> dict:
-    headline = state["headline"].lower()
-    if any(word in headline for word in ["breaking", "urgent", "alert"]):
-        return {"priority": "urgent"}
-    return {"priority": "normal"}
+    return {"style": state["style"]}
 
 
-def handle_urgent(state: State) -> dict:
-    return {"result": f"URGENT WIRE: {state['headline']}"}
+def formal_greet(state: State) -> dict:
+    return {"greeting": f"Dear {state['name']}, it is a pleasure to meet you."}
 
 
-def handle_normal(state: State) -> dict:
-    return {"result": f"Queued for review: {state['headline']}"}
+def casual_greet(state: State) -> dict:
+    return {"greeting": f"Hey {state['name']}! What's up?"}
 
 
 # The routing function — returns the node name to go to next
-def route_by_priority(state: State) -> Literal["handle_urgent", "handle_normal"]:
-    if state["priority"] == "urgent":
-        return "handle_urgent"
-    return "handle_normal"
+def route_by_style(state: State) -> Literal["formal_greet", "casual_greet"]:
+    return "formal_greet" if state["style"] == "formal" else "casual_greet"
 
 
 graph = StateGraph(State)
 graph.add_node("classify", classify)
-graph.add_node("handle_urgent", handle_urgent)
-graph.add_node("handle_normal", handle_normal)
+graph.add_node("formal_greet", formal_greet)
+graph.add_node("casual_greet", casual_greet)
 
 graph.add_edge(START, "classify")
 
-# After classify, use route_by_priority to pick the next node
-graph.add_conditional_edges("classify", route_by_priority)
+# After classify, use route_by_style to pick the next node
+graph.add_conditional_edges("classify", route_by_style)
 
-graph.add_edge("handle_urgent", END)
-graph.add_edge("handle_normal", END)
+graph.add_edge("formal_greet", END)
+graph.add_edge("casual_greet", END)
 
 app = graph.compile()
 
@@ -80,17 +89,17 @@ if __name__ == "__main__":
     print(app.get_graph().draw_mermaid())
     print()
 
-    # Test with an urgent headline
-    r1 = app.invoke({"headline": "BREAKING: Fed raises rates by 50bps"})
-    print(r1["result"])
-    # URGENT WIRE: BREAKING: Fed raises rates by 50bps
+    # Test with formal style
+    r1 = app.invoke({"name": "Alice", "style": "formal"})
+    print(r1["greeting"])
+    # Dear Alice, it is a pleasure to meet you.
 
-    # Test with a normal headline
-    r2 = app.invoke({"headline": "Quarterly earnings beat expectations"})
-    print(r2["result"])
-    # Queued for review: Quarterly earnings beat expectations
+    # Test with casual style
+    r2 = app.invoke({"name": "Bob", "style": "casual"})
+    print(r2["greeting"])
+    # Hey Bob! What's up?
 
     # ── Exercise ─────────────────────────────────────────────────────
-    # 1. Add a third priority: "flash" for headlines containing "FLASH"
-    # 2. Add a handle_flash node that formats differently
-    # 3. Update route_by_priority to handle the new branch
+    # 1. Add a third style: "warm"
+    # 2. Add a warm_greet node: "So lovely to see you, {name}!"
+    # 3. Update route_by_style to return Literal["formal_greet", "casual_greet", "warm_greet"]

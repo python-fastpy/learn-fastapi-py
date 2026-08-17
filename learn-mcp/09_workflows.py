@@ -2,8 +2,8 @@
 ================================
 
 WHY THIS MATTERS:
-  A skill might have 10+ tools, but for a given task (e.g., "draft a
-  news buzz"), only 3 of them are relevant. Workflows solve this:
+  A skill might have 10+ tools, but for a given task (e.g., "create a
+  greeting card"), only 2 of them are relevant. Workflows solve this:
   they're markdown files that say "for this task, use these tools in
   this order." The orchestrator reads workflows at startup, picks the
   right one based on the user's message, and hides all other tools
@@ -14,7 +14,7 @@ WHAT YOU'LL LEARN:
   1. Define workflows as markdown files with YAML frontmatter
   2. Parse and load workflows programmatically
   3. Mount REST endpoints so the orchestrator can discover workflows
-  4. Understand tool gating — only workflow-listed tools are visible
+  4. Understand tool gating -- only workflow-listed tools are visible
 
 Concepts:
   - Workflows: markdown files with YAML frontmatter
@@ -34,13 +34,13 @@ Flow:
        +-- discover -----> |  POST /mcp (tools)|
        |   workflows       +-------------------+
        |                   | Workflows:        |
-       +-- select one ---> |  summarize-news   |
-       |                   |  draft-story      |
+       +-- select one ---> |  welcome-message  |
+       |                   |  translated-greet |
        +-- read tools ---> +-------------------+
        |   from workflow   | Tools:            |
-       +-- execute ------> |  search_articles  |
-           tools           |  summarize_text   |
-                           |  generate_headline|
+       +-- execute ------> |  greet            |
+           tools           |  farewell         |
+                           |  translate        |
                            +-------------------+
 
   Maps to:
@@ -53,55 +53,55 @@ PREREQUISITES: Lesson 01 (tools), Lesson 04 (resources)
 Run:  uv run python 09_workflows.py
 
 EXPECTED OUTPUT:
-  === Workflow System Demo ===
+  === Workflow Files Created ===
 
-  Created workflow files:
-    <tmpdir>/summarize-news.md
-    <tmpdir>/draft-story.md
-    <tmpdir>/search-and-summarize.md
+    greeting_card.md
+    translated_greeting.md
+    welcome_message.md
 
   === Server Tools (6) ===
-    - search_articles: Search for news articles by query
-    - summarize_text: Summarize a block of text
-    - generate_headline: Generate a headline for a story
-    - draft_story: Draft a full story from inputs
-    - validate_ric: Validate a Reuters Instrument Code
-    - fetch_quotes: Fetch latest quotes for a RIC
+
+    - greet: Return a greeting for the given name.
+    - farewell: Return a farewell for the given name.
+    - translate: Translate text into another language (simulated).
+    - format_card: Format a message as a greeting card.
+    - detect_mood: Detect the mood of a piece of text (simulated).
+    - slow_greet: Greet someone after a short delay.
 
   === Workflows (3) ===
 
-  1. summarize-news
-     Description: Summarize recent news about a topic ...
-     Tools: ['search_articles', 'summarize_text']
-     Triggers: ['summarize * news', 'news summary']
+    Workflow: greeting-card
+      Description: Create a formatted greeting card
+      Tools: ['greet', 'format_card']
+      Triggers: ['greeting.*card', 'create.*card']
 
-  2. draft-story
-     Description: Draft a complete news story ...
-     Tools: ['search_articles', 'draft_story', 'generate_headline', 'validate_ric']
-     Triggers: ['draft * story', 'write * article']
+    Workflow: translated-greeting
+      Description: Translate a greeting into another language
+      Tools: ['greet', 'translate']
+      Triggers: ['translate.*greeting', 'greet.*in.*language']
 
-  3. search-and-summarize
-     Description: Search the text archive and summarize results ...
-     Tools: ['search_articles', 'summarize_text']
-     Triggers: ['search * archive', 'find * articles']
+    Workflow: welcome-message
+      Description: Generate a full welcome message with greeting and farewell
+      Tools: ['greet', 'farewell']
+      Triggers: ['welcome.*message', 'say.*hello.*goodbye']
 
-  === Tool Visibility per Workflow ===
+  === Workflow-Driven Tool Visibility ===
 
-  Workflow: summarize-news
-    search_articles    -> VISIBLE
-    summarize_text     -> VISIBLE
-    generate_headline  -> HIDDEN (not in workflow)
-    draft_story        -> HIDDEN (not in workflow)
-    validate_ric       -> HIDDEN (not in workflow)
-    fetch_quotes       -> HIDDEN (not in workflow)
+    Concept: tools listed in a workflow's 'tools' field are
+    only loaded when that workflow is selected. This prevents
+    the agent from seeing all tools upfront.
 
-  Workflow: draft-story
-    search_articles    -> VISIBLE
-    summarize_text     -> HIDDEN (not in workflow)
-    generate_headline  -> VISIBLE
-    draft_story        -> VISIBLE
-    validate_ric       -> VISIBLE
-    fetch_quotes       -> HIDDEN (not in workflow)
+    If 'greeting-card' selected:
+      Visible tools: ['format_card', 'greet']
+      Hidden tools:  ['detect_mood', 'farewell', 'slow_greet', 'translate']
+
+    If 'translated-greeting' selected:
+      Visible tools: ['greet', 'translate']
+      Hidden tools:  ['detect_mood', 'farewell', 'format_card', 'slow_greet']
+
+    If 'welcome-message' selected:
+      Visible tools: ['farewell', 'greet']
+      Hidden tools:  ['detect_mood', 'format_card', 'slow_greet', 'translate']
 """
 
 import asyncio
@@ -211,92 +211,90 @@ def create_sample_workflows(directory: str):
 
     wf1 = textwrap.dedent("""\
     ---
-    name: summarize-news
-    description: Search for recent articles on a topic and generate a summary
+    name: welcome-message
+    description: Generate a full welcome message with greeting and farewell
     tools:
-      - search_articles
-      - summarize_text
+      - greet
+      - farewell
     trigger_patterns:
-      - "summarize.*news"
-      - "what.*latest.*about"
+      - "welcome.*message"
+      - "say.*hello.*goodbye"
     ---
 
-    # Summarize News Workflow
+    # Welcome Message Workflow
 
     ## Steps
 
-    1. Ask the user for the topic they want summarized
-    2. Call `search_articles` with the topic to find recent articles
-    3. Call `summarize_text` with the combined article content
-    4. Present the summary to the user
+    1. Ask the user for the person's name
+    2. Call `greet` with the name to generate a hello message
+    3. Call `farewell` with the name to generate a goodbye message
+    4. Combine both into a full welcome message for the user
 
     ## Notes
 
-    - Default to searching for 5 articles unless user specifies otherwise
-    - Use "bullet" style for summaries unless user requests otherwise
+    - Always greet before farewell -- order matters for politeness
+    - Present both messages together as one cohesive welcome
     """)
 
     wf2 = textwrap.dedent("""\
     ---
-    name: draft-story
-    description: Draft a news story from a topic or event description
+    name: translated-greeting
+    description: Translate a greeting into another language
     tools:
-      - generate_headline
-      - draft_story
+      - greet
+      - translate
     trigger_patterns:
-      - "draft.*story"
-      - "write.*article"
-      - "create.*story"
+      - "translate.*greeting"
+      - "greet.*in.*language"
     ---
 
-    # Draft Story Workflow
+    # Translated Greeting Workflow
 
     ## Steps
 
-    1. Confirm the topic and style (spot, bulletin, urgent) with the user
-    2. Call `generate_headline` to create a headline
-    3. Call `draft_story` to generate the full story
-    4. Present the draft for user review
+    1. Ask the user for the person's name and target language
+    2. Call `greet` with the name to generate the greeting
+    3. Call `translate` with the greeting text and target language
+    4. Present both the original and translated greeting
 
     ## Notes
 
-    - Default to "spot" style unless otherwise specified
-    - Always show the draft for review before finalizing
+    - Default to Spanish if no language is specified
+    - Always show the original alongside the translation
     """)
 
     wf3 = textwrap.dedent("""\
     ---
-    name: ric-resolution
-    description: Validate and resolve RIC (Reuters Instrument Code) symbols
+    name: greeting-card
+    description: Create a formatted greeting card
     tools:
-      - validate_ric
-      - search_rics
+      - greet
+      - format_card
     trigger_patterns:
-      - "validate.*ric"
-      - "find.*ric"
-      - "resolve.*instrument"
+      - "greeting.*card"
+      - "create.*card"
     ---
 
-    # RIC Resolution Sub-Workflow
+    # Greeting Card Workflow
 
     ## Steps
 
-    1. If user provides a specific RIC, call `validate_ric` to check it
-    2. If the RIC is invalid or user wants alternatives, call `search_rics`
-    3. Present matching RICs for user selection
-    4. Return the confirmed RIC
+    1. Ask the user for the recipient's name
+    2. Call `greet` to generate the greeting message
+    3. Call `format_card` with the name and greeting to create the card
+    4. Present the formatted card to the user
 
     ## Notes
 
-    - This is a reusable sub-workflow called by other workflows
-    - Always confirm the final RIC with the user
+    - The card format uses a bordered text layout
+    - Optionally allow the user to customize the message before formatting
     """)
 
     os.makedirs(directory, exist_ok=True)
     for filename, content in [
-        ("summarize_news.md", wf1),
-        ("draft_story.md", wf2),
-        ("ric_resolution.md", wf3),
+        ("welcome_message.md", wf1),
+        ("translated_greeting.md", wf2),
+        ("greeting_card.md", wf3),
     ]:
         Path(os.path.join(directory, filename)).write_text(content, encoding="utf-8")
 
@@ -306,55 +304,56 @@ def create_sample_workflows(directory: str):
 # ============================================================================
 
 @mcp.tool
-async def search_articles(
-    query: Annotated[str, Field(description="Search query")],
-    limit: Annotated[int, Field(default=5, description="Max results")] = 5,
+async def greet(
+    name: Annotated[str, Field(description="Name of the person to greet")],
 ) -> dict:
-    """Search for news articles."""
-    return {
-        "query": query,
-        "articles": [{"title": f"{query} article #{i+1}"} for i in range(min(limit, 5))],
-    }
+    """Return a greeting for the given name."""
+    return {"message": f"Hello, {name}!"}
 
 
 @mcp.tool
-async def summarize_text(
-    text: Annotated[str, Field(description="Text to summarize")],
+async def farewell(
+    name: Annotated[str, Field(description="Name of the person to bid farewell")],
 ) -> dict:
-    """Summarize text."""
-    return {"summary": f"Summary of: {text[:50]}...", "word_count": len(text.split())}
+    """Return a farewell for the given name."""
+    return {"message": f"Goodbye, {name}!"}
 
 
 @mcp.tool
-async def generate_headline(
-    event: Annotated[str, Field(description="Event description")],
+async def translate(
+    text: Annotated[str, Field(description="Text to translate")],
+    language: Annotated[str, Field(description="Target language")],
 ) -> dict:
-    """Generate a headline."""
-    return {"headline": f"REUTERS: {event[:60]}"}
+    """Translate text into another language (simulated)."""
+    return {"original": text, "translated": f"[{language}] {text}", "language": language}
 
 
 @mcp.tool
-async def draft_story(
-    topic: Annotated[str, Field(description="Story topic")],
+async def format_card(
+    name: Annotated[str, Field(description="Recipient name")],
+    message: Annotated[str, Field(description="Card message")],
 ) -> dict:
-    """Draft a story."""
-    return {"draft": f"Story about {topic}...", "style": "spot"}
+    """Format a message as a greeting card."""
+    card = f"=== Card for {name} ===\n{message}\n================="
+    return {"card": card, "name": name}
 
 
 @mcp.tool
-async def validate_ric(
-    ric: Annotated[str, Field(description="RIC to validate")],
+async def detect_mood(
+    text: Annotated[str, Field(description="Text to analyse for mood")],
 ) -> dict:
-    """Validate a RIC."""
-    return {"ric": ric, "valid": ric.endswith(".O") or ric.endswith(".L")}
+    """Detect the mood of a piece of text (simulated)."""
+    return {"text": text, "mood": "happy"}
 
 
 @mcp.tool
-async def search_rics(
-    query: Annotated[str, Field(description="RIC search query")],
+async def slow_greet(
+    name: Annotated[str, Field(description="Name of the person to greet")],
+    seconds: Annotated[float, Field(default=1.0, description="Seconds to wait")] = 1.0,
 ) -> dict:
-    """Search for RICs."""
-    return {"query": query, "results": [f"{query}.O", f"{query}.L", f"{query}.N"]}
+    """Greet someone after a short delay."""
+    await asyncio.sleep(seconds)
+    return {"message": f"Hello, {name}!", "waited": seconds}
 
 
 # ============================================================================
@@ -437,4 +436,4 @@ if __name__ == "__main__":
     # -- Exercise -------------------------------------------------------------
     # 1. Add a new workflow markdown file and verify it gets discovered
     # 2. Implement trigger_patterns matching with regex
-    # 3. Add a "sub-workflow" reference (ric-resolution used by other workflows)
+    # 3. Add a "sub-workflow" reference (e.g., a reusable greeting step)

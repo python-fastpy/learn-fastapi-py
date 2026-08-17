@@ -5,7 +5,7 @@ Concepts:
     analyze what the user wants → pick the right tool → execute → synthesize
   - This is exactly what your backend's langgraph_mcp_orchestrator.py does
   - We build a simplified version here: query analysis → tool routing →
-    tool execution → LLM synthesis
+    tool execution → response synthesis
   - Combines patterns from earlier lessons: conditional edges (03),
     tool calling (06), agent loop (07), interrupts (09), subgraphs (11)
 
@@ -26,6 +26,12 @@ Graph:
 No LLM needed -- demonstrates the orchestration pattern with pure logic.
 
 Run:  uv run python 13_orchestrator.py
+
+Expected output:
+  Test 1: Plan has greet + farewell tools → "Hello, Alice!" and "Goodbye, Alice!"
+  Test 2: Plan has greet + translate tools → "Hello, Bob!" and "[French] Hello, Bob!"
+  Test 3: No tools needed → general response
+  Test 4: Plan has farewell tool → "Goodbye, Charlie!"
 """
 
 import operator
@@ -53,21 +59,9 @@ class OrchestratorState(TypedDict):
 # discovered at runtime via the skill registry.
 
 TOOL_REGISTRY = {
-    "search_archive": lambda query: {
-        "articles": [
-            {"title": "Fed Holds Rates Steady", "date": "2024-12-18"},
-            {"title": "Markets Rally on Pause", "date": "2024-12-19"},
-        ],
-        "query": query,
-    },
-    "get_market_data": lambda index: {
-        "index": index,
-        "value": "5,930.85",
-        "change": "+1.2%",
-    },
-    "draft_headline": lambda topic: {
-        "headline": f"REUTERS: {topic.upper()} - Analysis and Outlook",
-    },
+    "greet": lambda name: {"greeting": f"Hello, {name}!", "name": name},
+    "farewell": lambda name: {"farewell": f"Goodbye, {name}!", "name": name},
+    "translate": lambda text: {"original": text, "translated": f"[French] {text}"},
 }
 
 
@@ -80,13 +74,17 @@ def analyze(state: OrchestratorState) -> dict:
     """Analyze the user's message and build an execution plan."""
     msg = state["user_message"].lower()
 
+    # Extract a name from the message (take last capitalized word from original)
+    words = state["user_message"].split()
+    name = next((w for w in reversed(words) if w[0].isupper() and w.isalpha()), "Friend")
+
     tools_needed = []
-    if any(w in msg for w in ["search", "find", "article", "archive"]):
-        tools_needed.append({"tool": "search_archive", "params": {"query": msg}})
-    if any(w in msg for w in ["market", "stock", "index", "s&p"]):
-        tools_needed.append({"tool": "get_market_data", "params": {"index": "S&P500"}})
-    if any(w in msg for w in ["headline", "draft", "write"]):
-        tools_needed.append({"tool": "draft_headline", "params": {"topic": msg[:50]}})
+    if any(w in msg for w in ["greet", "hello", "welcome"]):
+        tools_needed.append({"tool": "greet", "params": {"name": name}})
+    if any(w in msg for w in ["goodbye", "farewell", "bye"]):
+        tools_needed.append({"tool": "farewell", "params": {"name": name}})
+    if "translate" in msg:
+        tools_needed.append({"tool": "translate", "params": {"text": "placeholder"}})
 
     strategy = "sequential" if tools_needed else "none"
 
@@ -131,8 +129,12 @@ def execute_tools(state: OrchestratorState) -> dict:
             continue
 
         try:
-            first_param = next(iter(params.values()), "")
-            results[tool_name] = tool_fn(first_param)
+            # For translate, chain with greet result if available
+            if tool_name == "translate" and "greet" in results:
+                results[tool_name] = tool_fn(results["greet"]["greeting"])
+            else:
+                first_param = next(iter(params.values()), "")
+                results[tool_name] = tool_fn(first_param)
         except Exception as e:
             errors.append(f"{tool_name} failed: {e}")
 
@@ -154,21 +156,19 @@ def synthesize(state: OrchestratorState) -> dict:
 
     if not results:
         return {
-            "response": f"I can help with that! You asked: '{state['user_message']}'. "
-                        "No specific tools were needed for this query.",
+            "response": f"I can help with greetings, farewells, and translations! "
+                        f"You asked: '{state['user_message']}'.",
             "current_step": "complete",
         }
 
     parts = []
     for tool_name, result in results.items():
-        if tool_name == "search_archive":
-            articles = result.get("articles", [])
-            parts.append(f"Found {len(articles)} articles: " +
-                         ", ".join(a["title"] for a in articles))
-        elif tool_name == "get_market_data":
-            parts.append(f"{result['index']}: {result['value']} ({result['change']})")
-        elif tool_name == "draft_headline":
-            parts.append(f"Headline: {result['headline']}")
+        if tool_name == "greet":
+            parts.append(result["greeting"])
+        if tool_name == "farewell":
+            parts.append(result["farewell"])
+        if tool_name == "translate":
+            parts.append(f"Translation: {result['translated']}")
 
     errors = state.get("errors", [])
     if errors:
@@ -203,32 +203,42 @@ if __name__ == "__main__":
     print(orchestrator.get_graph().draw_mermaid())
     print()
 
-    # Test 1: Query that needs tools
-    print("=== Test 1: Query needing tools ===\n")
+    # Test 1: Greet + farewell (two tools)
+    print("=== Test 1: Greet and farewell ===\n")
     r1 = orchestrator.invoke({
-        "user_message": "Search the archive for Fed articles and show S&P market data",
+        "user_message": "Greet Alice and say goodbye",
     })
     print(f"Plan:     {r1['execution_plan']}")
     print(f"Results:  {r1['tool_results']}")
     print(f"Response: {r1['response']}")
     print()
 
-    # Test 2: Query that skips tools (LLM-only)
-    print("=== Test 2: Simple query (no tools) ===\n")
+    # Test 2: Greet + translate (chained tools)
+    print("=== Test 2: Translate a greeting ===\n")
     r2 = orchestrator.invoke({
-        "user_message": "Hello, what can you help me with?",
+        "user_message": "Translate a greeting for Bob",
     })
     print(f"Plan:     {r2['execution_plan']}")
+    print(f"Results:  {r2['tool_results']}")
     print(f"Response: {r2['response']}")
     print()
 
-    # Test 3: Query that triggers drafting
-    print("=== Test 3: Drafting query ===\n")
+    # Test 3: No tools needed
+    print("=== Test 3: General query (no tools) ===\n")
     r3 = orchestrator.invoke({
-        "user_message": "Draft a headline about oil prices",
+        "user_message": "Hello, what can you help with?",
     })
     print(f"Plan:     {r3['execution_plan']}")
     print(f"Response: {r3['response']}")
+    print()
+
+    # Test 4: Farewell only
+    print("=== Test 4: Farewell only ===\n")
+    r4 = orchestrator.invoke({
+        "user_message": "Say farewell to Charlie",
+    })
+    print(f"Plan:     {r4['execution_plan']}")
+    print(f"Response: {r4['response']}")
 
     # ── Key takeaway ─────────────────────────────────────────────────
     # An orchestrator is a StateGraph that coordinates a multi-step

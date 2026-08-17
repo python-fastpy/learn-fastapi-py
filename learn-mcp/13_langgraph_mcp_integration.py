@@ -3,7 +3,7 @@
 
 WHY THIS MATTERS:
   This is the capstone lesson. The production backend uses LangGraph
-  to orchestrate MCP tool calls — it's a directed graph where each
+  to orchestrate MCP tool calls -- it's a directed graph where each
   node is a step (analyze, call tools, interrupt for review, synthesize).
   LangGraph gives you checkpointing (save state, resume after interrupt),
   conditional routing (skip tools if not needed), and a clear execution
@@ -23,18 +23,18 @@ Concepts:
   - Full loop: user message -> analyze -> call MCP tools -> synthesize
   - Human-in-the-loop interrupts via LangGraph interrupt() + MCP
   - MemorySaver checkpointer for interrupt/resume
-  - Multi-server orchestration (story-drafting + text-archive)
+  - Multi-server orchestration (greeting-server + translation-server)
 
 Architecture (mirrors your production backend):
   +--------+     +------------------------+     +------------------+
   | User   | --> | LangGraph Orchestrator | --> | MCP Servers      |
   +--------+     |                        |     |                  |
-                 | Nodes:                 |     | story-drafting:  |
-                 |  1. analyze            |     |   draft_story    |
-                 |  2. route              |     |   gen_headline   |
+                 | Nodes:                 |     | greeting-server: |
+                 |  1. analyze            |     |   greet          |
+                 |  2. route              |     |   farewell       |
                  |  3. call_mcp_tools     |     |                  |
-                 |  4. maybe_interrupt    |     | text-archive:    |
-                 |  5. synthesize         |     |   search_archive |
+                 |  4. maybe_interrupt    |     | translation:     |
+                 |  5. synthesize         |     |   translate      |
                  +------------------------+     +------------------+
                         |        ^
                         v        |
@@ -57,50 +57,43 @@ credentials.  Swap mock_analyze() for LLM-based analysis to go live.
 Run:  uv run python 13_langgraph_mcp_integration.py
 
 EXPECTED OUTPUT:
-  === LangGraph + MCP Orchestrator ===
+  === MCP + LangGraph Orchestrator ===
 
-  Setting up MCP servers...
-    story-drafting: 2 tools
-    text-archive: 1 tools
+  MCP Servers: ['greeting-server', 'translation-server']
+  Discovered tools: ['greet', 'farewell', 'translate']
+  Tool -> Server map: {'greet': 'greeting-server', ...}
 
-  Graph structure (Mermaid):
+  === Graph (Mermaid) ===
     %%{init: ...}%%
     graph TD; ...
     analyze --> route --> ...
 
-  === Test 1: "search for articles about OPEC" ===
-    [analyze] Intent: search, tools: ['search_archive']
-    [route]   -> call_tools (tools needed)
-    [call_tools] Calling search_archive ...
-    [maybe_interrupt] No interrupt needed
-    [synthesize] Composing final response
-    Final: Found articles about OPEC ... (1 tool call)
+  === Test 1: "Translate hello into French" ===
+    [MCP] translation-server/translate -> OK
+    Plan: {'strategy': 'single', 'tools': [...]}
+    Response: [translation-server/translate] ...
 
-  === Test 2: "draft a story about oil prices" ===
-    [analyze] Intent: draft, tools: ['draft_story']
-    [route]   -> call_tools
-    [call_tools] Calling draft_story ...
-    [maybe_interrupt] INTERRUPT: draft needs review
-    --- Paused for human review ---
-    Resuming with: approved
-    [synthesize] Composing final response
-    Final: Draft approved and finalized ...
+  === Test 2: "Create a greeting and farewell for Alice" ===
+    [MCP] greeting-server/greet -> OK
+    [MCP] greeting-server/farewell -> OK
+    [Paused] Graph PAUSED -- waiting for human review
+    [Interrupt] type=GREETING_REVIEW
+    [Interrupt] message=Please review the greeting below:
+    [Step 3] User approves...
+    Approval: approved
+    Response: [greeting-server/greet] ... [greeting-server/farewell] ...
 
-  === Test 3: "hello, how are you?" ===
-    [analyze] Intent: chat, tools: []
-    [route]   -> synthesize (no tools needed)
-    [synthesize] Composing final response
-    Final: I'm an AI assistant ...
+  === Test 3: "How are you?" ===
+    Plan: {'strategy': 'none', 'tools': []}
+    Response: I can help with that! ...
 
-  === Test 4: "search for oil news and draft a story" ===
-    [analyze] Intent: search+draft, tools: ['search_archive', 'draft_story']
-    [route]   -> call_tools
-    [call_tools] Calling search_archive, draft_story ...
-    [maybe_interrupt] INTERRUPT: draft needs review
-    --- Paused for human review ---
-    Resuming with: approved
-    [synthesize] Composing final response
-    Final: Based on search results, here is your draft ...
+  === Test 4: "Greet Bob and translate it to Spanish" ===
+    [MCP] greeting-server/greet -> OK
+    [MCP] translation-server/translate -> OK
+    [Paused for review -- auto-approving]
+    Tools used: ['greet', 'translate']
+    Servers hit: ['greeting-server', 'translation-server']
+    Response: [greeting-server/greet] ... [translation-server/translate] ...
 """
 
 import asyncio
@@ -120,49 +113,33 @@ from langgraph.types import interrupt, Command
 # In production these run on separate ECS containers behind an ALB.
 # Here we use in-process FastMCP for simplicity.
 
-story_server = FastMCP(name="story-drafting")
-archive_server = FastMCP(name="text-archive")
+greeting_server = FastMCP(name="greeting-server")
+translation_server = FastMCP(name="translation-server")
 
 
-@story_server.tool
-async def draft_story(
-    topic: Annotated[str, Field(description="Topic for the story")],
-    style: Annotated[str, Field(default="spot", description="spot or bulletin")] = "spot",
+@greeting_server.tool
+async def greet(
+    name: Annotated[str, Field(description="Name to greet")],
 ) -> dict:
-    """Draft a news story about a given topic."""
-    return {
-        "draft": (
-            f"HEADLINE: {topic.title()} - Reuters\n\n"
-            f"(Reuters) - Developments in {topic} continued to drive "
-            f"market attention today. Analysts noted significant momentum."
-        ),
-        "style": style,
-        "word_count": 22,
-    }
+    """Greet someone by name."""
+    return {"message": f"Hello, {name}!"}
 
 
-@story_server.tool
-async def generate_headline(
-    event: Annotated[str, Field(description="Event to write headline for")],
+@greeting_server.tool
+async def farewell(
+    name: Annotated[str, Field(description="Name to say goodbye to")],
 ) -> dict:
-    """Generate a Reuters-style headline for an event."""
-    return {"headline": f"UPDATE 1-{event.upper()[:50]} - REUTERS"}
+    """Say goodbye to someone by name."""
+    return {"message": f"Goodbye, {name}! Take care."}
 
 
-@archive_server.tool
-async def search_archive(
-    query: Annotated[str, Field(description="Search terms")],
-    limit: Annotated[int, Field(default=5, description="Max results")] = 5,
+@translation_server.tool
+async def translate(
+    text: Annotated[str, Field(description="Text to translate")],
+    language: Annotated[str, Field(default="French", description="Target language")] = "French",
 ) -> dict:
-    """Search the Reuters Text Archive for relevant articles."""
-    return {
-        "query": query,
-        "results": [
-            {"title": f"Archive: {query} #{i+1}", "date": f"2024-12-{20-i}"}
-            for i in range(min(limit, 3))
-        ],
-        "total_hits": 42,
-    }
+    """Translate text into another language."""
+    return {"original": text, "translated": f"[{language}] {text}", "language": language}
 
 
 # ============================================================================
@@ -172,8 +149,8 @@ async def search_archive(
 # know which server owns each tool.
 
 MCP_SERVERS = {
-    "story-drafting": story_server,
-    "text-archive": archive_server,
+    "greeting-server": greeting_server,
+    "translation-server": translation_server,
 }
 
 TOOL_OWNERSHIP: dict[str, str] = {}  # tool_name -> server_name (populated at startup)
@@ -222,7 +199,7 @@ class OrchestratorState(TypedDict):
 # ============================================================================
 # Each node is an async function that reads/writes OrchestratorState.
 
-# ── Node 1: Analyze ────────────────────────────────────────────────────
+# -- Node 1: Analyze --------------------------------------------------------
 # In production the LLM decides which tools to call.
 # Here we use keyword matching as a stand-in.
 
@@ -235,15 +212,36 @@ def analyze(state: OrchestratorState) -> dict:
     tools_to_call = []
     needs_approval = False
 
-    if any(w in msg for w in ["draft", "write", "story", "article"]):
-        topic = msg.split("about")[-1].strip() if "about" in msg else msg
-        tools_to_call.append({"tool": "generate_headline", "args": {"event": topic}})
-        tools_to_call.append({"tool": "draft_story", "args": {"topic": topic, "style": "spot"}})
-        needs_approval = True  # drafts need human review
+    # Extract a name from the message (simple heuristic: last word)
+    words = state["user_message"].split()
+    name = words[-1].strip(".,!?") if words else "World"
 
-    if any(w in msg for w in ["search", "find", "archive", "lookup"]):
-        query = msg.split("for")[-1].strip() if "for" in msg else msg
-        tools_to_call.append({"tool": "search_archive", "args": {"query": query, "limit": 5}})
+    has_greet = any(w in msg for w in ["greet", "hello", "welcome"])
+    has_farewell = any(w in msg for w in ["farewell", "goodbye", "bye"])
+
+    if has_greet:
+        tools_to_call.append({"tool": "greet", "args": {"name": name}})
+
+    if has_farewell:
+        tools_to_call.append({"tool": "farewell", "args": {"name": name}})
+
+    # If both greet AND farewell are planned, require approval
+    if has_greet and has_farewell:
+        needs_approval = True
+
+    if "translate" in msg:
+        # Extract target language if mentioned
+        text = state["user_message"]
+        language = "French"
+        for lang in ["Spanish", "French", "German", "Italian", "Japanese"]:
+            if lang.lower() in msg:
+                language = lang
+                break
+        # Extract the text to translate (simple: use the whole message)
+        tools_to_call.append({"tool": "translate", "args": {"text": text, "language": language}})
+        # Multi-server (greet + translate) also needs approval
+        if has_greet or has_farewell:
+            needs_approval = True
 
     strategy = "none"
     if len(tools_to_call) == 1:
@@ -257,7 +255,7 @@ def analyze(state: OrchestratorState) -> dict:
     }
 
 
-# ── Routing: should we call tools? ─────────────────────────────────────
+# -- Routing: should we call tools? -----------------------------------------
 # Conditional edge after analyze node.
 
 def route_after_analysis(state: OrchestratorState) -> Literal["call_tools", "synthesize"]:
@@ -268,7 +266,7 @@ def route_after_analysis(state: OrchestratorState) -> Literal["call_tools", "syn
     return "call_tools"
 
 
-# ── Node 2: Call MCP Tools ─────────────────────────────────────────────
+# -- Node 2: Call MCP Tools -------------------------------------------------
 # Executes tools from the plan by calling MCP servers.
 
 async def call_tools(state: OrchestratorState) -> dict:
@@ -293,7 +291,7 @@ async def call_tools(state: OrchestratorState) -> dict:
     return {"tool_results": results, "errors": errors}
 
 
-# ── Routing: does this need human approval? ────────────────────────────
+# -- Routing: does this need human approval? --------------------------------
 
 def route_after_tools(state: OrchestratorState) -> Literal["human_review", "synthesize"]:
     """If the plan flagged needs_approval, pause for human review."""
@@ -302,7 +300,7 @@ def route_after_tools(state: OrchestratorState) -> Literal["human_review", "synt
     return "synthesize"
 
 
-# ── Node 3: Human-in-the-Loop ─────────────────────────────────────────
+# -- Node 3: Human-in-the-Loop ----------------------------------------------
 # Uses LangGraph's interrupt() to pause and wait for user input.
 # MemorySaver checkpoints state in memory so we can resume later.
 
@@ -311,38 +309,41 @@ def human_review(state: OrchestratorState) -> dict:
     The interrupt() call checkpoints state and returns control
     to the caller. When resumed, the user's response is available."""
 
-    # Build a preview of what was drafted
-    drafts = [
+    # Build a preview of what was produced
+    greetings = [
         r for r in state.get("tool_results", [])
-        if r.get("tool") == "draft_story"
+        if r.get("tool") in ("greet", "farewell")
     ]
 
-    draft_preview = "No draft found."
-    if drafts:
-        draft_data = drafts[0].get("result", {})
-        if isinstance(draft_data, list) and draft_data:
-            content = draft_data[0]
-            if hasattr(content, "text"):
-                draft_preview = content.text
-            else:
-                draft_preview = str(content)
-        elif isinstance(draft_data, dict):
-            draft_preview = str(draft_data)
+    greeting_preview = "No greeting found."
+    if greetings:
+        previews = []
+        for g in greetings:
+            data = g.get("result", {})
+            if isinstance(data, list) and data:
+                content = data[0]
+                if hasattr(content, "text"):
+                    previews.append(content.text)
+                else:
+                    previews.append(str(content))
+            elif isinstance(data, dict):
+                previews.append(str(data))
+        greeting_preview = " | ".join(previews)
 
     # interrupt() checkpoints the graph and returns to the caller.
     # When the caller resumes with a Command, the value becomes
     # the return from interrupt().
     user_response = interrupt({
-        "type": "STORY_REVIEW",
-        "message": "Please review the draft below:",
-        "preview": draft_preview,
+        "type": "GREETING_REVIEW",
+        "message": "Please review the greeting below:",
+        "preview": greeting_preview,
         "actions": ["approve", "reject", "edit"],
     })
 
     return {"user_approval": user_response, "needs_approval": False}
 
 
-# ── Routing: what did the human say? ───────────────────────────────────
+# -- Routing: what did the human say? ---------------------------------------
 
 def route_after_review(state: OrchestratorState) -> Literal["synthesize", "call_tools"]:
     """Route based on human review response."""
@@ -352,7 +353,7 @@ def route_after_review(state: OrchestratorState) -> Literal["synthesize", "call_
     return "synthesize"
 
 
-# ── Node 4: Synthesize ─────────────────────────────────────────────────
+# -- Node 4: Synthesize -----------------------------------------------------
 # Combines tool results into a final response.
 # Production sends results to the LLM for natural-language synthesis.
 
@@ -386,7 +387,7 @@ def synthesize(state: OrchestratorState) -> dict:
         parts.append(f"[{r.get('server', '?')}/{tool}] {data_str[:120]}")
 
     if approval == "rejected":
-        parts.append("(User rejected the draft)")
+        parts.append("(User rejected the greeting)")
     elif approval.startswith("edit:"):
         parts.append(f"(User requested edits: {approval[5:]})")
 
@@ -455,14 +456,14 @@ async def main():
     print(orchestrator.get_graph().draw_mermaid())
     print()
 
-    # ── Test 1: Search query (no approval needed) ──────────────────────
+    # -- Test 1: Translate (no approval needed) -----------------------------
     print("=" * 60)
-    print("Test 1: Search query (no interrupt)")
+    print("Test 1: Translate (no interrupt)")
     print("=" * 60 + "\n")
 
     config1 = {"configurable": {"thread_id": "session-001"}}
     result1 = await orchestrator.ainvoke(
-        {"user_message": "Search the archive for OPEC articles"},
+        {"user_message": "Translate hello into French"},
         config=config1,
     )
 
@@ -470,9 +471,9 @@ async def main():
     print(f"  Response:\n    {result1['response']}")
     print()
 
-    # ── Test 2: Draft story (triggers interrupt for human review) ──────
+    # -- Test 2: Greet + farewell (triggers interrupt for review) -----------
     print("=" * 60)
-    print("Test 2: Draft story (with human-in-the-loop interrupt)")
+    print("Test 2: Greeting + farewell (with human-in-the-loop interrupt)")
     print("=" * 60 + "\n")
 
     config2 = {"configurable": {"thread_id": "session-002"}}
@@ -480,7 +481,7 @@ async def main():
     # First invoke: runs until interrupt()
     print("  [Step 1] Sending message...")
     result2 = await orchestrator.ainvoke(
-        {"user_message": "Draft a story about oil prices rising"},
+        {"user_message": "Create a greeting and farewell for Alice"},
         config=config2,
     )
 
@@ -504,7 +505,7 @@ async def main():
         print()
 
         # Resume with user's approval
-        print("  [Step 3] User approves the draft...")
+        print("  [Step 3] User approves the greeting...")
         result2 = await orchestrator.ainvoke(
             Command(resume="approved"),
             config=config2,
@@ -516,32 +517,32 @@ async def main():
         print(f"  Response:\n    {result2['response']}")
     print()
 
-    # ── Test 3: Simple query (no tools) ────────────────────────────────
+    # -- Test 3: Simple query (no tools) ------------------------------------
     print("=" * 60)
     print("Test 3: Simple query (no tools, LLM-only path)")
     print("=" * 60 + "\n")
 
     config3 = {"configurable": {"thread_id": "session-003"}}
     result3 = await orchestrator.ainvoke(
-        {"user_message": "Hello, how are you?"},
+        {"user_message": "How are you?"},
         config=config3,
     )
     print(f"  Plan: {result3['execution_plan']}")
     print(f"  Response: {result3['response']}")
     print()
 
-    # ── Test 4: Multi-server query ─────────────────────────────────────
+    # -- Test 4: Multi-server (greet + translate) ---------------------------
     print("=" * 60)
-    print("Test 4: Multi-server (story-drafting + text-archive)")
+    print("Test 4: Multi-server (greeting-server + translation-server)")
     print("=" * 60 + "\n")
 
     config4 = {"configurable": {"thread_id": "session-004"}}
     result4 = await orchestrator.ainvoke(
-        {"user_message": "Search for Fed articles and draft a story about interest rates"},
+        {"user_message": "Greet Bob and translate it to Spanish"},
         config=config4,
     )
 
-    # This triggers interrupt because it includes drafting
+    # This triggers interrupt because it combines greet + translate
     snapshot4 = await orchestrator.aget_state(config4)
     is_interrupted4 = bool(snapshot4.tasks and any(
         hasattr(t, "interrupts") and t.interrupts

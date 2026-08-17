@@ -7,15 +7,15 @@ Concepts:
   - This maps to your skill workflows: each skill is like a subgraph
 
 Graph (Parent):
-  +-------+     +----------+     +----------+     +----------+     +-----+
-  | START | --> | research | --> | drafting | --> | finalize | --> | END |
-  +-------+     +----------+     +----------+     +----------+     +-----+
+  +-------+     +----------+     +-------------------+     +----------+     +-----+
+  | START | --> | greeting | --> | farewell_pipeline | --> | finalize | --> | END |
+  +-------+     +----------+     +-------------------+     +----------+     +-----+
                 (subgraph)       (subgraph)
 
-  Research subgraph:          Drafting subgraph:
-  +--------+     +---------+  +-------+     +------+
-  | gather | --> | analyze |  | write | --> | edit |
-  +--------+     +---------+  +-------+     +------+
+  Greeting subgraph:              Farewell subgraph:
+  +---------+     +----------+    +----------------+     +-----------------+
+  | compose | --> | decorate |    | write_farewell | --> | format_farewell |
+  +---------+     +----------+    +----------------+     +-----------------+
 
 No LLM needed -- demonstrates the composition pattern with pure logic.
 
@@ -27,117 +27,117 @@ from typing import TypedDict, Annotated
 from langgraph.graph import StateGraph, START, END
 
 
-# ── Subgraph 1: Research Pipeline ────────────────────────────────────
+# -- Subgraph 1: Greeting Pipeline -------------------------------------------
 
-class ResearchState(TypedDict):
-    topic: str
-    findings: Annotated[list[str], operator.add]
-
-
-def gather_sources(state: ResearchState) -> dict:
-    return {"findings": [f"Source A says '{state['topic']}' is trending"]}
+class GreetingState(TypedDict):
+    name: str
+    steps: Annotated[list[str], operator.add]
 
 
-def analyze(state: ResearchState) -> dict:
-    return {"findings": [f"Analysis: {len(state['findings'])} sources reviewed"]}
+def compose(state: GreetingState) -> dict:
+    return {"steps": [f"Composed greeting for '{state['name']}'"]}
 
 
-research_graph = StateGraph(ResearchState)
-research_graph.add_node("gather", gather_sources)
-research_graph.add_node("analyze", analyze)
-research_graph.add_edge(START, "gather")
-research_graph.add_edge("gather", "analyze")
-research_graph.add_edge("analyze", END)
-
-research_subgraph = research_graph.compile()
+def decorate(state: GreetingState) -> dict:
+    return {"steps": ["Decorated greeting"]}
 
 
-# ── Subgraph 2: Drafting Pipeline ────────────────────────────────────
+greeting_graph = StateGraph(GreetingState)
+greeting_graph.add_node("compose", compose)
+greeting_graph.add_node("decorate", decorate)
+greeting_graph.add_edge(START, "compose")
+greeting_graph.add_edge("compose", "decorate")
+greeting_graph.add_edge("decorate", END)
 
-class DraftState(TypedDict):
-    findings: list[str]
-    draft: str
-
-
-def write_draft(state: DraftState) -> dict:
-    summary = "; ".join(state["findings"])
-    return {"draft": f"DRAFT: Based on research -- {summary}"}
+greeting_subgraph = greeting_graph.compile()
 
 
-def edit_draft(state: DraftState) -> dict:
-    return {"draft": state["draft"] + " [EDITED]"}
+# -- Subgraph 2: Farewell Pipeline -------------------------------------------
+
+class FarewellState(TypedDict):
+    steps: list[str]
+    farewell: str
 
 
-draft_graph = StateGraph(DraftState)
-draft_graph.add_node("write", write_draft)
-draft_graph.add_node("edit", edit_draft)
-draft_graph.add_edge(START, "write")
-draft_graph.add_edge("write", "edit")
-draft_graph.add_edge("edit", END)
-
-draft_subgraph = draft_graph.compile()
+def write_farewell(state: FarewellState) -> dict:
+    return {"farewell": f"Goodbye! Based on {len(state['steps'])} steps so far."}
 
 
-# ── Parent graph: composes both subgraphs ────────────────────────────
+def format_farewell(state: FarewellState) -> dict:
+    return {"farewell": state["farewell"] + " [FORMATTED]"}
+
+
+farewell_graph = StateGraph(FarewellState)
+farewell_graph.add_node("write_farewell", write_farewell)
+farewell_graph.add_node("format_farewell", format_farewell)
+farewell_graph.add_edge(START, "write_farewell")
+farewell_graph.add_edge("write_farewell", "format_farewell")
+farewell_graph.add_edge("format_farewell", END)
+
+farewell_subgraph = farewell_graph.compile()
+
+
+# -- Parent graph: composes both subgraphs ------------------------------------
 
 class ParentState(TypedDict):
-    topic: str
-    findings: Annotated[list[str], operator.add]
-    draft: str
+    name: str
+    steps: Annotated[list[str], operator.add]
+    farewell: str
     status: str
 
 
 def finalize(state: ParentState) -> dict:
-    return {"status": f"Published: {state['draft'][:80]}..."}
+    return {"status": f"Complete: {state['farewell'][:60]}..."}
 
 
 parent = StateGraph(ParentState)
 
-# Add compiled subgraphs as nodes — they run as self-contained units
-parent.add_node("research", research_subgraph)
-parent.add_node("drafting", draft_subgraph)
+# Add compiled subgraphs as nodes -- they run as self-contained units
+parent.add_node("greeting", greeting_subgraph)
+parent.add_node("farewell_pipeline", farewell_subgraph)
 parent.add_node("finalize", finalize)
 
-parent.add_edge(START, "research")
-parent.add_edge("research", "drafting")
-parent.add_edge("drafting", "finalize")
+parent.add_edge(START, "greeting")
+parent.add_edge("greeting", "farewell_pipeline")
+parent.add_edge("farewell_pipeline", "finalize")
 parent.add_edge("finalize", END)
 
 app = parent.compile()
 
 
 if __name__ == "__main__":
-    result = app.invoke({"topic": "AI in newsrooms"})
+    result = app.invoke({"name": "Alice"})
 
-    print(f"Topic:    {result['topic']}")
-    print(f"Findings: {result['findings']}")
-    print(f"Draft:    {result['draft']}")
+    print(f"Name:     {result['name']}")
+    print(f"Steps:    {result['steps']}")
+    print(f"Farewell: {result['farewell']}")
     print(f"Status:   {result['status']}")
 
-    # NOTE: Findings may appear duplicated. This happens because both
-    # the subgraph (ResearchState) and parent (ParentState) define
-    # `findings` with operator.add. When the subgraph returns, LangGraph
+    # NOTE: Steps may appear duplicated. This happens because both
+    # the subgraph (GreetingState) and parent (ParentState) define
+    # `steps` with operator.add. When the subgraph returns, LangGraph
     # merges its output into the parent using the parent's reducer too.
     # Fix: use a plain list (no reducer) in either the subgraph or parent.
+    # The FarewellState intentionally uses a plain list to avoid this.
 
     # Visualize the graph structure (Mermaid)
     print("\n=== Graph Diagram (Mermaid) ===")
     print(app.get_graph().draw_mermaid())
 
-    # ── Key takeaway ─────────────────────────────────────────────────
+    # -- Key takeaway ---------------------------------------------------------
     # Subgraphs let you build complex systems from smaller, testable
     # units. Each subgraph:
     #   - Has its own state schema
     #   - Shares keys with the parent via matching key names
     #   - Can be tested independently
     #
-    # In your architecture, each MCP skill is like a subgraph:
-    #   - story-drafting, urgent-drafting, text-archive are independent
-    #   - The backend orchestrator composes them like a parent graph
-    #   - State flows via the MCP protocol instead of shared TypedDicts
+    # Notice GreetingState uses Annotated[list[str], operator.add] for
+    # `steps` (same reducer as the parent), while FarewellState uses a
+    # plain list[str]. This shows how reducer mismatches between parent
+    # and subgraph affect merged output.
     #
-    # ── Exercise ─────────────────────────────────────────────────────
-    # 1. Add a third subgraph: "fact_check" between drafting and finalize
-    # 2. Give it its own state with a `verified: bool` key
-    # 3. In the parent, use conditional edges: if not verified -> loop
-    #    back to drafting
+    # -- Exercise -------------------------------------------------------------
+    # 1. Add a third subgraph: "personalize" between greeting and farewell
+    # 2. Give it its own state with a `tone: str` key (e.g., "formal")
+    # 3. In the parent, use conditional edges: if tone == "formal" -> skip
+    #    farewell and go directly to finalize
