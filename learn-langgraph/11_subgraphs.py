@@ -2,22 +2,29 @@
 ========================
 
 WHY THIS MATTERS:
-  Real systems are too complex for a single flat graph. The production assistant
-  has greeting workflows, farewell workflows, translation workflows — each is a
-  self-contained unit. Subgraphs let you build complex systems from smaller,
-  testable pieces. Each subgraph has its own state schema and can be developed
-  and tested independently, then composed into a parent graph.
+  Real systems are too complex for a single flat graph. Subgraphs let you build
+  complex systems from smaller, testable pieces. Each subgraph has its own state
+  schema and can be developed and tested independently, then composed into a
+  parent graph.
 
-  This is how the production skill system works: each MCP skill (story-drafting,
-  urgent-drafting, text-archive) is like a subgraph — a self-contained workflow
-  that the orchestrator calls as a node.
+  IMPORTANT — how this relates to production:
+  Subgraphs are a powerful LangGraph feature, but our production skill system
+  does NOT use them. Production skills are independent MCP HTTP servers — the
+  orchestrator calls them as tool functions inside a single flat graph (see
+  Lesson 13). Skills don't have their own StateGraph or state schema on the
+  orchestrator side; they're just HTTP endpoints that receive params and return
+  results.
+
+  Skills are similar to subgraphs ORGANIZATIONALLY (independently deployable,
+  separately testable, self-contained logic), but MECHANICALLY they're just
+  tool calls within one graph — not embedded compiled subgraphs.
 
 WHAT YOU'LL LEARN:
   1. Composing graphs: one compiled graph can be a node in another
   2. Subgraph state: each subgraph has its OWN state schema
   3. Parent <-> subgraph communication via shared state key names
   4. Reducer gotcha: matching key names with different reducers cause duplication
-  5. How this maps to the skill architecture (each skill = a subgraph)
+  5. How subgraphs compare to the skill architecture (similar concept, different mechanism)
 
 Concepts:
   - subgraph = StateGraph(SubState).compile()
@@ -54,11 +61,20 @@ Graph trace (what happens when you invoke with {"name": "Alice"}):
         format_farewell: farewell = "Goodbye! Based on 2 steps so far. [FORMATTED]"
     -> finalize: status = "Complete: Goodbye! Based on 2 steps so far. [FORMATTED]..."
 
-Maps to production:
-  MCP skills                    -> each skill is a self-contained subgraph
-  mcp_server_registry.py        -> discovers and registers skill subgraphs
-  langgraph_mcp_orchestrator.py -> parent graph that calls skill subgraphs
-  story-drafting workflows      -> multi-step workflows within a skill
+Compared to production:
+  Subgraphs and MCP skills share the same ORGANIZATIONAL principle: break
+  complex systems into independent, testable units. But the MECHANISM differs:
+
+  Subgraph (this lesson)          | Production MCP skill
+  --------------------------------|--------------------------------
+  Compiled StateGraph             | Independent HTTP server (FastMCP)
+  Embedded as a node via          | Called as a tool function inside
+    parent.add_node()             |   a single flat orchestrator graph
+  Own state schema, own reducer   | Stateless — receives params,
+    rules, merged on completion   |   returns JSON, no LangGraph state
+  Runs in-process                 | Runs out-of-process (HTTP call)
+
+  See Lesson 13 for the actual production pattern (flat graph + tool calls).
 
 PREREQUISITES: Lesson 04 (state reducers — understanding shared state keys)
 
@@ -84,8 +100,7 @@ from langgraph.graph import StateGraph, START, END
 # ── Step 1: Subgraph 1 — Greeting Pipeline (compose -> decorate) ────────────
 # This subgraph is a self-contained unit: it has its own state schema
 # (GreetingState), its own nodes, and its own edges.  It knows nothing about
-# the parent graph.  In production, each MCP skill is structured the same way —
-# a standalone workflow that can be tested independently.
+# the parent graph.
 
 class GreetingState(TypedDict):
     name: str
@@ -152,9 +167,7 @@ farewell_subgraph = farewell_graph.compile()
 
 
 # ── Step 3: Parent Graph — composes both subgraphs as nodes ─────────────────
-# The parent graph is the orchestrator.  In production, the
-# langgraph_mcp_orchestrator.py plays this role: it discovers skill subgraphs
-# via the MCP server registry and calls them as nodes in its own graph.
+# The parent graph composes both subgraphs as nodes in its own flow.
 
 class ParentState(TypedDict):
     name: str
@@ -232,13 +245,20 @@ if __name__ == "__main__":
     #   ParentState.steps    = Annotated[list[str], operator.add]  (HAS reducer)
     #   -> ONLY parent applies operator.add -> values merge correctly
     #
-    # Production mapping:
-    #   Each MCP skill (story-drafting, urgent-drafting, text-archive) is
-    #   essentially a subgraph with its own state.  The orchestrator
-    #   (langgraph_mcp_orchestrator.py) is the parent graph that discovers
-    #   skills via mcp_server_registry.py and calls them as nodes.  Each
-    #   skill can be deployed, versioned, and tested independently — just
-    #   like these subgraphs.
+    # Production note:
+    #   Our MCP skills are NOT subgraphs. They share the same organizational
+    #   principle (independent, testable, self-contained), but mechanically
+    #   they're HTTP servers called as tool functions inside a single flat
+    #   orchestrator graph. Skills have no StateGraph, no state schema on
+    #   the orchestrator side, and no reducer merging — they just receive
+    #   params and return JSON over HTTP.
+    #
+    #   Subgraphs WOULD make sense if skills ran in-process and needed
+    #   their own multi-step graph logic with state management. Our skills
+    #   don't — the orchestrator drives all the multi-step logic by reading
+    #   workflow markdown files and calling skill tools in sequence.
+    #
+    #   See Lesson 13 for the actual production pattern.
     #
     # ── Exercise ─────────────────────────────────────────────────────────
     # 1. Add a third subgraph: "personalize" between greeting and farewell
