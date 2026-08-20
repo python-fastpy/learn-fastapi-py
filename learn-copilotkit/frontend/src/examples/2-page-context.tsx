@@ -6,7 +6,15 @@
  * useCopilotReadable registers data that gets sent with EVERY chat message.
  * When the user asks "what story am I editing?", the AI already knows.
  *
- * This is how LEON tells the AI about the current story/alert on screen.
+ * Backend: uv run python 03_system_prompt_and_context.py  (or 06_full_backend.py)
+ *
+ * USED IN REUTERS:
+ *   lynx_leon/src/components/reuter-ai-assistant-v2/reuter-ai-assistant-v2-page-context.tsx
+ *     — Builds page context from Redux store (story/alert data) and passes as externalContext
+ *   @reuters/assistant-v2 → ReutersAssistantAI component
+ *     — externalContext prop passes page data through CopilotKit's protocol
+ *   reuters-assistant_backend/src/services/langgraph_mcp_orchestrator.py
+ *     — Backend extracts page context and injects it into the system prompt
  */
 
 import React, { useState } from "react";
@@ -115,11 +123,5 @@ export default function PageContextApp() {
  * HOW IT WORKS:
  *   useCopilotReadable injects data into CopilotKit's context.
  *   When a message is sent, CopilotKit includes this as a system
- *   message (or properties.context) in the GraphQL request.
- *   The backend reads it and passes it to the LLM.
- *
- * REUTERS EQUIVALENT:
- *   LEON builds page context in reuter-ai-assistant-v2-page-context.tsx
- *   and passes it as the externalContext prop to ReutersAssistantAI.
- *   The backend extracts it via regex looking for "📄 Page Context".
+ *   message in the request. The backend reads it and passes it to the LLM.
  */

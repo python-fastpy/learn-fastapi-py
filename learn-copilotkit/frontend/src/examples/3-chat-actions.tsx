@@ -12,6 +12,14 @@
  * → AI calls your "update_headline" action
  * → Handler updates the React state
  * → UI re-renders with the new headline
+ *
+ * Backend: uv run python 06_full_backend.py
+ *
+ * USED IN REUTERS:
+ *   lynx_leon/src/components/reuter-ai-assistant-v2/hooks/use-raia-action-handler.ts
+ *     — Registers "create_draft" and "insert_into_story" frontend actions
+ *   @reuters/assistant-v2 → hooks/useChatAction.ts
+ *     — CopilotKit's useCopilotAction wrapped for Reuters patterns
  */
 
 import React, { useState } from "react";
@@ -164,13 +172,8 @@ Always confirm what you changed after making edits.`}
  *
  * HOW IT WORKS:
  *   1. useCopilotAction registers actions with CopilotKit
- *   2. CopilotKit sends them as frontend.actions in the GraphQL request
- *   3. The LLM sees these as available tools
+ *   2. CopilotKit sends them as available tools in the request
+ *   3. The LLM sees these alongside backend tools
  *   4. When the LLM calls one, CopilotKit runs the handler in the browser
  *   5. The return value goes back to the LLM as the tool result
- *
- * REUTERS EQUIVALENT:
- *   @reuters/assistant-v2 wraps this as useChatAction()
- *   LEON registers actions like "create_draft" and "insert_into_story"
- *   See: lynx_leon/.../hooks/use-raia-action-handler.ts
  */

@@ -9,6 +9,18 @@
  *   - Chat actions (AI can update headline, body, insert text)
  *   - Interrupts (AI shows draft review card before applying changes)
  *   - Generative UI (live progress chips during operations)
+ *
+ * Backend: uv run python 06_full_backend.py
+ *
+ * USED IN REUTERS:
+ *   lynx_leon/src/components/reuter-ai-assistant-v2/reuter-ai-assistant-v2.component.tsx
+ *     — The full assistant component combining all CopilotKit features
+ *   lynx_leon/src/components/reuter-ai-assistant-v2/reuter-ai-assistant-v2-page-context.tsx
+ *     — Page context (useCopilotReadable equivalent)
+ *   lynx_leon/src/components/reuter-ai-assistant-v2/hooks/use-raia-action-handler.ts
+ *     — Frontend actions (useCopilotAction equivalent)
+ *   lynx_leon/src/components/reuter-ai-assistant-v2/reuter-ai-assistant-skills-interrupt.component.tsx
+ *     — Interrupt rendering (renderAndWait equivalent)
  */
 
 import React, { useState, useCallback } from "react";

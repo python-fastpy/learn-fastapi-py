@@ -7,7 +7,13 @@
  *   1. A provider (CopilotKit) with the backend URL
  *   2. A chat UI component (CopilotChat)
  *
- * Run: put this in your React app's App.tsx and start your backend at localhost:8000
+ * Backend: uv run python 01_hello_copilotkit.py  (or 06_full_backend.py)
+ *
+ * USED IN REUTERS:
+ *   lynx_leon/src/components/reuter-ai-assistant-v2/reuter-ai-assistant-v2.component.tsx
+ *     — Wraps <ReutersAssistantAI> which internally uses CopilotKit + CopilotChat
+ *   @reuters/assistant-v2 → reuters-assistant-ai.tsx
+ *     — The ReutersAssistantAI component that LEON wraps
  */
 
 import React from "react";
@@ -49,9 +55,8 @@ export default function BasicChatApp() {
  * HOW IT WORKS:
  *
  * 1. User types a message in the chat input
- * 2. CopilotKit sends a GraphQL request to your backend:
+ * 2. CopilotKit sends a request to your backend:
  *      POST http://localhost:8000/copilotkit
- *      Body: { query: "mutation generateCopilotResponse { ... }", variables: { data: { messages: [...] } } }
  * 3. Backend streams response via SSE (Server-Sent Events)
  * 4. CopilotChat renders the streamed text in real time
  *

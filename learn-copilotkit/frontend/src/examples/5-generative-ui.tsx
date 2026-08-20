@@ -7,10 +7,17 @@
  * Unlike renderAndWait (interrupts), this does NOT pause.
  * It just shows progress UI while the handler runs.
  *
- * Reuters uses this for:
- *   - MCP execution summaries (which servers were called)
- *   - Skill call chips (live status of each tool)
- *   - Progress indicators during long operations
+ * Backend: uv run python 04_streaming_and_generative_ui.py  (or 06_full_backend.py)
+ *
+ * USED IN REUTERS:
+ *   @reuters/assistant-v2 → components/mcp/mcp-execution-summary.tsx
+ *     — Shows which MCP servers were called during a response
+ *   @reuters/assistant-v2 → components/skill-calls/skill-call-chip.tsx
+ *     — Live status chip per tool call (loading → done)
+ *   @reuters/assistant-v2 → hooks/useSkillCalls.ts
+ *     — Tracks skill execution state for UI rendering
+ *   @reuters/assistant-v2 → ProgressTracker.tsx
+ *     — Step-by-step progress display for multi-step workflows
  */
 
 import React from "react";
@@ -215,11 +222,4 @@ export default function GenerativeUIApp() {
  *
  *   renderAndWait:   Shows UI and PAUSES until resolve() is called.
  *                    Use for: approvals, selections, user input mid-flow
- *
- * REUTERS EQUIVALENT:
- *   - MCPExecutionSummary component shows which MCP servers were used
- *   - SkillCallChip shows live status per tool call (loading → done)
- *   - ProgressTracker shows step-by-step progress for multi-step workflows
- *   These are built into @reuters/assistant-v2 automatically via:
- *     useMCPInterceptor, useSkillCalls, useProgressTracking hooks
  */

@@ -1,0 +1,21 @@
+[project]
+name = "learn-copilotkit"
+version = "0.1.0"
+description = "Step-by-step CopilotKit backend learning — standalone, just needs an OpenAI API key"
+requires-python = ">=3.11"
+dependencies = [
+    "copilotkit>=0.1",
+    "ag-ui-langgraph>=0.1",
+    "langgraph>=0.4",
+    "langchain-openai>=0.3",
+    "langchain-core>=0.3",
+    "langchain>=0.3",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-dotenv>=1.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+]

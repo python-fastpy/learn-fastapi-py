@@ -12,6 +12,18 @@
  *
  * CopilotKit calls this "renderAndWait" — the action renders UI
  * and blocks until resolve() is called.
+ *
+ * Backend: uv run python 06_full_backend.py
+ *
+ * USED IN REUTERS:
+ *   lynx_leon/src/components/reuter-ai-assistant-v2/reuter-ai-assistant-skills-interrupt.component.tsx
+ *     — Renders interrupt UI based on EventType (NEWS_BUZZ.REVIEW, SPOT_STORY_REVIEW, etc.)
+ *   @reuters/assistant-v2 → hooks/useAgentInterrupt.ts
+ *     — Handles agent interrupt lifecycle
+ *   @reuters/assistant-v2 → hooks/useSkillInterrupt.ts
+ *     — Handles skill-specific interrupts
+ *   reuters-assistant_backend/src/services/langgraph_mcp_orchestrator.py
+ *     — LangGraph interrupt() + DynamoDB checkpoint for state persistence across interrupts
  */
 
 import React from "react";
@@ -263,18 +275,6 @@ const styles: Record<string, React.CSSProperties> = {
  *   5. User clicks "Approve" → resolve("approved") fires
  *   6. CopilotKit sends the resolved value back to the backend
  *   7. AI receives "approved" and continues (e.g., applies the draft)
- *
- * THE INTERRUPT LIFECYCLE (Reuters backend):
- *
- *   Frontend resolve()
- *       ↓
- *   CopilotKit sends LangGraphInterruptEvent in metaEvents
- *       ↓
- *   Backend copilotkit_rest.py → _extract_interrupt_resolution()
- *       ↓
- *   Backend calls _resume_from_checkpoint() → loads DynamoDB state
- *       ↓
- *   LangGraph continues execution with user's response
  *
  * REUTERS INTERRUPT EVENT TYPES:
  *   - NEWS_BUZZ.REVIEW         → Buzz draft review card
