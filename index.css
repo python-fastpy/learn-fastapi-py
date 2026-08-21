@@ -1,0 +1,15 @@
+.parent {
+    padding: 20px;
+    border: 2px solid black;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-evenly;
+    background-color: pink;
+}
+
+.parent > div {
+    width: 100px;
+    height:  100px;
+    background-color: yellow;
+    border: 2px solid black;
+}
