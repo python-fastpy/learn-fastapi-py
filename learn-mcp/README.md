@@ -1,6 +1,6 @@
 # Learn MCP (Model Context Protocol)
 
-A 13-lesson progressive series for building MCP servers, clients, workflows, and orchestration — using the same patterns as the Reuters AI Assistant production codebase.
+A 15-lesson progressive series for building MCP servers, clients, workflows, and orchestration — using the same patterns as the Reuters AI Assistant production codebase.
 
 ## How to Use This Guide
 
@@ -32,12 +32,17 @@ For lessons 07, 08, 12 (LLM-powered): copy `.env.example` to `.env` and fill in 
                            │  LangGraph + MCP  │
                            └────────┬─────────┘
                                     │
-                           ┌────────▼─────────┐
-                           │ Wire Protocol(14) │
-                           │ Raw JSON-RPC HTTP │
-                           └────────┬─────────┘
-                                    │
                     ┌───────────────┼───────────────┐
+                    │               │               │
+           ┌────────▼─────────┐  ┌─▼────────────┐  │
+           │ Wire Protocol(14)│  │ MCP-to-MCP   │  │
+           │ Raw JSON-RPC HTTP│  │ Cross-Skill  │  │
+           └────────┬─────────┘  │   (15)       │  │
+                    │            └─┬────────────┘  │
+                    │              │                │
+                    ├──────────────┘                │
+                    │                               │
+                    ┌───────────────┐               │
                     │               │               │
            ┌───────▼──────┐ ┌──────▼──────┐ ┌──────▼──────┐
            │ Orchestration │ │  Interrupts │ │ Multi-Server│
@@ -121,6 +126,7 @@ Lesson 13 at the top combines both into the **full production architecture**.
 |---|------|----------------|-------------|---------|
 | 13 | `13_langgraph_mcp_integration.py` | LangGraph StateGraph orchestrating MCP servers | Nodes, conditional edges, `interrupt()`, `Command(resume=...)` | langgraph_mcp_orchestrator.py |
 | 14 | `14_raw_jsonrpc_http.py` | Raw HTTP POST + JSON-RPC 2.0 wire protocol | `initialize` handshake, `tools/call` body, `_meta` injection, `structuredContent` | mcp_protocol.py (what StreamableHttpTransport does internally) |
+| 15 | `15_mcp_to_mcp.py` | One MCP tool calling another MCP server's tool | One-shot `Client` inside `@mcp.tool`, cross-skill HTTP, non-fatal error handling | shared/mcp_client.py (planned), generate_spot_story.py |
 
 ### Helper
 
@@ -132,7 +138,7 @@ Lesson 13 at the top combines both into the **full production architecture**.
 ## Running
 
 ```bash
-# Any lesson (no .env needed for 01-06, 09-11, 13):
+# Any lesson (no .env needed for 01-06, 09-11, 13-15):
 uv run python 01_hello_mcp_server.py
 
 # LLM lessons (need .env):
@@ -168,6 +174,7 @@ uv run python 07_llm_tool_server.py
 | **`Mcp-Session-Id`** | HTTP header the server returns after `initialize` — client sends it back on all subsequent requests |
 | **`structuredContent`** | Field in JSON-RPC response carrying interrupt status, continuation tokens — flattened to top-level by backend |
 | **`_meta` injection** | Backend adds `_meta: {session_id, continuation_token, user_response}` to tool arguments for HITL resume |
+| **MCP-to-MCP** | One MCP server's tool calling another MCP server over HTTP. Uses `Client` + `StreamableHttpTransport` (one-shot) inside the tool handler. Keeps skills decoupled — no shared imports |
 
 ## Architecture (How It All Fits Together)
 
@@ -186,7 +193,9 @@ User Message
 |    interrupts (10) |     | Tools (1-3) |
 | 6. Forward         |     | LLM (7)    |
 |    results (8)     |     | Meta (8)   |
-+--------------------+     +-------------+
++--------------------+     | MCP-to-    |
+                           |  MCP (15)  |
+                           +-------------+
          |
          v
 +--------------------+
@@ -214,6 +223,7 @@ User Message
 | Client manager | `reuters-assistant_backend/src/services/mcp_client_manager.py` |
 | LangGraph orchestrator | `reuters-assistant_backend/src/services/langgraph_mcp_orchestrator.py` |
 | Raw JSON-RPC wire protocol | `reuters-assistant_backend/src/services/mcp_protocol.py` (what StreamableHttpTransport does) |
+| Cross-skill MCP calls | `sphinx_leon-assistant-skills/shared/src/shared/mcp_client.py` (planned) |
 
 ## Flow-to-Learning Map
 
@@ -277,4 +287,5 @@ If you're working on `mcp_client_manager.py` or `mcp_protocol.py`, read the less
 12 (orchestration) → how the orchestrator drives MCPProtocolManager
 13 (langgraph)  → full system: LangGraph StateGraph → MCPProtocolManager → skills
 14 (wire proto)  → raw JSON-RPC over HTTP: what StreamableHttpTransport does
+15 (mcp-to-mcp) → skill calling another skill over HTTP (cross-skill pattern)
 ```
