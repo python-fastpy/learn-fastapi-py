@@ -57,6 +57,10 @@ uv run python 01_state_basics.py
 | 12 | Backend retry/fallback logic |
 | 13 | `reuters-assistant_backend/src/services/langgraph_mcp_orchestrator.py` (end-to-end) |
 
+## Flow-to-Learning Map
+
+See [flow_to_learning_map.txt](../../reuters-ai_assistant/reuters-assistant_backend/flow_to_learning_map.txt) — maps every step of the production orchestrator flow to specific learning files across all directories (LangGraph, MCP, CopilotKit, FastAPI, AWS). Shows exactly which lessons cover each part of the request lifecycle.
+
 ## LLM Helper
 
 `llm_helper.py` mirrors the skills repo's `shared/llm/orchestrator.py` setup:

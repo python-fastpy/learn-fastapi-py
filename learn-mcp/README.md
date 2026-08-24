@@ -204,6 +204,10 @@ User Message
 | Client manager | `reuters-assistant_backend/src/services/mcp_client_manager.py` |
 | LangGraph orchestrator | `reuters-assistant_backend/src/services/langgraph_mcp_orchestrator.py` |
 
+## Flow-to-Learning Map
+
+See [flow_to_learning_map.txt](../../reuters-ai_assistant/reuters-assistant_backend/flow_to_learning_map.txt) — maps every step of the production orchestrator flow (HTTP POST → MCP discovery → tool wrapping → workflow loading → tool gating → MCP execution → interrupts → streaming) to specific learning files. Shows where each MCP lesson fits in the end-to-end request lifecycle alongside LangGraph, CopilotKit, FastAPI, and AWS lessons.
+
 ## Deep Dive: MCPClientManager → MCPProtocolManager
 
 The backend's two core classes form an inheritance chain. This table maps each production pattern to the lesson that teaches it.

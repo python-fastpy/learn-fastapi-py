@@ -93,6 +93,12 @@ Everything else             →  06_full_backend.py
 
 ---
 
+## Flow-to-Learning Map
+
+See [flow_to_learning_map.txt](../../reuters-ai_assistant/reuters-assistant_backend/flow_to_learning_map.txt) — maps every step of the production orchestrator flow to specific learning files. Shows where CopilotKit lessons fit (endpoint setup, system prompt, SSE streaming, interrupts) alongside LangGraph, MCP, FastAPI, and AWS lessons.
+
+---
+
 ## Prerequisites
 
 - Python 3.11+

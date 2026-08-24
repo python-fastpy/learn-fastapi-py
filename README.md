@@ -116,6 +116,12 @@ dev = [
 
 ---
 
+## Flow-to-Learning Map
+
+See [flow_to_learning_map.txt](../reuters-ai_assistant/reuters-assistant_backend/flow_to_learning_map.txt) — maps every step of the production orchestrator flow (HTTP POST → MCP discovery → tool execution → interrupt → response) to the specific learning file that covers it. Covers all steps from both `flow_to_build_mcp_tools.txt` and `flow_after_build_mcp_tools.txt`.
+
+---
+
 ## What's Inside
 
 ### FastAPI (`fastapi/`)
