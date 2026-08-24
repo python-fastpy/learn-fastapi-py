@@ -32,6 +32,11 @@ For lessons 07, 08, 12 (LLM-powered): copy `.env.example` to `.env` and fill in 
                            │  LangGraph + MCP  │
                            └────────┬─────────┘
                                     │
+                           ┌────────▼─────────┐
+                           │ Wire Protocol(14) │
+                           │ Raw JSON-RPC HTTP │
+                           └────────┬─────────┘
+                                    │
                     ┌───────────────┼───────────────┐
                     │               │               │
            ┌───────▼──────┐ ┌──────▼──────┐ ┌──────▼──────┐
@@ -115,6 +120,7 @@ Lesson 13 at the top combines both into the **full production architecture**.
 | # | File | What You Learn | Key Concept | Maps To |
 |---|------|----------------|-------------|---------|
 | 13 | `13_langgraph_mcp_integration.py` | LangGraph StateGraph orchestrating MCP servers | Nodes, conditional edges, `interrupt()`, `Command(resume=...)` | langgraph_mcp_orchestrator.py |
+| 14 | `14_raw_jsonrpc_http.py` | Raw HTTP POST + JSON-RPC 2.0 wire protocol | `initialize` handshake, `tools/call` body, `_meta` injection, `structuredContent` | mcp_protocol.py (what StreamableHttpTransport does internally) |
 
 ### Helper
 
@@ -158,6 +164,10 @@ uv run python 07_llm_tool_server.py
 | **Checkpointer** | Saves graph state so interrupted flows can resume later (MemorySaver, DynamoDB) |
 | **`interrupt()`** | LangGraph function that pauses the graph and returns control to the caller |
 | **`Command(resume=...)`** | LangGraph object that resumes a paused graph with the user's response |
+| **JSON-RPC 2.0** | Wire protocol MCP uses — `{"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{...}}` |
+| **`Mcp-Session-Id`** | HTTP header the server returns after `initialize` — client sends it back on all subsequent requests |
+| **`structuredContent`** | Field in JSON-RPC response carrying interrupt status, continuation tokens — flattened to top-level by backend |
+| **`_meta` injection** | Backend adds `_meta: {session_id, continuation_token, user_response}` to tool arguments for HITL resume |
 
 ## Architecture (How It All Fits Together)
 
@@ -203,6 +213,7 @@ User Message
 | Server registry | `reuters-assistant_backend/src/services/mcp_server_registry.py` |
 | Client manager | `reuters-assistant_backend/src/services/mcp_client_manager.py` |
 | LangGraph orchestrator | `reuters-assistant_backend/src/services/langgraph_mcp_orchestrator.py` |
+| Raw JSON-RPC wire protocol | `reuters-assistant_backend/src/services/mcp_protocol.py` (what StreamableHttpTransport does) |
 
 ## Flow-to-Learning Map
 
@@ -249,6 +260,9 @@ Extends the base with full MCP protocol: resources, prompts, streaming, tenant h
 | Fast-path regex bypass | used by orchestrator | 12 | `WorkflowOrchestrator.select_workflow_by_pattern()` |
 | Full orchestration loop | used by LangGraph orchestrator | 12 | `WorkflowOrchestrator.handle_message()` |
 | LangGraph StateGraph integration | `interrupt()` + `Command(resume=...)` | 13 | `call_mcp_tool()`, `discover_all_tools()`, StateGraph nodes |
+| Raw JSON-RPC wire protocol | `StreamableHttpTransport` internals | 14 | Raw `POST /mcp` with `initialize`, `tools/list`, `tools/call` |
+| `_meta` injection for HITL resume | `call_tool_enhanced()` → `_meta` in arguments | 14 | `arguments._meta = {session_id, continuation_token, user_response}` |
+| `structuredContent` flattening | `_call_tool_result_to_dict()` | 14 | Parse `structuredContent` from JSON-RPC response |
 
 ### Reading Order for Backend Engineers
 
@@ -262,4 +276,5 @@ If you're working on `mcp_client_manager.py` or `mcp_protocol.py`, read the less
 11 (registry)   → MCPClientManager's registry + MCPProtocolManager's routing
 12 (orchestration) → how the orchestrator drives MCPProtocolManager
 13 (langgraph)  → full system: LangGraph StateGraph → MCPProtocolManager → skills
+14 (wire proto)  → raw JSON-RPC over HTTP: what StreamableHttpTransport does
 ```
