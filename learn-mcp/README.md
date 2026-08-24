@@ -203,3 +203,59 @@ User Message
 | Server registry | `reuters-assistant_backend/src/services/mcp_server_registry.py` |
 | Client manager | `reuters-assistant_backend/src/services/mcp_client_manager.py` |
 | LangGraph orchestrator | `reuters-assistant_backend/src/services/langgraph_mcp_orchestrator.py` |
+
+## Deep Dive: MCPClientManager → MCPProtocolManager
+
+The backend's two core classes form an inheritance chain. This table maps each production pattern to the lesson that teaches it.
+
+```
+MCPClientManager (mcp_client_manager.py)      ← connection / resilience layer
+       ▲
+       │ inherits
+       │
+MCPProtocolManager (mcp_protocol.py)          ← MCP protocol / application layer
+```
+
+### MCPClientManager — Lessons 05, 06, 11
+
+The base class handles connections, retries, and fault tolerance. No MCP protocol semantics.
+
+| Production Pattern | Method | Lesson | Learning Equivalent |
+|---|---|---|---|
+| HTTP/STDIO transport creation | `_create_connection()` | 05 | `StreamableHttpTransport`, `mcp.run(transport="http")` |
+| One-shot client (connect → call → disconnect) | `get_session()` | 06 | `async with Client(mcp) as client:` |
+| Retry with exponential backoff | `call_tool_with_retry()` | 06 | `call_with_retry()` — `base_delay * (2 ** attempt)` |
+| Circuit breaker (CLOSED/OPEN/HALF_OPEN) | `_circuit_breaker_*()` | 06 | Timeout handling, error state concepts |
+| Connection pool per server | `_acquire_connection`, `_release_connection` | 11 | `ServerEntry` — per-server wrapper |
+| Server registration | `register_server()` | 11 | `ServerRegistry.register()` |
+| Health checks and stats | `get_server_health()`, `get_server_stats()` | 11 | `ServerEntry.discover()` |
+
+### MCPProtocolManager — Lessons 06, 08, 10, 11, 12, 13
+
+Extends the base with full MCP protocol: resources, prompts, streaming, tenant headers, interrupts.
+
+| Production Pattern | Method | Lesson | Learning Equivalent |
+|---|---|---|---|
+| Capability discovery | `list_resources()`, `list_prompts()`, `list_tools_enhanced()` | 06 | `client.list_tools()`, `client.list_resources()`, `client.list_prompts()` |
+| Tool call with tenant headers | `call_tool_enhanced()` | 06 | One-shot client pattern with per-request context |
+| `_meta` / forwarded blocks | `call_tool_enhanced()` → `_meta` handling | 08 | `_meta.forwarded_blocks` — agent-visible vs UI-visible |
+| Human-in-the-loop interrupts | `call_tool_enhanced()` → interrupt detection | 10 | `SkillInterrupt`, `InterruptPayload`, `.block()` |
+| Tool routing across servers | used by orchestrator | 11 | `ServerRegistry.get_server_for_tool()`, `call_tools_parallel()` |
+| Multi-server capability cache | `discover_server_capabilities()` | 11 | `ServerRegistry.discover_all()` |
+| Fast-path regex bypass | used by orchestrator | 12 | `WorkflowOrchestrator.select_workflow_by_pattern()` |
+| Full orchestration loop | used by LangGraph orchestrator | 12 | `WorkflowOrchestrator.handle_message()` |
+| LangGraph StateGraph integration | `interrupt()` + `Command(resume=...)` | 13 | `call_mcp_tool()`, `discover_all_tools()`, StateGraph nodes |
+
+### Reading Order for Backend Engineers
+
+If you're working on `mcp_client_manager.py` or `mcp_protocol.py`, read the lessons in this order:
+
+```
+05 (transport)  → how servers and clients connect
+06 (client)     → MCPClientManager core: retry, timeout, one-shot pattern
+08 (_meta)      → MCPProtocolManager's forwarded-block handling
+10 (interrupts) → MCPProtocolManager's human-in-the-loop support
+11 (registry)   → MCPClientManager's registry + MCPProtocolManager's routing
+12 (orchestration) → how the orchestrator drives MCPProtocolManager
+13 (langgraph)  → full system: LangGraph StateGraph → MCPProtocolManager → skills
+```
