@@ -13,7 +13,7 @@
 #  data["key"]               data.key (dot access)
 # ══════════════════════════════════════════════════════════════════
 from enum import Enum
-from fastapi import Body, FastAPI, HTTPException, Path, Query, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Optional
 
@@ -260,6 +260,32 @@ def patch_with_pydantic(
 # curl -X PATCH "http://localhost:8000/shipment/pydantic/1" -H "Content-Type: application/json" -d '{"status":"Delivered","weight":50}'
 # curl -X PATCH "http://localhost:8000/shipment/pydantic/1?dry_run=true" -H "Content-Type: application/json" -d '{"status":"Cancelled"}'
 
+# ── 11. Pydantic Settings — env/config management ──────────────────────────────
+# pip install pydantic-settings
+from functools import lru_cache
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    app_name: str = "Shipment API"
+    debug: bool = False
+    database_url: str = "sqlite:///./default.db"   # overridden by DATABASE_URL env var
+
+@lru_cache  # cache so Settings() (which reads the env/file) only runs ONCE
+def get_settings() -> Settings:
+    return Settings()
+
+@app.get("/config-info")
+def config_info(settings: Settings = Depends(get_settings)):
+    return {"app_name": settings.app_name, "debug": settings.debug}
+# curl http://localhost:8000/config-info
+# Env vars are matched case-insensitively to field names by default:
+# DATABASE_URL=postgres://... uvicorn "2-pydantic":app --reload
+# GOTCHA: @lru_cache means settings are read once and cached for the process
+# lifetime — restart the app (not just re-request) to pick up changed env vars.
+# In tests, override with: app.dependency_overrides[get_settings] = lambda: Settings(debug=True)
+
 # ══════════════════════════════════════════════════════════════════
 #  CHEAT SHEET
 # ══════════════════════════════════════════════════════════════════
@@ -276,6 +302,7 @@ def patch_with_pydantic(
 # List[Model]          | items: List[Item]                      | Batch with per-item checks
 # response_model       | @app.get(..., response_model=M)        | Filter output fields
 # model_dump()         | data.model_dump()                      | Model -> dict
+# BaseSettings          | class S(BaseSettings): debug: bool     | Env-var/.env config, cached
 # ══════════════════════════════════════════════════════════════════
 #
 # ══════════════════════════════════════════════════════════════════

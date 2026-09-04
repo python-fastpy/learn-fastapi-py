@@ -19,6 +19,11 @@ from functools import partial
 # ║                   BEGINNER                       ║
 # ╚══════════════════════════════════════════════════╝
 
+# THINK: Python has two families of types:
+#   IMMUTABLE (int, float, str, tuple, frozenset, bytes) — safe to share, can be dict keys
+#   MUTABLE   (list, dict, set, bytearray)               — changed in place, watch for aliasing bugs
+# This distinction drives 90% of Python's "gotchas". When in doubt, ask: "does this change in place?"
+
 # ── 1. int ──────────────────────────────────────────
 a = 10; b = -5; c = 1_000_000       # underscores for readability
 d = 0b1010; e = 0o17; f = 0xFF      # binary=10, octal=15, hex=255

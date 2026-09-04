@@ -128,12 +128,15 @@ See [flow_to_learning_map.txt](../reuters-ai_assistant/reuters-assistant_backend
 
 | File | Topics |
 |------|--------|
-| `crud.py` | CRUD operations, Body/Query/Path/Header/Cookie/Form/File params, Depends, Annotated |
-| `pydantic.py` | BaseModel, Field validation, validators, nested models, response_model, model_dump |
-| `async-await.py` | async/await, gather, create_task, Semaphore, Lock, Event, Queue, shield, httpx |
-| `middleware-cors-caching.py` | CORS, GZip, custom middleware, Cache-Control, ETag, rate limiting |
-| `routes.py` | APIRouter, response types, error handling, Enum paths, catch-all routes |
-| `session.py` | Lifespan, cookie/Redis/JWT sessions, Depends chains, Request/Response |
+| `01-crud.py` | Raw-dict CRUD, Body/Query/Path/Header/Cookie/Form/File params (no Pydantic yet) |
+| `02-pydantic.py` | BaseModel, Field validation, validators, nested models, response_model, model_dump, BaseSettings (env config) |
+| `03-routes.py` | APIRouter, Annotated style, response types, Depends intro, exception handlers, BackgroundTasks |
+| `04-headers-auth-request-anatomy.py` | HTTP request/response anatomy, auth headers, API keys, OAuth2PasswordBearer, security headers |
+| `05-async-await.py` | async/await, gather, create_task, Semaphore, Lock, Event, Queue, shield, httpx |
+| `06-middleware-cors-caching.py` | CORS, GZip, custom middleware, Cache-Control, ETag, rate limiting |
+| `07-lifespan.py` | Startup/shutdown, app.state, DI over shared resources, background jobs, testing lifespan |
+| `08-session.py` | Cookie/Redis/JWT session strategies + comparison table (full lifespan deep-dive: see `07-lifespan.py`) |
+| `09-testing-with-pytest.py` | TestClient, dependency overrides, async testing (httpx+ASGITransport), validation-error assertions |
 
 ### Python (`python/`)
 
@@ -149,11 +152,35 @@ See [flow_to_learning_map.txt](../reuters-ai_assistant/reuters-assistant_backend
 | `async-await.py` | asyncio, gather, create_task, Semaphore, Lock, Event, Queue, TaskGroup |
 | `file-handling.py` | File I/O, CSV, JSON, pathlib, tempfile, shutil |
 
-### Each file has 3 sections:
+### DSA (`DSA/`)
+
+| File | Topics |
+|------|--------|
+| `01-big-o-complexity.js` | Big-O/Omega/Theta, complexity chart, nested loops, amortized analysis |
+| `02-arrays-objects-sets-maps.js` | Array, Object, Set, Map, master Big-O table, when-to-use decision tree |
+| `03-searching-algorithms.js` | Linear, binary (iterative/recursive), jump, interpolation, two-pointer, sliding window |
+| `04-sorting-algorithms.js` | Bubble, selection, insertion, quick, merge, counting sort, TimSort internals |
+| `05-stacks.js` | Stack variants (array/object/closure/WeakMap/linked-list), MinStack, balanced parens, infix-to-postfix, monotonic stack |
+| `06-queues.js` | Queue, QueueObj (O(1)), CircularQueue |
+| `07-linked-lists.js` | Singly/doubly linked list, stack/queue via linked list |
+| `08-hash-tables.js` | Hash table with chaining, collision handling |
+| `09-trees-and-tries.js` | Binary search tree (insert/search/traversals/delete), Trie |
+| `10-heaps-and-priority-queue.js` | MinHeap, PriorityQueue |
+| `11-graphs.js` | Adjacency list, BFS, DFS (recursive + iterative) |
+| `12-lru-cache.js` | LRU cache via Map |
+| `13-coding-problems-basic.js` | Reverse number/string, palindrome, fibonacci, factorial, primes, anagrams, dedupe, flatten, shuffle |
+| `14-coding-problems-intermediate.js` | Two/Three Sum, valid parentheses, Kadane's, sliding window, two-pointer, MinStack, daily temperatures |
+| `15-coding-problems-advanced.js` | Climbing stairs, coin change, house robber (DP), merge intervals, product except self |
+
+### Each `fastapi/`/`python/` file has 3 sections:
 
 1. **Content** - Runnable code examples with explanations
 2. **Cheat Sheet** - Quick-reference summary of all concepts
 3. **Detailed Reference** - Beginner examples with curl commands and arrow diagrams showing data flow
+
+`DSA/` files are plain runnable scripts (`node <file>.js`) ordered from
+beginner to advanced concepts, each with inline ASCII diagrams, Big-O
+notes, and INTERVIEW/GOTCHA callouts instead of the 3-section split above.
 
 ---
 
@@ -221,13 +248,15 @@ Any changes you push to `main` (new files, updated examples) will automatically 
 ```
 learn-fastapi-py/
 ├── fastapi/                    # FastAPI learning files
-│   ├── crud.py
-│   ├── pydantic.py
-│   ├── async-await.py
-│   ├── middleware-cors-caching.py
-│   ├── routes.py
-│   ├── session.py
-│   └── lifespan.py
+│   ├── 01-crud.py
+│   ├── 02-pydantic.py
+│   ├── 03-routes.py
+│   ├── 04-headers-auth-request-anatomy.py
+│   ├── 05-async-await.py
+│   ├── 06-middleware-cors-caching.py
+│   ├── 07-lifespan.py
+│   ├── 08-session.py
+│   └── 09-testing-with-pytest.py
 ├── python/                     # Python learning files
 │   ├── data-types.py
 │   ├── functions.py
@@ -238,6 +267,22 @@ learn-fastapi-py/
 │   ├── async-await.py
 │   ├── exception-handling.py
 │   └── file-handling.py
+├── DSA/                        # Data structures & algorithms (JS, node-runnable)
+│   ├── 01-big-o-complexity.js
+│   ├── 02-arrays-objects-sets-maps.js
+│   ├── 03-searching-algorithms.js
+│   ├── 04-sorting-algorithms.js
+│   ├── 05-stacks.js
+│   ├── 06-queues.js
+│   ├── 07-linked-lists.js
+│   ├── 08-hash-tables.js
+│   ├── 09-trees-and-tries.js
+│   ├── 10-heaps-and-priority-queue.js
+│   ├── 11-graphs.js
+│   ├── 12-lru-cache.js
+│   ├── 13-coding-problems-basic.js
+│   ├── 14-coding-problems-intermediate.js
+│   └── 15-coding-problems-advanced.js
 ├── viewer/                     # HTML viewer
 │   ├── index.html              # Main viewer page
 │   ├── build.py                # Parses .py files → data.js

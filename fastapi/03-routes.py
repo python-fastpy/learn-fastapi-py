@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import (
     FastAPI, APIRouter, HTTPException, Query, Path, Body,
     Header, Cookie, Form, File, UploadFile, Request, Response, Depends, status,
+    BackgroundTasks,
 )
 from fastapi.responses import (
     JSONResponse, HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse,
@@ -295,6 +296,24 @@ def sync_route(): return {"type": "sync", "runs_in": "threadpool"}  # no await n
 async def multi_method(request: Request):
     return {"action": "reading" if request.method == "GET" else "creating"}
 
+# ── 13. BackgroundTasks — run AFTER the response is sent ──────────────────────────────
+# Unlike asyncio.create_task() (see 05-async-await.py), BackgroundTasks is a
+# FastAPI-native way to schedule work that runs once the response has already
+# gone back to the client — the caller never waits for it.
+def send_confirmation_email(email: str, shipment_id: int):
+    print(f"[background] emailing {email} about shipment {shipment_id}")  # simulate I/O
+
+@app.post("/shipments-demo/{shipment_id}/notify")
+async def notify_shipment(shipment_id: int, email: str, background_tasks: BackgroundTasks):
+    background_tasks.add_task(send_confirmation_email, email, shipment_id)
+    return {"status": "accepted", "id": shipment_id}  # client gets this immediately
+# curl -X POST "http://localhost:8000/shipments-demo/1/notify?email=a@b.com"
+# GOTCHA: BackgroundTasks still run in the SAME process/request lifecycle —
+# they delay the server from being fully "free" and are lost if the process
+# crashes before running. For durable/critical work, use a real task queue
+# (Celery, arq, RQ) instead — BackgroundTasks is for cheap, best-effort work
+# (sending a notification, writing a log) that shouldn't block the response.
+
 # ══════════════════════════════════════════════════════════════════
 # CHEAT SHEET
 # ══════════════════════════════════════════════════════════════════
@@ -317,6 +336,9 @@ async def multi_method(request: Request):
 # Redirect    | RedirectResponse(url=)  | ASYNC vs SYNC
 # Streaming   | StreamingResponse(gen)  | async def = I/O (await), event loop
 # Plain text  | response_class=Plain... | def = CPU-bound, auto-threadpool
+#
+# Background  | BackgroundTasks         | tasks.add_task(fn, *args) — runs
+#              |                          | AFTER response is sent to client
 # ══════════════════════════════════════════════════════════════════
 #
 # ══════════════════════════════════════════════════════════════════
