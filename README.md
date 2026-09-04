@@ -172,6 +172,32 @@ See [flow_to_learning_map.txt](../reuters-ai_assistant/reuters-assistant_backend
 | `14-coding-problems-intermediate.js` | Two/Three Sum, valid parentheses, Kadane's, sliding window, two-pointer, MinStack, daily temperatures |
 | `15-coding-problems-advanced.js` | Climbing stairs, coin change, house robber (DP), merge intervals, product except self |
 
+### System Design (`system-design/`)
+
+Plain Markdown, ELI5 analogy first then real technical depth (same
+non-code style as `github/*.md`) — not wired into the HTML viewer.
+
+| File | Topics |
+|------|--------|
+| `01-what-is-system-design.md` | Functional vs non-functional requirements, back-of-envelope estimation, interview flow |
+| `02-scalability.md` | Vertical vs horizontal scaling, statelessness |
+| `03-load-balancing.md` | Routing algorithms, L4 vs L7, health checks |
+| `04-caching.md` | Cache layers, cache-aside/write-through/write-back, invalidation, LRU eviction |
+| `05-databases-sql-vs-nosql.md` | ACID, key-value/document/column/graph stores, when to use which |
+| `06-database-scaling.md` | Replication (leader/follower), sharding, indexing |
+| `07-cap-theorem-and-consistency.md` | CAP theorem, strong vs eventual consistency, read-your-writes |
+| `08-message-queues-and-async.md` | Pub-sub vs point-to-point, delivery guarantees, event-driven design |
+| `09-microservices-vs-monolith.md` | Trade-offs, API Gateway responsibilities |
+| `10-rate-limiting.md` | Token/leaky bucket, fixed vs sliding window, where state lives |
+| `11-cdn-and-proxies.md` | CDN edge caching, forward vs reverse proxy, geo-routing |
+| `12-consistent-hashing.md` | The ring, virtual nodes, minimal remapping on scale change |
+| `13-availability-and-failover.md` | SLA/SLO/SLI, nines, active-passive vs active-active, circuit breakers |
+| `14-monitoring-and-observability.md` | Metrics/logs/traces, alerting, health checks |
+| `15-case-study-url-shortener.md` | End-to-end: ID generation, read-path caching |
+| `16-case-study-rate-limiter.md` | End-to-end: distributed rate limiter, fail-open vs fail-closed |
+| `17-case-study-chat-app.md` | End-to-end: WebSockets, delivery/ordering, presence |
+| `18-case-study-news-feed.md` | End-to-end: fan-out-on-write vs fan-out-on-read, celebrity problem |
+
 ### Each `fastapi/`/`python/` file has 3 sections:
 
 1. **Content** - Runnable code examples with explanations
@@ -283,6 +309,25 @@ learn-fastapi-py/
 │   ├── 13-coding-problems-basic.js
 │   ├── 14-coding-problems-intermediate.js
 │   └── 15-coding-problems-advanced.js
+├── system-design/               # System design (Markdown, ELI5 + technical depth)
+│   ├── 01-what-is-system-design.md
+│   ├── 02-scalability.md
+│   ├── 03-load-balancing.md
+│   ├── 04-caching.md
+│   ├── 05-databases-sql-vs-nosql.md
+│   ├── 06-database-scaling.md
+│   ├── 07-cap-theorem-and-consistency.md
+│   ├── 08-message-queues-and-async.md
+│   ├── 09-microservices-vs-monolith.md
+│   ├── 10-rate-limiting.md
+│   ├── 11-cdn-and-proxies.md
+│   ├── 12-consistent-hashing.md
+│   ├── 13-availability-and-failover.md
+│   ├── 14-monitoring-and-observability.md
+│   ├── 15-case-study-url-shortener.md
+│   ├── 16-case-study-rate-limiter.md
+│   ├── 17-case-study-chat-app.md
+│   └── 18-case-study-news-feed.md
 ├── viewer/                     # HTML viewer
 │   ├── index.html              # Main viewer page
 │   ├── build.py                # Parses .py files → data.js
