@@ -388,7 +388,7 @@ let p = 1;
 
 // FIX: Use a different name
 function myFunc(q = p + 1) { return q; }
-myFunc(); // 2  (uses outer `p` since `q` doesn't shadow it)
+console.log(myFunc()); // 2  (uses outer `p` since `q` doesn't shadow it)
 
 // GOTCHA: var does not respect block scope
 for (var i = 0; i < 5; i++) { /* ... */ }
@@ -565,8 +565,8 @@ function multiply(a) {
 }
 
 const double = multiply(2);
-double(3); // 6
-double(5); // 10
+console.log(double(3)); // 6
+console.log(double(5)); // 10
 
 // Generalized curry helper [ADVANCED]:
 function curry(fn) {
@@ -576,9 +576,9 @@ function curry(fn) {
   };
 }
 const add = curry((a, b, c) => a + b + c);
-add(1)(2)(3);    // 6
-add(1, 2)(3);    // 6
-add(1)(2, 3);    // 6
+console.log(add(1)(2)(3));    // 6
+console.log(add(1, 2)(3));    // 6
+console.log(add(1)(2, 3));    // 6
 
 
 // ============================================================
@@ -599,9 +599,9 @@ function createCounter(initial = 0) {
 }
 
 const myCounter = createCounter(10);
-myCounter.increment(); // 11
-myCounter.increment(); // 12
-myCounter.getCount();  // 12
+console.log(myCounter.increment()); // 11
+console.log(myCounter.increment()); // 12
+console.log(myCounter.getCount());  // 12
 // myCounter.count;    // undefined -- cannot access directly!
 
 
@@ -620,9 +620,9 @@ function createPerson(name, age) {
 }
 
 const alice = createPerson("Alice", 30);
-alice.greet();    // "Hi, I'm Alice, 30 years old."
+console.log(alice.greet());    // "Hi, I'm Alice, 30 years old."
 alice.birthday();
-alice.getAge();   // 31
+console.log(alice.getAge());   // 31
 
 
 // ============================================================
@@ -632,15 +632,23 @@ alice.getAge();   // 31
 // Before ES6 block scoping, IIFEs were the primary way to
 // avoid polluting the global namespace.
 
-const module = (function() {
+// NOTE: named `myModule`, NOT `module` -- Node wraps every CommonJS file
+// in `function(exports, require, module, __filename, __dirname) {...}`,
+// so `const module = ...` collides with that wrapper's own `module`
+// parameter and throws `SyntaxError: Identifier 'module' has already
+// been declared`. This is itself a real-world scope gotcha: your
+// top-level "global" scope in a Node file is NOT truly global -- it's
+// function-scoped inside that wrapper, and a handful of names
+// (module, exports, require, __filename, __dirname) are already taken.
+const myModule = (function() {
   let privateVar = 0;
   return {
     increment() { return ++privateVar; },
     getVal()    { return privateVar; }
   };
 })();
-module.increment(); // 1
-module.increment(); // 2
+console.log(myModule.increment()); // 1
+console.log(myModule.increment()); // 2
 // privateVar is inaccessible from outside
 
 // IIFE also used as pre-ES6 block scope alternative:
@@ -713,8 +721,8 @@ const UserModule = (function() {
   };
 })();
 
-UserModule.addUser("Alice");   // { id: 1, name: "Alice" }
-UserModule.getUserCount();     // 1
+console.log(UserModule.addUser("Alice"));   // { id: 1, name: "Alice" }
+console.log(UserModule.getUserCount());     // 1
 // UserModule.users;           // undefined (private!)
 // UserModule.validateName;    // undefined (private!)
 
@@ -740,8 +748,8 @@ function memoize(fn) {
 }
 
 const expensiveAdd = memoize((a, b) => a + b);
-expensiveAdd(1, 2); // "Computing" -> 3
-expensiveAdd(1, 2); // "Cache hit"  -> 3
+console.log(expensiveAdd(1, 2)); // logs "Computing", then 3
+console.log(expensiveAdd(1, 2)); // logs "Cache hit",  then 3
 
 
 // ============================================================
@@ -760,8 +768,8 @@ function greet(greeting, name) {
 }
 
 const sayHello = partial(greet, "Hello");
-sayHello("Alice"); // "Hello, Alice!"
-sayHello("Bob");   // "Hello, Bob!"
+console.log(sayHello("Alice")); // "Hello, Alice!"
+console.log(sayHello("Bob"));   // "Hello, Bob!"
 
 // Currying: f(a)(b)(c) -- one arg at a time
 // Partial:  f(a, b) --> g(c) -- fix some args, pass rest later
@@ -796,9 +804,10 @@ sayHello("Bob");   // "Hello, Bob!"
 // BAD: Unnecessary closure over large data
 function processData() {
   const hugeArray = new Array(1000000).fill('data');
-  const result = hugeArray.length;
   // Return closure that still holds hugeArray reference
-  return function() { return hugeArray.length; }; // leak!
+  return function() { return hugeArray.length; }; // leak! hugeArray itself
+                                                    // stays alive as long as
+                                                    // this closure does
 }
 
 // GOOD: Extract what you need, let the rest be GC'd
@@ -806,8 +815,15 @@ function processDataFixed() {
   const hugeArray = new Array(1000000).fill('data');
   const length = hugeArray.length; // extract the value
   // hugeArray is no longer referenced in the closure
-  return function() { return length; }; // clean
+  return function() { return length; }; // clean -- only a number is retained
 }
+
+// Both produce the SAME functional result -- the difference is invisible
+// in the return value and only shows up in a memory profiler:
+const getLeaky = processData();
+const getClean = processDataFixed();
+console.log(getLeaky());  // 1000000 (but hugeArray, ~1M strings, stays in memory)
+console.log(getClean());  // 1000000 (hugeArray was already eligible for GC)
 
 // CLEANUP PATTERN: Remove references when done
 // const handler = () => { /* uses closedVar */ };
@@ -865,4 +881,4 @@ function shared() {
 }
 const s = shared();
 s.inc(); s.inc(); s.dec();
-s.get(); // 1 (all three share the same `x`)
+console.log(s.get()); // 1 (all three share the same `x`)

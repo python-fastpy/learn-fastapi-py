@@ -3,6 +3,12 @@ __pycache__/
 *.pyo
 .env
 .venv/
+.pytest_cache/
+
+# project-book-store: generated at runtime / build artifacts
+books.json
+function.zip
+build/
 *.egg-info/
 dist/
 build/

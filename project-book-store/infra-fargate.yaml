@@ -1,0 +1,362 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Book Store API - container path. Creates a DynamoDB table, an ECS
+  Fargate service running the Docker image, an Application Load Balancer
+  in front of it, security groups, and least-privilege IAM roles.
+  Walkthrough: docs/05-deploy-fargate.md
+
+# ==================================================================
+# WHAT THIS BUILDS
+# ==================================================================
+#
+#   Internet
+#      |
+#      v
+#   ALB (Application Load Balancer)     public, port 80
+#      |   security group: allow :80 from anywhere
+#      |   health check: GET /health every 30s
+#      v
+#   Target Group  --> ECS Fargate tasks (2 copies for redundancy)
+#      |                  security group: allow :8000 FROM THE ALB ONLY
+#      |                  image: pulled from ECR
+#      |                  env: STORAGE=dynamodb, TABLE_NAME=...
+#      v
+#   DynamoDB: book-store-books          PK: book_id (String)
+#
+#   Logs -> CloudWatch log group (14-day retention)
+#
+# PREREQUISITE: the Docker image must already be in ECR. This template
+# consumes an image, it does not build one. docs/05 covers the build+push.
+#
+# WHY NO VPC HERE? Building a production VPC (subnets across AZs, route
+# tables, IGW, NAT gateway) is a big template on its own, and a NAT
+# gateway costs ~$32/month even when idle. Instead we take your existing
+# (default) VPC and subnets as PARAMETERS. Real production would use a
+# dedicated VPC stack and pass its outputs in the same way.
+# ==================================================================
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: book-store
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: >
+      Your VPC (the default one is fine). Using the typed
+      AWS::EC2::VPC::Id gives you a dropdown in the console and
+      validates the id exists before the stack starts building.
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >
+      At least TWO subnets in DIFFERENT availability zones. An ALB
+      requires two AZs - this is not optional, and a one-subnet list is
+      the most common failure when people first deploy this.
+
+  ContainerImage:
+    Type: String
+    Description: >
+      Full ECR image URI including tag, e.g.
+      123456789012.dkr.ecr.us-east-1.amazonaws.com/book-store-api:v1
+      Use an explicit tag, NOT :latest - see the gotcha in docs/05.
+
+  DesiredCount:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    Description: >
+      How many container copies to run. 2 means one can die (or be
+      replaced during a deploy) with zero downtime. 1 is cheaper but
+      every restart is a brief outage.
+
+  TaskCpu:
+    Type: String
+    Default: '256'
+    AllowedValues: ['256', '512', '1024', '2048']
+    Description: CPU units. 256 = 0.25 vCPU. Fargate only allows fixed pairs.
+
+  TaskMemoryMB:
+    Type: String
+    Default: '512'
+    Description: >
+      Must be a VALID PAIR with TaskCpu or the task definition is
+      rejected: 256 CPU allows 512/1024/2048 MB only.
+
+Resources:
+
+  # -- Storage (identical to the Lambda path) ----------------------
+  BooksTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete   # use Retain for real data
+    Properties:
+      TableName: !Sub '${ProjectName}-books-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: book_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: book_id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # -- Logs --------------------------------------------------------
+  TaskLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${ProjectName}-${Environment}'
+      RetentionInDays: 14
+
+  # -- Networking: two security groups, chained --------------------
+  # This pair is the whole security model. Read them together.
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'Public HTTP into the ${ProjectName} ALB'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0    # public - this is the front door
+          Description: HTTP from anywhere
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-alb-sg-${Environment}'
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'Allow only the ALB to reach ${ProjectName} tasks'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          # THE IMPORTANT LINE: source is the ALB's security group, not
+          # a CIDR. Containers are unreachable from the internet even
+          # though they sit in public subnets - traffic must come
+          # through the load balancer. Using 0.0.0.0/0 here instead
+          # would expose the app directly and bypass the ALB.
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+          Description: Port 8000 from the ALB only
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-task-sg-${Environment}'
+
+  # -- Load balancer -----------------------------------------------
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${ProjectName}-alb-${Environment}'
+      Type: application
+      Scheme: internet-facing
+      Subnets: !Ref SubnetIds
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${ProjectName}-tg-${Environment}'
+      Port: 8000
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: ip        # REQUIRED for Fargate (awsvpc networking).
+                             # 'instance' is for EC2-backed ECS and will
+                             # fail to register Fargate tasks.
+      # -- Health checks: how the ALB decides a task is alive ------
+      HealthCheckEnabled: true
+      HealthCheckPath: /health      # main.py's cheap, storage-free probe
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2      # 2 passes  -> start sending traffic
+      UnhealthyThresholdCount: 3    # 3 fails   -> stop, and ECS replaces it
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        # How long the ALB waits for in-flight requests to finish before
+        # killing a task being removed. Default is 300s, which makes
+        # every deploy feel enormously slow. 30s is plenty for this API.
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      # PLAIN HTTP on purpose, to keep this template free of an ACM
+      # certificate + DNS validation dependency. For anything real,
+      # add an HTTPS listener on 443 with an ACM cert and redirect
+      # 80 -> 443.
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # -- IAM: TWO roles, and the difference matters ------------------
+
+  # Role 1: used by the ECS AGENT (not your code) to pull the image
+  # from ECR and write the log stream. Needed even if your app makes
+  # zero AWS calls.
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-exec-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # AWS-managed policy that grants exactly ECR pull + logs write.
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # Role 2: used by YOUR APPLICATION CODE at runtime. This is what
+  # boto3 inside repo_dynamo.py assumes. Mixing these two up is the
+  # classic ECS mistake: image pulls fine, then every DynamoDB call
+  # returns AccessDenied (or vice versa).
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-task-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AccessBooksTableOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource: !GetAtt BooksTable.Arn   # least privilege
+
+  # -- Compute -----------------------------------------------------
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${ProjectName}-cluster-${Environment}'
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled     # per-container CPU/memory metrics; small cost
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${ProjectName}-task-${Environment}'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc          # mandatory for Fargate
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemoryMB
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn   # agent: pull + log
+      TaskRoleArn: !GetAtt TaskRole.Arn             # your code: DynamoDB
+      ContainerDefinitions:
+        - Name: api
+          Image: !Ref ContainerImage
+          Essential: true          # if this container dies, restart the task
+          PortMappings:
+            - ContainerPort: 8000  # must match the Dockerfile's uvicorn port
+              Protocol: tcp
+          Environment:
+            - Name: STORAGE
+              Value: dynamodb      # the stage 1 -> stage 2 switch
+            - Name: TABLE_NAME
+              Value: !Ref BooksTable
+            - Name: AWS_REGION
+              # Unlike Lambda, ECS does NOT inject this and it is not
+              # reserved here, so we must set it explicitly for boto3.
+              Value: !Ref 'AWS::Region'
+            - Name: ENV
+              Value: !Ref Environment
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref TaskLogGroup
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: api
+          # Container-level health check, separate from the ALB's.
+          # ECS uses this to restart a wedged container even if the ALB
+          # hasn't noticed yet.
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 30    # grace period while the app boots
+
+  Service:
+    Type: AWS::ECS::Service
+    # Without this the service may be created before the ALB listener
+    # is ready, and registration fails with an opaque error.
+    DependsOn: Listener
+    Properties:
+      ServiceName: !Sub '${ProjectName}-service-${Environment}'
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref SubnetIds
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+          # Public IP is required when using PUBLIC subnets with no NAT
+          # gateway - without it the task cannot reach ECR to pull the
+          # image and will fail with "CannotPullContainerError".
+          # In private subnets you would set DISABLED and add a NAT
+          # gateway or VPC endpoints instead.
+          AssignPublicIp: ENABLED
+      LoadBalancers:
+        - ContainerName: api
+          ContainerPort: 8000
+          TargetGroupArn: !Ref TargetGroup
+      # Rolling deploy: keep serving traffic while replacing tasks.
+      # 100/200 means "never drop below the desired count, and allow up
+      # to double temporarily" -> zero-downtime deploys.
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      HealthCheckGracePeriodSeconds: 60   # don't kill tasks while booting
+
+Outputs:
+  ApiUrl:
+    Description: Base URL of the load balancer
+    Value: !Sub 'http://${LoadBalancer.DNSName}'
+  HealthCheckUrl:
+    Description: First thing to curl after deploying
+    Value: !Sub 'http://${LoadBalancer.DNSName}/health'
+  SwaggerDocsUrl:
+    Value: !Sub 'http://${LoadBalancer.DNSName}/docs'
+  TableName:
+    Value: !Ref BooksTable
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt Service.Name

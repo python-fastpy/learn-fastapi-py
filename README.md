@@ -138,6 +138,30 @@ See [flow_to_learning_map.txt](../reuters-ai_assistant/reuters-assistant_backend
 | `08-session.py` | Cookie/Redis/JWT session strategies + comparison table (full lifespan deep-dive: see `07-lifespan.py`) |
 | `09-testing-with-pytest.py` | TestClient, dependency overrides, async testing (httpx+ASGITransport), validation-error assertions |
 
+### Book Store Project (`project-book-store/`)
+
+A self-contained, **runnable** end-to-end project: build a FastAPI CRUD
+API against a local JSON file, migrate it to DynamoDB, then deploy to
+AWS via CloudFormation (both Lambda and ECS Fargate paths). Start at
+[`project-book-store/README.md`](project-book-store/README.md).
+
+| File | Topics |
+|------|--------|
+| `repository.py` | The storage interface (`BookRepository` protocol) that makes the migration a config change |
+| `repo_json.py` | Stage 1 — JSON-file persistence, atomic writes, why it's dev-only |
+| `repo_dynamo.py` | Stage 2 — boto3 DynamoDB, `Decimal` conversion, `ConditionExpression`, Scan pagination |
+| `main.py` / `models.py` | FastAPI endpoints + Pydantic models — identical across both stages |
+| `config.py` | `BaseSettings` env config; the `STORAGE=json\|dynamodb` switch |
+| `test_books.py` / `test_repo_dynamo.py` | 23 tests — API behaviour via `dependency_overrides`, plus `Decimal` conversion and interface parity. No AWS needed |
+| `infra-lambda.yaml` | CloudFormation: DynamoDB + Lambda (Mangum) + API Gateway + least-privilege IAM |
+| `infra-fargate.yaml` | CloudFormation: DynamoDB + ECS Fargate + ALB + chained security groups + IAM |
+| `docs/01-engineering-flow.md` | The standard flow: requirements → local → abstract → config → test → IaC → deploy → observe |
+| `docs/02-stage1-json-file.md` | Walkthrough: working CRUD API in ~2 minutes |
+| `docs/03-stage2-dynamodb.md` | Walkthrough: migrate to DynamoDB (DynamoDB Local, then real AWS) |
+| `docs/04-deploy-lambda.md` | Walkthrough: serverless deploy, packaging gotchas, cold starts |
+| `docs/05-deploy-fargate.md` | Walkthrough: Docker → ECR → ECS, two IAM roles, rolling deploys |
+| `docs/06-operations-and-teardown.md` | Logs, alarms, rollback, cost comparison, CI/CD outline, full teardown |
+
 ### Python (`python/`)
 
 | File | Topics |
@@ -283,6 +307,23 @@ learn-fastapi-py/
 │   ├── 07-lifespan.py
 │   ├── 08-session.py
 │   └── 09-testing-with-pytest.py
+├── project-book-store/         # Runnable end-to-end project (JSON -> DynamoDB -> AWS)
+│   ├── README.md               # START HERE for this project
+│   ├── pyproject.toml
+│   ├── Dockerfile              # for the Fargate deploy path
+│   ├── .env.example
+│   ├── models.py               # never changes across stages
+│   ├── main.py                 # never changes across stages
+│   ├── config.py               # the STORAGE=json|dynamodb switch
+│   ├── repository.py           # the storage interface
+│   ├── repo_json.py            # stage 1
+│   ├── repo_dynamo.py          # stage 2
+│   ├── lambda_handler.py       # Mangum adapter
+│   ├── test_books.py           # 14 tests, no AWS required
+│   ├── test_repo_dynamo.py     # 9 tests, no AWS calls made
+│   ├── infra-lambda.yaml       # CloudFormation: Lambda path
+│   ├── infra-fargate.yaml      # CloudFormation: Fargate path
+│   └── docs/                   # 6 numbered walkthroughs
 ├── python/                     # Python learning files
 │   ├── data-types.py
 │   ├── functions.py

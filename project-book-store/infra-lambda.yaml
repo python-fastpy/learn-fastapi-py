@@ -1,0 +1,279 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Book Store API - serverless path. Creates a DynamoDB table, a Lambda
+  function running the FastAPI app via Mangum, an HTTP API Gateway in
+  front of it, and a least-privilege IAM role. Walkthrough:
+  docs/04-deploy-lambda.md
+
+# ==================================================================
+# WHAT THIS BUILDS
+# ==================================================================
+#
+#   Internet
+#      |
+#      v
+#   API Gateway (HTTP API)          <- public HTTPS URL
+#      |  $default route: ANY /{proxy+}
+#      |  (sends EVERY path+method to one Lambda; FastAPI does the
+#      |   routing internally, so adding endpoints needs no infra change)
+#      v
+#   Lambda: book-store-api          <- lambda_handler.handler (Mangum)
+#      |  env: STORAGE=dynamodb, TABLE_NAME=...
+#      |  assumes ExecutionRole
+#      v
+#   DynamoDB: book-store-books      <- PK: book_id (String)
+#
+#   Logs -> CloudWatch log group (14-day retention)
+#
+# WHY ONE TEMPLATE? Everything here shares a lifecycle: the Lambda is
+# useless without the table, and the API is useless without the Lambda.
+# Resources that live and die together belong in one stack - that's what
+# makes `delete-stack` a clean, complete teardown.
+# ==================================================================
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: book-store
+    Description: Prefix for all resource names, so nothing is hardcoded.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: >
+      Lets you deploy the SAME template multiple times side by side
+      (separate stacks, separate tables) instead of copy-pasting it.
+
+  CodeS3Bucket:
+    Type: String
+    Description: >
+      S3 bucket holding the deployment zip. Lambda cannot be given code
+      inline when it has dependencies (fastapi, mangum, boto3), so we
+      upload a zip to S3 first. See docs/04 step 3.
+
+  CodeS3Key:
+    Type: String
+    Default: book-store/function.zip
+    Description: Path to the zip inside CodeS3Bucket.
+
+  LambdaMemoryMB:
+    Type: Number
+    Default: 512
+    MinValue: 128
+    MaxValue: 3008
+    Description: >
+      In Lambda, CPU scales WITH memory - they are not separate dials.
+      512MB is a good default for FastAPI: 128MB makes cold starts
+      noticeably slower because you also get proportionally less CPU to
+      run imports.
+
+Resources:
+
+  # -- Storage -----------------------------------------------------
+  BooksTable:
+    Type: AWS::DynamoDB::Table
+    # Retain on stack delete would orphan the table and keep costing
+    # money; for a tutorial we let it be deleted with the stack.
+    # For PROD data you almost always want DeletionPolicy: Retain.
+    DeletionPolicy: Delete
+    Properties:
+      TableName: !Sub '${ProjectName}-books-${Environment}'
+      # PAY_PER_REQUEST = no capacity planning, pay only for what you
+      # use. For spiky or unknown traffic this is both cheaper and
+      # simpler than PROVISIONED. An idle table costs ~$0.
+      BillingMode: PAY_PER_REQUEST
+      # Only key attributes are declared. DynamoDB is schemaless for
+      # everything else - title/author/price/genre are never declared
+      # anywhere, they just get written.
+      AttributeDefinitions:
+        - AttributeName: book_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: book_id
+          KeyType: HASH        # HASH = partition key. No sort key needed:
+                                # every access is "get this exact book id".
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true   # 35-day restore window
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # -- Logs --------------------------------------------------------
+  # Declared EXPLICITLY rather than letting Lambda auto-create it.
+  # Auto-created log groups default to "never expire", which quietly
+  # bills you forever. Declaring it also means the log group is deleted
+  # with the stack instead of being left behind.
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectName}-api-${Environment}'
+      RetentionInDays: 14
+
+  # -- Permissions -------------------------------------------------
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-lambda-role-${Environment}'
+      # The trust policy answers "WHO may assume this role?" It is a
+      # separate question from "what may it do" (the policies below).
+      # Getting this wrong is the #1 cause of "cannot be assumed" errors.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com   # only Lambda, nothing else
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WriteOwnLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                # Scoped to THIS function's log group, not all logs.
+                Resource: !Sub '${FunctionLogGroup.Arn}:*'
+        - PolicyName: AccessBooksTableOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                # Exactly the six operations repo_dynamo.py calls.
+                # NOT dynamodb:* - if this function were ever
+                # compromised, it still could not delete the table or
+                # touch any other table in the account.
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                # LEAST PRIVILEGE: one specific table ARN, never "*".
+                Resource: !GetAtt BooksTable.Arn
+
+  # -- Compute -----------------------------------------------------
+  ApiFunction:
+    Type: AWS::Lambda::Function
+    # Without this, CloudFormation may create the function before the
+    # log group exists, and Lambda would auto-create a no-expiry one,
+    # defeating our RetentionInDays above.
+    DependsOn: FunctionLogGroup
+    Properties:
+      FunctionName: !Sub '${ProjectName}-api-${Environment}'
+      Runtime: python3.11
+      # "<module>.<function>" - lambda_handler.py, variable `handler`.
+      # This is the single most commonly mistyped field in Lambda.
+      Handler: lambda_handler.handler
+      Role: !GetAtt ExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref CodeS3Bucket
+        S3Key: !Ref CodeS3Key
+      MemorySize: !Ref LambdaMemoryMB
+      # 30s matches API Gateway's own hard 30s limit - a longer Lambda
+      # timeout would be pointless because the client already gave up.
+      Timeout: 30
+      Environment:
+        Variables:
+          # THIS is the stage 1 -> stage 2 switch. Same code as local,
+          # different backend, decided entirely here.
+          STORAGE: dynamodb
+          TABLE_NAME: !Ref BooksTable
+          ENV: !Ref Environment
+          # NOTE: AWS_REGION is deliberately NOT set here. It is a
+          # RESERVED Lambda environment variable - trying to set it
+          # fails the deployment with "Lambda was unable to configure
+          # your environment variables because the environment
+          # variables you have provided are reserved keys".
+          # Lambda injects AWS_REGION automatically, and config.py's
+          # `aws_region` field reads exactly that name, so the region
+          # is already correct with no work from us.
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # -- Public HTTP endpoint ----------------------------------------
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${ProjectName}-http-api-${Environment}'
+      # HTTP API (v2), not REST API (v1): ~70% cheaper, lower latency,
+      # simpler. Choose REST API only if you need its extras (API keys
+      # with usage plans, request/response transformation, WAF on the
+      # stage, private endpoints).
+      ProtocolType: HTTP
+      CorsConfiguration:
+        # Wide open so `curl` and Swagger UI work from anywhere while
+        # learning. TIGHTEN THIS for a real app: list your actual
+        # front-end origins instead of '*'.
+        AllowOrigins: ['*']
+        AllowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+        AllowHeaders: ['content-type', 'authorization']
+
+  ApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      # AWS_PROXY = hand the whole request to Lambda untouched and use
+      # whatever it returns as the response. The alternative (non-proxy)
+      # means writing mapping templates by hand - avoid.
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ApiFunction.Arn
+      PayloadFormatVersion: '2.0'
+      IntegrationMethod: POST   # how API GW calls Lambda internally,
+                                 # unrelated to the caller's HTTP method
+
+  ApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      # '$default' catches EVERY method and path. FastAPI then routes
+      # internally, so /books, /books/{id}, /health, /docs all work and
+      # adding a new endpoint requires no infrastructure change at all.
+      RouteKey: $default
+      Target: !Sub 'integrations/${ApiIntegration}'
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default   # $default = no path prefix in the URL
+      AutoDeploy: true      # publish changes immediately; without this
+                            # you must trigger a deployment manually
+
+  # Resource-based permission: lets API Gateway invoke the function.
+  # The ExecutionRole says what the function MAY DO; this says who may
+  # CALL it. Forgetting this yields a 500 with "Internal Server Error"
+  # and an AccessDenied buried in the API Gateway logs.
+  InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      # Restrict to THIS api, so no other API in the account can invoke it.
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
+
+Outputs:
+  # Outputs are how you find what you just built without hunting through
+  # the console. `aws cloudformation describe-stacks` prints these.
+  ApiUrl:
+    Description: Base URL - curl this to verify the deploy
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+  HealthCheckUrl:
+    Description: First thing to check after deploying
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/health'
+  SwaggerDocsUrl:
+    Description: Interactive API docs (FastAPI serves these for free)
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/docs'
+  TableName:
+    Description: DynamoDB table backing the API
+    Value: !Ref BooksTable
+  FunctionName:
+    Description: For `aws logs tail /aws/lambda/<this>`
+    Value: !Ref ApiFunction

@@ -1,0 +1,29 @@
+[project]
+name = "book-store-api"
+version = "1.0.0"
+description = "FastAPI CRUD: JSON file -> DynamoDB -> deployed on AWS"
+requires-python = ">=3.11"
+
+# Pinned versions on purpose. An unpinned dependency means the build you
+# test locally and the build that lands in Lambda can differ — one of the
+# most annoying classes of "works on my machine" bug.
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn==0.30.6",
+    "pydantic==2.9.2",
+    "pydantic-settings==2.5.2",   # reads config from env / .env (config.py)
+    "boto3==1.35.36",             # AWS SDK — only used by repo_dynamo.py
+    "mangum==0.19.0",             # ASGI -> Lambda adapter (lambda_handler.py)
+]
+
+[dependency-groups]
+# Dev-only: never shipped to Lambda or into the container image, which
+# keeps the deployment package smaller and the attack surface narrower.
+dev = [
+    "pytest==8.3.3",
+    "httpx==0.27.2",              # required by fastapi.testclient
+]
+
+[tool.pytest.ini_options]
+# Lets `pytest` find main.py, config.py etc. without an installed package.
+pythonpath = ["."]

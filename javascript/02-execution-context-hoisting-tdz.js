@@ -111,6 +111,80 @@
 //  | - Expressions are evaluated                        |
 //  | - let/const exit TDZ at their declaration line      |
 //  +-----------------------------------------------------+
+//
+// ------------------------------------------------------------------
+// ONE EXAMPLE THAT HITS EVERY CASE ABOVE
+// ------------------------------------------------------------------
+// Every bullet point in both boxes is a distinct rule. Rather than
+// isolate them, this single function is deliberately built to trigger
+// ALL of them at once, so you can see how they interact in one place.
+// Each deep-dive section is cited so you can jump to the full treatment.
+
+function demo(x, y = 10) {                 // case 1: function arguments
+  console.log(add(2, 3));                  // case 2: fully-hoisted function decl -> callable NOW
+  console.log(counted);                    // case 3: var hoisted -> undefined (not yet a ReferenceError)
+  // console.log(label);                   // case 4: let hoisted but TDZ -> ReferenceError if uncommented
+  // console.log(Thing);                   // case 5: class hoisted but TDZ -> ReferenceError if uncommented
+  // console.log(makeThing());             // case 6: function EXPRESSION treated as var -> undefined -> TypeError
+
+  var counted = x + y;                     // "variables are assigned their values" (execution phase)
+  let label = "result";                    // "let/const exit TDZ at their declaration line"
+  class Thing {}                           // class also exits TDZ here
+  var makeThing = function () {            // function expression: the ASSIGNMENT happens here, not hoisting
+    return new Thing();
+  };
+
+  function add(a, b) { return a + b; }     // function declaration (the whole body was hoisted already)
+
+  return counted;                          // "expressions are evaluated"
+}
+
+console.log(demo(5));                      // "functions are called (creating new ECs)"
+
+// CREATION PHASE of demo(5) -- every row maps to a case above:
+// +--------------------------------------------------------------------+
+// | FEC for demo                                                        |
+// | Variable Object (var-like bindings):                                |
+// |   arguments: { 0: 5, length: 1 }   <- case 1: function arguments    |
+// |   x: 5                             <- case 1: function arguments    |
+// |   y: 10 (default applied during    <- case 1: function arguments    |
+// |        parameter binding)                                          |
+// |   add: function add(a,b){...}      <- case 2: function decl,        |
+// |                                        HOISTED FULLY (body + all)   |
+// |   counted: undefined               <- case 3: var hoisted,          |
+// |                                        initialized to undefined     |
+// |   makeThing: undefined             <- case 6: function EXPRESSION   |
+// |                                        treated exactly like var     |
+// | Lexical Environment (block-scoped bindings):                        |
+// |   label: <uninitialized>           <- case 4: let hoisted, TDZ      |
+// |   Thing: <uninitialized>           <- case 5: class hoisted, TDZ    |
+// | Scope Chain: [demoVO, globalVO]    <- "create the scope chain"      |
+// |                                        (see Section 7 for nesting)  |
+// | this: undefined (strict) /         <- "determine this binding"     |
+// |       window (sloppy)                 (see Section 9 for all forms)|
+// +--------------------------------------------------------------------+
+//
+// EXECUTION PHASE of demo(5) -- line by line:
+// +--------------------------------------------------------------------+
+// | line                          | what happens                       |
+// |-------------------------------|-------------------------------------|
+// | console.log(add(2,3))         | add() CALLED -> new FEC pushed and  |
+// |                                | popped -> logs 5                    |
+// | console.log(counted)          | logs undefined (assignment below    |
+// |                                | hasn't run yet)                     |
+// | counted = x + y               | 5 + 10 = 15 (var assigned its value)|
+// | let label = "result"          | label EXITS TDZ, then assigned      |
+// | class Thing {}                | Thing EXITS TDZ                     |
+// | var makeThing = function(){}  | makeThing reassigned from undefined |
+// |                                | to the function (still just an     |
+// |                                | assignment -- var itself already   |
+// |                                | existed since creation phase)       |
+// | return counted                | expression evaluated -> 15          |
+// +--------------------------------------------------------------------+
+// OUTPUT: 5, undefined, 15 (the returned value)
+//
+// See Sections 17-22 for var/function/let/const/class hoisting in full
+// depth, and Part III (Sections 23-33) for everything about the TDZ.
 
 
 // ============================================================
@@ -207,10 +281,22 @@ first();
 // Created automatically. Sets up the global object and `this`.
 
 var globalVar = "I'm global";
-// In the Global EC:
-// - Variable Environment: { globalVar: undefined } (creation phase)
-// - Then: { globalVar: "I'm global" } (execution phase)
-// - this = window (browser) or globalThis
+
+// When the script first loads, the Global EC is created:
+//
+// CREATION PHASE:
+// +------------------------------------------+
+// | Global EC                                |
+// | Variable Object:                         |
+// |   globalVar: undefined                   |
+// | Scope Chain: [globalVO]                  |
+// | this: window (or globalThis)             |
+// +------------------------------------------+
+//
+// EXECUTION PHASE:
+// +------------------------------------------+
+// | globalVar = "I'm global"                 |
+// +------------------------------------------+
 
 
 // ============================================================
@@ -264,6 +350,41 @@ function outer() {
 }
 outer();
 
+// outer() is called -> new EC pushed:
+//
+// CREATION PHASE:
+// +------------------------------------------+
+// | FEC for outer                            |
+// | Variable Object:                         |
+// |   outerCount: undefined                  |
+// |   inner: function                        |
+// | Scope Chain: [outerVO, globalVO]         |
+// | this: window (or undefined in strict)    |
+// +------------------------------------------+
+//
+// EXECUTION PHASE:
+// +------------------------------------------+
+// | outerCount = 1                           |
+// | inner() called -> new EC pushed          |
+// +------------------------------------------+
+//
+// inner() is called -> new EC pushed:
+//
+// CREATION PHASE:
+// +------------------------------------------+
+// | FEC for inner                            |
+// | Variable Object:                         |
+// |   innerCount: undefined                  |
+// | Scope Chain: [innerVO, outerVO, globalVO]|
+// | this: window (or undefined in strict)    |
+// +------------------------------------------+
+//
+// EXECUTION PHASE:
+// +------------------------------------------+
+// | innerCount = 2                           |
+// | console.log(0, 1, 2)                     |
+// +------------------------------------------+
+
 // SCOPE CHAIN VISUALIZATION:
 // inner() looks up variables:
 //   innerCount -> found in innerVO
@@ -274,30 +395,246 @@ outer();
 // ============================================================
 // 8. LEXICAL ENVIRONMENT vs VARIABLE ENVIRONMENT  [ADVANCED]
 // ============================================================
-// INTERVIEW: "What's the difference between LE and VE?"
+// INTERVIEW: "What's the difference between Variable Object and
+//             Variable Environment?" / "What's LE vs VE?"
 //
-//  VARIABLE ENVIRONMENT:
+// -----------------------------------------------------------------
+// 8A. VARIABLE OBJECT (ES3) vs VARIABLE ENVIRONMENT (ES5+)
+// -----------------------------------------------------------------
+//
+//  "Variable Object" (VO) is the OLD ES3 spec term.
+//  "Variable Environment" (VE) is the MODERN ES5+ replacement.
+//
+//  They serve the SAME purpose -- storing declarations for an
+//  execution context -- but the underlying model changed:
+//
+//  +---------------------+---------------------------------------------+
+//  | ES3: Variable       | ES5+: Variable Environment                  |
+//  | Object (VO)         | (a Lexical Environment record)              |
+//  +---------------------+---------------------------------------------+
+//  | A plain spec object | An Environment Record (abstract, not a real |
+//  | that stores:        | JS object you can inspect) that stores:     |
+//  |  - var declarations |  - var declarations                         |
+//  |  - function decls   |  - function declarations                    |
+//  |  - arguments        |  - arguments                                |
+//  +---------------------+---------------------------------------------+
+//  | In global EC, the   | In global EC, the Environment Record's      |
+//  | VO IS the global    | "object record" binds to the global object, |
+//  | object (window)     | so var/function still appear on window      |
+//  +---------------------+---------------------------------------------+
+//  | In function EC, the | In function EC, the VE is a new             |
+//  | VO is called the    | declarative Environment Record (no backing  |
+//  | "Activation Object" | object -- purely internal)                  |
+//  | and also holds      |                                             |
+//  | `arguments`         |                                             |
+//  +---------------------+---------------------------------------------+
+//  | Only ONE storage    | TWO environments per EC (VE + LE), which    |
+//  | per EC              | is how let/const get block scoping          |
+//  +---------------------+---------------------------------------------+
+//
+//  WHY THE CHANGE: ES3's single VO couldn't model block scoping.
+//  ES5+ split it into VE (for var/function, stays fixed) and LE
+//  (for let/const, swaps on every new block).
+//
+//  BOTTOM LINE: when you see "Variable Object" in older material,
+//  read it as "Variable Environment" -- same role, newer model.
+//  This file uses both terms: "VO" in ASCII diagrams for brevity,
+//  and "Variable Environment" / "Lexical Environment" where the
+//  ES5+ distinction matters.
+//
+// -----------------------------------------------------------------
+// 8A-EXAMPLE: VO (ES3) vs VE+LE (ES5+) — SAME CODE, TWO MODELS
+// -----------------------------------------------------------------
+//  Run the code below and study how each spec models it.
+
+function scopeDemo() {
+  var x = 1;
+  let y = 2;
+
+  if (true) {
+    var x2 = 10;      // var -> function-scoped
+    let y2 = 20;      // let -> block-scoped
+    console.log(x, y, x2, y2); // 1, 2, 10, 20
+  }
+
+  console.log(x);     // 1
+  console.log(x2);    // 10  (var escapes the block)
+  // console.log(y2); // ReferenceError (let is block-scoped, gone)
+}
+scopeDemo();
+
+//  HOW ES3 (Variable Object) WOULD MODEL scopeDemo():
+//  ---------------------------------------------------
+//  ES3 has ONE Variable Object per function — no block awareness.
+//
+//  CREATION PHASE:
+//  +------------------------------------------+
+//  | VO for scopeDemo (the only storage)      |
+//  |   x:  undefined                          |
+//  |   x2: undefined                          |
+//  |   y:  ??? (let didn't exist in ES3)      |
+//  |   y2: ??? (let didn't exist in ES3)      |
+//  +------------------------------------------+
+//
+//  PROBLEM: ES3's single VO has no way to:
+//    - block-scope y2 inside the if-block
+//    - enforce TDZ for y and y2
+//    - discard y2 when the if-block ends
+//  This is exactly why ES5+ replaced the VO model.
+//
+//
+//  HOW ES5+ (VE + LE) MODELS scopeDemo():
+//  ---------------------------------------------------
+//  ES5+ gives EACH execution context a VE and an LE,
+//  and creates a NEW LE when entering a block.
+//
+//  CREATION PHASE:
+//  +------------------------------------------+
+//  | FEC for scopeDemo                        |
+//  | Variable Environment (VE):               |
+//  |   x:  undefined          (var)           |
+//  |   x2: undefined          (var)           |
+//  | Lexical Environment (LE):                |
+//  |   y:  <uninitialized>    (let, TDZ)      |
+//  +------------------------------------------+
+//
+//  EXECUTION — entering the if-block:
+//  Engine creates a NEW block LE and pushes it:
+//
+//  +------------------+     +--------------------+
+//  | Block LE (new)   |     | Function LE / VE   |
+//  |   y2: <uninit>   |---->|   x: 1     (var)   |
+//  +------------------+     |   x2: undef (var)   |
+//     (TDZ for y2)          |   y: 2     (let)    |
+//                           +--------------------+
+//
+//  Inside the if-block:
+//    x2 = 10  -> found in VE (var ignores block)
+//    y2 = 20  -> found in block LE (let is block-scoped)
+//
+//  EXECUTION — leaving the if-block:
+//  Block LE is DISCARDED. y2 is gone. x2 survives in VE.
+//
+//  +--------------------+
+//  | Function LE / VE   |
+//  |   x: 1     (var)   |
+//  |   x2: 10   (var)   |  <- still accessible
+//  |   y: 2     (let)   |
+//  +--------------------+
+//  |   y2: GONE         |  <- block LE discarded
+//  +--------------------+
+//
+//  SIDE-BY-SIDE SUMMARY:
+//  +----------------------------+------------------------------------+
+//  |  ES3 (VO)                  |  ES5+ (VE + LE)                   |
+//  +----------------------------+------------------------------------+
+//  | One flat VO per function   | VE (var/func) + LE (let/const)    |
+//  | No block awareness         | New LE per block { }              |
+//  | Can't model let/const TDZ  | TDZ = <uninitialized> in LE      |
+//  | Can't discard block vars   | Block LE discarded on }           |
+//  | x2 leaks — by design      | x2 leaks — var goes to VE        |
+//  | y2 would also leak         | y2 gone — block LE discarded     |
+//  +----------------------------+------------------------------------+
+//
+// -----------------------------------------------------------------
+// 8B. VARIABLE ENVIRONMENT (VE) vs LEXICAL ENVIRONMENT (LE)
+// -----------------------------------------------------------------
+//  Both are Lexical Environments, but they play different roles
+//  inside the SAME execution context:
+//
+//  VARIABLE ENVIRONMENT (VE):
 //  - Stores var declarations and function declarations
 //  - Created once per function/global EC
 //  - Doesn't change structurally during execution
 //
-//  LEXICAL ENVIRONMENT:
+//  LEXICAL ENVIRONMENT (LE):
 //  - Stores let and const declarations
-//  - Initially same as VE
+//  - Initially points to the SAME record as VE
 //  - Changes when entering new blocks (if, for, {})
 //  - Each block creates a new LE that chains to the outer one
+
+function veLEDemo() {
+  var a = 1;
+  let b = 2;
+
+  if (true) {
+    var c = 3;
+    let d = 4;
+    console.log(a, b, c, d); // 1, 2, 3, 4
+  }
+
+  console.log(a, b, c);    // 1, 2, 3 (c survived — it's in VE)
+  // console.log(d);        // ReferenceError (d was in block LE, now gone)
+}
+veLEDemo();
+
+//  STEP-BY-STEP EC DIAGRAM FOR veLEDemo():
 //
-//  EXAMPLE:
-//  function foo() {
-//    var a = 1;         // in VE
-//    let b = 2;         // in LE
-//    if (true) {
-//      var c = 3;       // in VE (var ignores block)
-//      let d = 4;       // in NEW LE (block-scoped)
-//    }
-//    // d is gone (LE for the block is discarded)
-//    // c is still here (in VE)
-//  }
+//  STEP 1 — CREATION PHASE (function entry):
+//  VE and LE start pointing to the SAME environment record.
+//
+//  +----------------------------------------------+
+//  | FEC for veLEDemo                             |
+//  |                                              |
+//  | VE ──┐                                       |
+//  |      ├──> Environment Record {               |
+//  | LE ──┘     a: undefined    (var)             |
+//  |            c: undefined    (var)             |
+//  |            b: <uninit>     (let, TDZ)        |
+//  |          }                                   |
+//  | outer ref -> Global Environment              |
+//  +----------------------------------------------+
+//  Note: VE and LE are the same pointer right now.
+//
+//
+//  STEP 2 — EXECUTION (before if-block):
+//  a = 1, b exits TDZ and gets 2.
+//
+//  VE ──┐
+//       ├──> { a: 1, c: undefined, b: 2 }
+//  LE ──┘
+//
+//
+//  STEP 3 — ENTERING the if-block:
+//  Engine creates a NEW LE for the block. VE does NOT change.
+//  LE pointer swaps to the new block environment.
+//
+//  VE ──────> { a: 1, c: undefined, b: 2 }   (UNCHANGED)
+//                        ^
+//  LE ──> Block Env {    |
+//           d: <uninit>  |  (let, TDZ)
+//           outer ───────┘  (chains back to function env)
+//         }
+//
+//
+//  STEP 4 — INSIDE the if-block:
+//  c = 3  -> engine walks from block LE -> finds c in VE -> assigns 3
+//  d = 4  -> found directly in block LE -> exits TDZ, assigned 4
+//
+//  VE ──────> { a: 1, c: 3, b: 2 }    (c updated HERE)
+//                      ^
+//  LE ──> Block Env {  |
+//           d: 4       |
+//           outer ─────┘
+//         }
+//
+//
+//  STEP 5 — LEAVING the if-block:
+//  Block LE is discarded. LE pointer reverts to function env.
+//  d is GONE. c survives in VE.
+//
+//  VE ──┐
+//       ├──> { a: 1, c: 3, b: 2 }
+//  LE ──┘
+//
+//       Block Env { d: 4 }  <- garbage collected (no references)
+//
+//
+//  WHY THIS MATTERS FOR INTERVIEWS:
+//  "var c = 3 inside the if-block ends up in VE because var
+//   ignores blocks. let d = 4 goes into the block LE and dies
+//   when the block ends. That's the whole mechanism behind
+//   block scoping — VE is stable, LE swaps per block."
 
 
 // ============================================================
@@ -320,6 +657,37 @@ obj.showThis();          // obj (method invocation)
 
 showThis.call({ x: 1 });// { x: 1 } (explicit binding)
 
+// Same function, three calls -> three different `this` bindings.
+// `this` is decided fresh in EACH call's CREATION PHASE, based on
+// HOW the function was invoked (not where it was defined):
+//
+// showThis() -- plain call:
+// CREATION PHASE:
+// +------------------------------------------+
+// | FEC for showThis                         |
+// | Variable Object: (none)                  |
+// | Scope Chain: [showThisVO, globalVO]      |
+// | this: window (sloppy) / undefined (strict)|
+// +------------------------------------------+
+//
+// obj.showThis() -- method call:
+// CREATION PHASE:
+// +------------------------------------------+
+// | FEC for showThis                         |
+// | Variable Object: (none)                  |
+// | Scope Chain: [showThisVO, globalVO]      |
+// | this: obj (the object before the dot)    |
+// +------------------------------------------+
+//
+// showThis.call({ x: 1 }) -- explicit binding:
+// CREATION PHASE:
+// +------------------------------------------+
+// | FEC for showThis                         |
+// | Variable Object: (none)                  |
+// | Scope Chain: [showThisVO, globalVO]      |
+// | this: { x: 1 } (forced via .call())      |
+// +------------------------------------------+
+
 
 // ============================================================
 // 10. CLOSURES AND EXECUTION CONTEXT            [INTERMEDIATE]
@@ -336,6 +704,41 @@ function makeCounter() {
 const counter = makeCounter();
 counter(); // 1
 counter(); // 2
+
+// makeCounter() is called -> new EC pushed:
+//
+// CREATION PHASE:
+// +------------------------------------------+
+// | FEC for makeCounter                      |
+// | Variable Object:                         |
+// |   count: undefined (var-like, via let)   |
+// | Scope Chain: [makeCounterVO, globalVO]   |
+// | this: window (or undefined in strict)    |
+// +------------------------------------------+
+//
+// EXECUTION PHASE:
+// +------------------------------------------+
+// | count = 0                                |
+// | return anonymous function                |
+// | (EC popped, but its LE survives --       |
+// |  see closure diagram below)              |
+// +------------------------------------------+
+//
+// counter() is called -> new EC pushed:
+//
+// CREATION PHASE:
+// +------------------------------------------+
+// | FEC for (anonymous)                      |
+// | Variable Object: (none of its own)       |
+// | Scope Chain: [anonVO, makeCounterLE]     |
+// | this: window (or undefined in strict)    |
+// +------------------------------------------+
+//
+// EXECUTION PHASE:
+// +------------------------------------------+
+// | count++  (mutates makeCounter's LE)      |
+// | return count                             |
+// +------------------------------------------+
 
 // After makeCounter() returns:
 // - Its EC is popped from the call stack
@@ -386,12 +789,15 @@ function factorial(n, acc = 1) {
   if (n <= 1) return acc;
   return factorial(n - 1, n * acc); // tail call (last operation is the call)
 }
-// Or convert to iterative:
+console.log(factorial(5)); // 120 -- 5 recursive ECs pushed, then all popped
+
+// Or convert to iterative (no extra ECs at all -- one EC, one loop):
 function factorialIter(n) {
   let result = 1;
   for (let i = 2; i <= n; i++) result *= i;
   return result;
 }
+console.log(factorialIter(5)); // 120 -- same result, zero recursion depth
 
 
 // ============================================================
@@ -446,32 +852,67 @@ function foo(a) {
 var result = foo(50);
 console.log(result); // 150
 
-// STEP-BY-STEP:
+// STEP 1 -- Global EC created (script loads):
 //
-// 1. Global EC created:
-//    VE: { x: undefined, foo: function, result: undefined }
-//    this: window
+// CREATION PHASE:
+// +------------------------------------------+
+// | Global EC                                |
+// | Variable Object:                         |
+// |   x: undefined                           |
+// |   foo: function                          |
+// |   result: undefined                      |
+// | Scope Chain: [globalVO]                  |
+// | this: window                             |
+// +------------------------------------------+
 //
-// 2. x = 10
+// EXECUTION PHASE:
+// +------------------------------------------+
+// | x = 10                                   |
+// | foo(50) called -> new EC pushed          |
+// +------------------------------------------+
 //
-// 3. foo(50) called -> new EC pushed:
-//    FEC(foo):
-//      VE: { a: 50, b: undefined, bar: function }
-//      Scope Chain: [fooVE, globalVE]
-//      this: window
-//    b = 20
+// STEP 2 -- foo(50) called -> new EC pushed:
 //
-// 4. bar(40) called -> new EC pushed:
-//    FEC(bar):
-//      VE: { c: 40, d: undefined }
-//      Scope Chain: [barVE, fooVE, globalVE]
-//      this: window
-//    d = 30
-//    return 50 + 20 + 40 + 30 + 10 = 150
+// CREATION PHASE:
+// +------------------------------------------+
+// | FEC for foo                              |
+// | Variable Object:                         |
+// |   a: 50 (argument)                       |
+// |   b: undefined                           |
+// |   bar: function                          |
+// | Scope Chain: [fooVO, globalVO]           |
+// | this: window                             |
+// +------------------------------------------+
 //
-// 5. bar EC popped, foo returns 150
-// 6. foo EC popped, result = 150
-// 7. console.log(150)
+// EXECUTION PHASE:
+// +------------------------------------------+
+// | b = 20                                   |
+// | bar(40) called -> new EC pushed          |
+// +------------------------------------------+
+//
+// STEP 3 -- bar(40) called -> new EC pushed:
+//
+// CREATION PHASE:
+// +------------------------------------------+
+// | FEC for bar                              |
+// | Variable Object:                         |
+// |   c: 40 (argument)                       |
+// |   d: undefined                           |
+// | Scope Chain: [barVO, fooVO, globalVO]    |
+// | this: window                             |
+// +------------------------------------------+
+//
+// EXECUTION PHASE:
+// +------------------------------------------+
+// | d = 30                                   |
+// | return a + b + c + d + x                 |
+// |   = 50 + 20 + 40 + 30 + 10 = 150         |
+// +------------------------------------------+
+//
+// STEP 4 -- unwind the call stack:
+//   bar EC popped, foo's bar(40) call returns 150
+//   foo EC popped, result = 150 (back in Global EC)
+//   console.log(150)
 
 
 // ************************************************************
@@ -720,11 +1161,14 @@ for (var j = 0; j < 3; j++) {
 }
 
 // CASE 5: Named function expressions
-// The name is only accessible inside the function itself
-var foo = function bar() {
-  console.log(typeof bar); // "function" (accessible inside)
+// The name is only accessible inside the function itself.
+// (Named `taggedFn`/`tagged` here -- NOT `foo`/`bar` -- so this doesn't
+// collide with the unrelated `foo`/`bar` from Section 13's walkthrough.)
+var taggedFn = function tagged() {
+  console.log(typeof tagged); // "function" (accessible inside)
 };
-// console.log(typeof bar); // "undefined" (not accessible outside)
+taggedFn();                    // actually run it so the log above fires
+// console.log(typeof tagged); // "undefined" (not accessible outside)
 
 
 // ************************************************************
@@ -990,20 +1434,24 @@ fixed(); // 2 (uses outer `p` since `q` is a different name)
 // ============================================================
 
 // GOTCHA: Each function CALL creates a NEW EC (not each definition)
-function counter() {
+function counterFn() {
   var count = 0;
   return ++count;
 }
-counter(); // 1
-counter(); // 1 (brand new EC each time, count starts at 0)
+counterFn(); // 1
+counterFn(); // 1 (brand new EC each time, count starts at 0)
 
 // GOTCHA: Arrow functions do NOT create their own EC for `this`
 // They inherit `this` from the enclosing EC.
 const arrowObj = {
   value: 42,
-  getVal: () => this.value, // `this` = enclosing EC's `this` (window)
-  getValMethod() { return this.value; } // `this` = arrowObj
+  getVal: () => this.value, // `this` = enclosing EC's `this`, NOT arrowObj
+  getValMethod() { return this.value; } // `this` = arrowObj (normal method call)
 };
+console.log(arrowObj.getVal());       // undefined -- this.value on the OUTER `this`
+                                       // (browser script: window.value; here,
+                                       // running via `node file.js`: module.exports.value)
+console.log(arrowObj.getValMethod()); // 42 -- `this` correctly bound to arrowObj
 
 // GOTCHA: eval() creates its own EC (avoid eval!)
 
