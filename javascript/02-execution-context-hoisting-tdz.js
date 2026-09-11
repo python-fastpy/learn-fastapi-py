@@ -88,16 +88,34 @@
 //  PHASE 1: CREATION PHASE
 //  +-----------------------------------------------------+
 //  | 1. Create the Variable Object (VO) / Environment    |
-//  |    - Function arguments -> added to VO              |
-//  |    - Function declarations -> hoisted fully          |
-//  |    - var declarations -> hoisted, init to undefined  |
+//  |                                                     |
+//  |    TERMINOLOGY NOTE (see Section 8 for full detail):|
+//  |    +---------+--------------------------------------+
+//  |    | ES3     | "Variable Object" (VO)               |
+//  |    |         |  One object per EC. Stores var,       |
+//  |    |         |  function decls, and arguments.       |
+//  |    +---------+--------------------------------------+
+//  |    | ES5+    | "Variable Environment" (VE) + "Lexical|
+//  |    |(modern) |  Environment" (LE)                    |
+//  |    |         |  VE = var + function decls (fixed)    |
+//  |    |         |  LE = let + const (swaps per block)   |
+//  |    |         |  This split enables block scoping     |
+//  |    |         |  and the Temporal Dead Zone.           |
+//  |    +---------+--------------------------------------+
+//  |    VO and VE serve the same role — VO is just the   |
+//  |    older name. This file uses "VO" for brevity in   |
+//  |    diagrams, "VE/LE" where the distinction matters. |
+//  |                                                     |
+//  |    - Function arguments -> added to VE              |
+//  |    - Function declarations -> hoisted fully (VE)    |
+//  |    - var declarations -> hoisted, init undefined (VE)|
 //  |    - let/const declarations -> hoisted, but NOT      |
-//  |      initialized (enter Temporal Dead Zone)          |
-//  |    - class declarations -> hoisted, NOT initialized  |
-//  |    - Function expressions -> treated as var          |
+//  |      initialized (enter TDZ) (LE)                   |
+//  |    - class declarations -> hoisted, NOT init'd (LE) |
+//  |    - Function expressions -> treated as var (VE)    |
 //  |                                                     |
 //  | 2. Create the Scope Chain                           |
-//  |    - Current VO + all parent VOs                    |
+//  |    - Current VE/LE + all parent environments        |
 //  |                                                     |
 //  | 3. Determine `this` binding                         |
 //  |    - Based on how the function is called            |
