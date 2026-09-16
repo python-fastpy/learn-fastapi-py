@@ -91,6 +91,22 @@ Cheat sheet for terms used across the 13 lessons. Open this side-by-side while r
 | `MemorySaver` | In-memory checkpointer for LangGraph (production uses DynamoDB) | Lesson 13 |
 | `OrchestratorState` | TypedDict that flows through every node — user_message, tool_results, response, etc. | Lesson 13 |
 
+## Agents and Multi-Agent (Lesson 16)
+
+| Term | What It Is | First Seen |
+|------|-----------|------------|
+| **Agent** | The decision loop on top of MCP: decides which tool to call and when the task is done. MCP tools have no equivalent — they only answer calls | Lesson 16 |
+| **Agent vs MCP** | MCP = protocol/interface (tools, resources, prompts). Agent = judgment layer that decides what to call. MCP works with zero agents (lessons 01-06); an agent doesn't require MCP either | Lesson 16 |
+| **Agent-as-tool** | Wrapping a whole agent as one callable — caller sees only the final result, not the agent's internal tool calls. Same shape as MCP-to-MCP (Lesson 15), one level up | Lesson 16 |
+| **Agent-creates-agent** | A supervisor instantiating the specialist agent it needs *for this task* at runtime, instead of a fixed pipeline of pre-wired agents | Lesson 16 |
+| **Delegation** | Handing off a job by calling it and waiting — caller keeps control, nested call stack | Lesson 16 |
+| **Handoff (control)** | Handing off a job by transferring the active turn — caller steps aside, callee becomes active. Mirrors LangGraph's `Command(goto=..., update=...)` | Lesson 16 |
+| `Handoff` (dataclass) | This lesson's stand-in for `Command`: `Handoff(next_agent, context)` — `None` next_agent means the run is done | Lesson 16 |
+| **Supervisor (agent)** | An agent whose only job is choosing/creating the right specialist — not a domain-tool user itself | Lesson 16 |
+| **Planner/executor** | One agent plans the steps, a different agent executes each step and reports back — delegation with a shared plan | Lesson 16 |
+| **Hierarchical supervisors** | A supervisor of supervisors — each mid-level supervisor owns a domain and creates its own specialists | Lesson 16 |
+| **Blackboard / shared state** | Agents don't call each other directly; they all read/write one shared state object (LangGraph's `OrchestratorState` is a small version of this) | Lesson 16 |
+
 ## Production Mapping
 
 | This Guide | Production File |

@@ -1,6 +1,6 @@
 # Learn MCP (Model Context Protocol)
 
-A 15-lesson progressive series for building MCP servers, clients, workflows, and orchestration — using the same patterns as the Reuters AI Assistant production codebase.
+A 16-lesson progressive series for building MCP servers, clients, workflows, and orchestration — using the same patterns as the Reuters AI Assistant production codebase.
 
 ## How to Use This Guide
 
@@ -128,6 +128,14 @@ Lesson 13 at the top combines both into the **full production architecture**.
 | 14 | `14_raw_jsonrpc_http.py` | Raw HTTP POST + JSON-RPC 2.0 wire protocol | `initialize` handshake, `tools/call` body, `_meta` injection, `structuredContent` | mcp_protocol.py (what StreamableHttpTransport does internally) |
 | 15 | `15_mcp_to_mcp.py` | One MCP tool calling another MCP server's tool | One-shot `Client` inside `@mcp.tool`, cross-skill HTTP, non-fatal error handling | shared/mcp_client.py (planned), generate_spot_story.py |
 
+### Phase 6: Agents and Multi-Agent Systems
+
+*MCP has no judgment of its own — an agent is the decision loop on top of it. This phase draws that line explicitly, then shows what happens once one agent isn't enough.*
+
+| # | File | What You Learn | Key Concept | Maps To |
+|---|------|----------------|-------------|---------|
+| 16 | `16_agent_vs_mcp_and_handoff.py` | Agent vs MCP boundary, agent-creates-agent, delegation vs control handoff | `Agent.run()` decision loop, agent-as-tool, `Handoff(next_agent=...)` | langgraph_mcp_orchestrator.py (`Command(goto=...)`), sphinx_leon-assistant-skills/* (each skill as agent-as-tool) |
+
 ### Helper
 
 | File | Purpose |
@@ -138,7 +146,7 @@ Lesson 13 at the top combines both into the **full production architecture**.
 ## Running
 
 ```bash
-# Any lesson (no .env needed for 01-06, 09-11, 13-15):
+# Any lesson (no .env needed for 01-06, 09-11, 13-16):
 uv run python 01_hello_mcp_server.py
 
 # LLM lessons (need .env):
@@ -175,6 +183,12 @@ uv run python 07_llm_tool_server.py
 | **`structuredContent`** | Field in JSON-RPC response carrying interrupt status, continuation tokens — flattened to top-level by backend |
 | **`_meta` injection** | Backend adds `_meta: {session_id, continuation_token, user_response}` to tool arguments for HITL resume |
 | **MCP-to-MCP** | One MCP server's tool calling another MCP server over HTTP. Uses `Client` + `StreamableHttpTransport` (one-shot) inside the tool handler. Keeps skills decoupled — no shared imports |
+| **Agent** | The decision loop on top of MCP — decides which tool to call and when to stop. MCP has no equivalent; it just answers calls |
+| **Agent-as-tool** | A whole agent (loop + tools + memory) exposed as one callable — the caller only sees the final result, not the internal tool calls |
+| **Agent-creates-agent** | A supervisor instantiating the specialist agent it needs *for this task*, at runtime, instead of wiring a fixed set of agents up front |
+| **Delegation** | Handing off a job by calling it and waiting — caller keeps control, nested call stack (like a normal function call) |
+| **Handoff (control)** | Handing off a job by transferring the active turn — caller steps aside, callee becomes the active agent. Mirrors LangGraph's `Command(goto=..., update=...)` |
+| **Supervisor (agent)** | An agent whose only job is choosing or creating the right specialist for a task — not a domain tool user itself |
 
 ## Architecture (How It All Fits Together)
 
