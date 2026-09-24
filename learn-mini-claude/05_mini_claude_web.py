@@ -54,10 +54,10 @@ EXPECTED STARTUP:
   Open http://127.0.0.1:8100
 """
 
-import asyncio
 import os
 import sys
 import uuid
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -72,7 +72,27 @@ load_dotenv()
 
 WEB_DIR = agent_core.HERE / "web"
 
-app = FastAPI(title="mini-claude")
+STATE: dict = {"registry": {}, "model": None}
+
+
+# Build the tool registry inside the app's lifespan, NOT in a separate
+# asyncio.run() before uvicorn starts.
+#
+# This bit me: stdio MCP servers keep a live subprocess session bound to
+# the event loop that created it. asyncio.run() closes its loop when it
+# returns, so every MCP connection built there is dead by the time
+# uvicorn's loop handles the first request -- and the agent reports a
+# vague "connection issue" instead of anything useful.
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    STATE["registry"] = await build_registry()
+    STATE["model"] = get_model("gpt-4-1")
+    print(f"mini-claude web -- {len(STATE['registry'])} tools ready")
+    print("Open http://127.0.0.1:8100")
+    yield
+
+
+app = FastAPI(title="mini-claude", lifespan=lifespan)
 
 # Server-side conversation state: session_id -> message list.
 # In-memory, so it resets when you restart. See fastapi/08-session.py for
@@ -81,8 +101,6 @@ SESSIONS: dict[str, list] = {}
 
 # Cumulative token usage per session, so the UI can show a running total.
 SESSION_USAGE: dict[str, Usage] = {}
-
-STATE: dict = {"registry": {}, "model": None}
 
 
 # ============================================================================
@@ -207,12 +225,6 @@ app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 # Startup
 # ============================================================================
 
-async def _startup():
-    STATE["registry"] = await build_registry()
-    STATE["model"] = get_model("gpt-4-1")
-    print(f"mini-claude web -- {len(STATE['registry'])} tools ready")
-
-
 if __name__ == "__main__":
     if not os.getenv("ORCHESTRATOR_ENDPOINT"):
         print("No .env found.")
@@ -222,8 +234,9 @@ if __name__ == "__main__":
 
     import uvicorn
 
-    asyncio.run(_startup())
-    print("Open http://127.0.0.1:8100")
+    # Registry + model are built in `lifespan` above, on uvicorn's own
+    # event loop. See the comment there for why that matters.
+    print("Starting mini-claude web...")
     uvicorn.run(app, host="127.0.0.1", port=8100, log_level="warning")
 
     # -- Key takeaway --------------------------------------------------------

@@ -4,8 +4,9 @@
       "command": "python",
       "args": ["demo_mcp_server.py"]
     },
-    "notes_http": {
-      "url": "http://127.0.0.1:8200/mcp"
+    "workflow": {
+      "command": "python",
+      "args": ["workflow_mcp_server.py"]
     }
   }
 }
