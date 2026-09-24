@@ -162,6 +162,21 @@ AWS via CloudFormation (both Lambda and ECS Fargate paths). Start at
 | `docs/05-deploy-fargate.md` | Walkthrough: Docker → ECR → ECS, two IAM roles, rolling deploys |
 | `docs/06-operations-and-teardown.md` | Logs, alarms, rollback, cost comparison, CI/CD outline, full teardown |
 
+### AI Advanced (`learn-ai-advanced/`)
+
+The AI-app skills not covered by `learn-langgraph`/`learn-mcp`/`learn-copilotkit`:
+retrieval, quality testing, observability, and defense against untrusted content.
+All 4 lessons run with zero setup (deterministic mocks); `.env` upgrades 3 of
+them to a real LLM call for comparison. Start at
+[`learn-ai-advanced/README.md`](learn-ai-advanced/README.md).
+
+| File | Topics |
+|------|--------|
+| `01_rag_embeddings_and_retrieval.py` | Chunking, embeddings, cosine similarity, a minimal vector store, grounded prompts |
+| `02_evals_and_llm_judge.py` | Golden datasets, keyword/fact coverage, LLM-as-judge, regression diffing |
+| `03_observability_and_tracing.py` | Spans, trace trees, latency waterfalls, token/cost tracking, critical path |
+| `04_guardrails_and_prompt_injection.py` | Output validation + retry, PII redaction, direct/indirect prompt injection, data/instruction separation |
+
 ### Python (`python/`)
 
 | File | Topics |
@@ -324,6 +339,13 @@ learn-fastapi-py/
 │   ├── infra-lambda.yaml       # CloudFormation: Lambda path
 │   ├── infra-fargate.yaml      # CloudFormation: Fargate path
 │   └── docs/                   # 6 numbered walkthroughs
+├── learn-ai-advanced/           # RAG, evals, observability, guardrails (4 lessons, no setup needed)
+│   ├── 01_rag_embeddings_and_retrieval.py
+│   ├── 02_evals_and_llm_judge.py
+│   ├── 03_observability_and_tracing.py
+│   ├── 04_guardrails_and_prompt_injection.py
+│   ├── llm_helper.py
+│   └── README.md
 ├── python/                     # Python learning files
 │   ├── data-types.py
 │   ├── functions.py
