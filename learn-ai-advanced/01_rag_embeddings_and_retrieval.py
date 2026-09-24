@@ -95,22 +95,23 @@ EXPECTED OUTPUT (mock mode -- no .env needed):
     Document split into 3 chunks (size=220, overlap=40)
 
   === Step 2: Embedding chunks ===
-    Embedded 3 chunks into 64-dim vectors
+    Embedded 3 chunks into 256-dim vectors
 
   === Step 3: Retrieval ===
     Query: 'What was Q2 revenue growth?'
     Top 2 chunks by cosine similarity:
-      [0.39] "Acme Corp released its Q2 earnings report today. In Q2, revenue grew 1..."
-      [0.19] "% in the prior quarter. The company also announced a new product line ..."
+      [0.23] "Acme Corp released its Q2 earnings report today. In Q2, revenue grew 1..."
+      [0.15] "momentum in enterprise contracts. The CFO noted that headcount grew 8%..."
 
   === Step 4: Grounded answer (mock LLM -- no .env) ===
     Retrieved context handed to the LLM. Without .env, this lesson prints
     the grounding prompt instead of a live answer.
 
   === Failure mode demo ===
-    Query with no matching chunk -> similarity scores well below the real
-    match's 0.39 -> the grounded prompt still gets sent, but the LLM should
-    say "not in the provided text" rather than guessing
+    Query: 'What color is the sky on Mars?'
+    Every chunk scores 0.00 -- nothing in the document shares any content
+    word with the query. Compare to the real match's 0.23: that gap is the
+    signal a `min_score` threshold would use to say "don't even ask the LLM"
 """
 
 import math

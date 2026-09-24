@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>mini-claude</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>mini-claude</h1>
+    <div class="header-right">
+      <span id="mcp-servers" class="pill">loading…</span>
+      <span id="usage-total" class="pill usage">0 tokens</span>
+      <button id="reset" class="ghost">New chat</button>
+    </div>
+  </header>
+
+  <div id="subbar">
+    <span class="subbar-label">Tools available</span>
+    <span id="tool-list" class="subbar-tools">…</span>
+  </div>
+
+  <main id="messages">
+    <div class="msg assistant">
+      <div class="bubble">
+        <p>Ready. I can read, write, and list files in <code>_sandbox/</code>,
+           plus use any tools from <code>.mcp.json</code>.</p>
+        <p class="hint">Try: <em>list the files you can see</em> ·
+           <em>create hello.py that prints hello</em> ·
+           <em>save a note saying the demo works</em></p>
+      </div>
+    </div>
+  </main>
+
+  <form id="composer">
+    <input id="input" type="text" placeholder="Ask mini-claude…" autocomplete="off" autofocus />
+    <button id="send" type="submit">Send</button>
+  </form>
+
+<script>
+const messagesEl = document.getElementById('messages');
+const form = document.getElementById('composer');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+let sessionId = null;
+
+function addMessage(role, text) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + role;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.textContent = text;
+  wrap.appendChild(bubble);
+  messagesEl.appendChild(wrap);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return bubble;
+}
+
+function addToolChips(bubble, events) {
+  if (!events.length) return;
+  const strip = document.createElement('div');
+  strip.className = 'tools';
+  for (const ev of events) {
+    if (ev.type !== 'call' && ev.type !== 'denied') continue;
+    const chip = document.createElement('span');
+    const denied = ev.type === 'denied';
+    chip.className = 'chip' + (denied ? ' denied' : '');
+    chip.textContent = (denied ? '⊘ ' : '') + ev.name;
+    chip.title = (denied ? 'BLOCKED by the permission policy\n\n' : '') +
+                 JSON.stringify(ev.args, null, 2);
+    strip.appendChild(chip);
+  }
+  if (strip.children.length) bubble.parentElement.appendChild(strip);
+}
+
+function addUsageLine(bubble, text, title) {
+  const line = document.createElement('div');
+  line.className = 'usage-line';
+  line.textContent = text;
+  if (title) line.title = title;
+  bubble.parentElement.appendChild(line);
+  return line;
+}
+
+// Input tokens are what it cost to SEND this message -- which includes
+// resending the whole conversation, not just the words you typed.
+function addSentTokens(userBubble, usage) {
+  if (!usage || !usage.llm_calls) return;
+  const cached = usage.cached_tokens ? ` (${usage.cached_tokens} cached)` : '';
+  addUsageLine(
+    userBubble,
+    `↑ ${usage.input_tokens.toLocaleString()} tokens in${cached}`,
+    'Input tokens for this turn. This is the ENTIRE conversation resent, ' +
+    'not just what you typed — which is why it grows every turn.'
+  );
+}
+
+// Output tokens are what the model generated, plus what the turn cost.
+function addReplyTokens(bubble, usage) {
+  if (!usage || !usage.llm_calls) return;
+  const calls = `${usage.llm_calls} LLM call${usage.llm_calls === 1 ? '' : 's'}`;
+  addUsageLine(
+    bubble,
+    `↓ ${usage.output_tokens.toLocaleString()} tokens out · ${calls} · ` +
+    `${usage.total_tokens.toLocaleString()} total · ~$${usage.cost_usd.toFixed(4)}`,
+    'One message is not one LLM call — each tool round-trip is another ' +
+    'call, and each one resends the whole conversation.'
+  );
+}
+
+function updateSessionUsage(su) {
+  if (!su) return;
+  const el = document.getElementById('usage-total');
+  el.textContent = `${su.total_tokens.toLocaleString()} tok · ~$${su.cost_usd.toFixed(4)}`;
+  el.title =
+    `Session total\n` +
+    `input:  ${su.input_tokens}\n` +
+    `cached: ${su.cached_tokens}\n` +
+    `output: ${su.output_tokens}\n` +
+    `LLM calls: ${su.llm_calls}\n\n` +
+    `Cost is an estimate from public list prices.`;
+}
+
+async function send(text) {
+  const userBubble = addMessage('user', text);
+  const thinking = addMessage('assistant', '…');
+  thinking.classList.add('thinking');
+  sendBtn.disabled = true;
+
+  try {
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, session_id: sessionId }),
+    });
+    const data = await res.json();
+    sessionId = data.session_id;
+    thinking.classList.remove('thinking');
+    thinking.textContent = data.reply;
+    addSentTokens(userBubble, data.usage);
+    addToolChips(thinking, data.events || []);
+    addReplyTokens(thinking, data.usage);
+    updateSessionUsage(data.session_usage);
+  } catch (err) {
+    thinking.classList.remove('thinking');
+    thinking.textContent = 'Request failed: ' + err.message;
+  } finally {
+    sendBtn.disabled = false;
+    input.focus();
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+}
+
+form.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  send(text);
+});
+
+document.getElementById('reset').addEventListener('click', async () => {
+  await fetch('/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: '', session_id: sessionId }),
+  });
+  sessionId = null;
+  messagesEl.innerHTML = '';
+  addMessage('assistant', 'New chat started.');
+  document.getElementById('usage-total').textContent = '0 tokens';
+});
+
+fetch('/tools').then(r => r.json()).then(d => {
+  // Header: which MCP servers are attached (not a raw tool count).
+  const servers = [...new Set(
+    d.tools.filter(t => t.source.startsWith('mcp:'))
+           .map(t => t.source.slice(4))
+  )];
+  const srvEl = document.getElementById('mcp-servers');
+  if (servers.length) {
+    srvEl.textContent = 'MCP: ' + servers.join(' · ');
+    srvEl.title = servers
+      .map(s => `${s}\n` + d.tools.filter(t => t.source === 'mcp:' + s)
+                                  .map(t => '   ' + t.name).join('\n'))
+      .join('\n\n');
+  } else {
+    srvEl.textContent = 'MCP: none attached';
+    srvEl.title = 'Add a server to .mcp.json and restart.';
+  }
+
+  // Subheading: every tool the agent can actually call, grouped by source.
+  const listEl = document.getElementById('tool-list');
+  listEl.innerHTML = '';
+  const groups = {};
+  for (const t of d.tools) (groups[t.source] ||= []).push(t);
+
+  for (const source of Object.keys(groups).sort()) {
+    const group = document.createElement('span');
+    group.className = 'tool-group';
+
+    const tag = document.createElement('span');
+    tag.className = 'group-tag' + (source === 'builtin' ? ' builtin' : '');
+    tag.textContent = source;
+    group.appendChild(tag);
+
+    for (const t of groups[source]) {
+      const item = document.createElement('span');
+      item.className = 'tool-item' + (t.read_only ? ' ro' : '');
+      // Strip the server prefix -- the group tag already shows it.
+      item.textContent = t.name.replace(/^.*?__/, '');
+      item.title = `${t.name}\n${t.description}` +
+                   (t.read_only ? '\n\n(read-only — runs without asking)' : '');
+      group.appendChild(item);
+    }
+    listEl.appendChild(group);
+  }
+});
+</script>
+</body>
+</html>

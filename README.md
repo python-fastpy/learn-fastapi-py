@@ -162,6 +162,25 @@ AWS via CloudFormation (both Lambda and ECS Fargate paths). Start at
 | `docs/05-deploy-fargate.md` | Walkthrough: Docker → ECR → ECS, two IAM roles, rolling deploys |
 | `docs/06-operations-and-teardown.md` | Logs, alarms, rollback, cost comparison, CI/CD outline, full teardown |
 
+### Mini Claude Code (`learn-mini-claude/`)
+
+**Build your own Claude Code**, then attach any MCP server to it via
+`.mcp.json` — the same config format real Claude Code uses, so servers are
+portable between the two. Ends with both a terminal CLI and a plain
+HTML/CSS web UI (no React, no build step). Lessons 01-03 run with no
+credentials. Start at
+[`learn-mini-claude/README.md`](learn-mini-claude/README.md).
+
+| File | Topics |
+|------|--------|
+| `01_agent_loop.py` | The 4-step agent loop; what a "tool" is to a model; turn limits |
+| `02_builtin_tools.py` | read/write/list/run tools, path sandboxing, the permission gate |
+| `03_attach_mcp.py` | `.mcp.json`, runtime tool discovery, adapting MCP tools, namespacing, failure isolation |
+| `04_mini_claude_cli.py` | The full terminal REPL — real LLM, conversation state, y/n/a prompts, slash commands |
+| `05_mini_claude_web.py` + `web/` | FastAPI + HTML/CSS chat UI, session state, permission *policy* vs. prompt |
+| `agent_core.py` | Lessons 01-03 assembled once; both the CLI and the web UI import it |
+| `demo_mcp_server.py` | A tiny MCP server so `.mcp.json` works out of the box |
+
 ### AI Advanced (`learn-ai-advanced/`)
 
 The AI-app skills not covered by `learn-langgraph`/`learn-mcp`/`learn-copilotkit`:
@@ -339,6 +358,17 @@ learn-fastapi-py/
 │   ├── infra-lambda.yaml       # CloudFormation: Lambda path
 │   ├── infra-fargate.yaml      # CloudFormation: Fargate path
 │   └── docs/                   # 6 numbered walkthroughs
+├── learn-mini-claude/           # Build your own Claude Code + attach MCP servers
+│   ├── 01_agent_loop.py
+│   ├── 02_builtin_tools.py
+│   ├── 03_attach_mcp.py
+│   ├── 04_mini_claude_cli.py    # terminal REPL
+│   ├── 05_mini_claude_web.py    # FastAPI + web UI
+│   ├── web/                     # index.html + style.css (no build step)
+│   ├── agent_core.py            # the agent, written once
+│   ├── demo_mcp_server.py       # sample MCP server to attach
+│   ├── .mcp.json                # attach your own servers here
+│   └── README.md
 ├── learn-ai-advanced/           # RAG, evals, observability, guardrails (4 lessons, no setup needed)
 │   ├── 01_rag_embeddings_and_retrieval.py
 │   ├── 02_evals_and_llm_judge.py
