@@ -302,6 +302,79 @@ delete everything in the folder           ← needs permission; say no
 
 ---
 
+## Custom prompts — telling the agent how to behave
+
+The system prompt is built from three layers, assembled by
+`build_system_prompt()` in `agent_core.py`:
+
+| Layer | Where | Scope | Survives restart? |
+|-------|-------|-------|-------------------|
+| 1. Base rules | `BASE_SYSTEM_PROMPT` in `agent_core.py` | Always | yes (it's code) |
+| 2. Project instructions | **`AGENT.md`** | Every session | **yes** |
+| 3. Session instructions | UI panel / CLI `/system` | One conversation | no |
+
+Later layers are appended last, which is also where a model weights them
+most heavily — so the more specific instruction wins when two disagree.
+
+### AGENT.md — persistent instructions
+
+[`AGENT.md`](AGENT.md) is this project's `CLAUDE.md`. Its whole contents
+are appended to the system prompt on every run. Edit it, restart (or
+`/clear` in the CLI, which re-reads it), done.
+
+The shipped file has deliberately checkable rules, so you can prove it's
+being read. Ask for a script and watch:
+
+```
+> create greet.py that prints hello world
+```
+```python
+# Prints 'hello world' to the console      ← AGENT.md: scripts start with a # comment
+print('hello world')
+```
+> *"Created greet.py… Run it with: python greet.py"* ← AGENT.md: say how to run it
+
+Delete those rules and write your own. Real uses: coding standards,
+"always run the tests after editing", domain vocabulary, which libraries
+to prefer.
+
+### Per-session instructions
+
+**Web UI** — click **custom prompt** in the tool bar, type into the panel,
+hit **Apply & restart chat**. It's saved in `localStorage`, so it
+survives a page reload. **View full prompt** shows exactly what the model
+is being told — the fastest way to confirm your text landed.
+
+**CLI:**
+
+```
+/system Reply only in bullet points.   set instructions for this session
+/system                                clear them
+/prompt                                print the full system prompt in effect
+/clear                                 restart the chat, re-reading AGENT.md
+```
+
+A real run with `system_extra` set to *"Reply ONLY as a numbered list.
+Never write prose sentences."*:
+
+```
+> list the files you can see
+1. buggy.py
+2. fib.py
+3. greet.py
+...
+```
+
+> **Changing the prompt restarts the conversation.** The system prompt is
+> `messages[0]`, and you can't retroactively change instructions the model
+> has already been answering under. Both UIs make this explicit rather
+> than silently applying a new prompt to an old conversation.
+
+> **The prompt is not a security boundary.** "Never touch files outside
+> the project" in `AGENT.md` is a *request*; `safe_path()` is the
+> *enforcement*. See [Safety](#safety) — prompts shape behaviour, code
+> constrains it.
+
 ## Attaching your own MCP server
 
 Edit [`.mcp.json`](.mcp.json). Two kinds of server are supported:
@@ -595,6 +668,7 @@ uv run python check_mcp.py
 | `test_workflow.py` | Tests a workflow end to end with **no LLM and no tokens**. |
 | `check_mcp.py` | Diagnostic — is each server in `.mcp.json` actually connected? |
 | `.mcp.json` | The server config. Edit this to attach your own. |
+| `AGENT.md` | Persistent instructions appended to the system prompt — this project's `CLAUDE.md`. |
 | `web/index.html`, `web/style.css` | The whole front end. No React, no npm, no build step. |
 | `llm_helper.py` | TR Orchestrator auth — same helper as `learn-mcp`/`learn-langgraph`. |
 
@@ -650,6 +724,7 @@ Two controls, in this order:
 | `read_file` / `write_file` / `run_command` | Read / Write / Edit / Bash tools |
 | `safe_path()` + `permission_gate()` | Permission modes and allow/deny rules in `settings.json` |
 | `.mcp.json` | Identical format — servers are portable between the two |
+| `AGENT.md` | `CLAUDE.md` — project instructions appended to the system prompt |
 | `SESSION_ALLOW` (`a` option) | "Always allow" in the permission prompt |
 | `max_turns` | Turn/budget limits on an agentic run |
 

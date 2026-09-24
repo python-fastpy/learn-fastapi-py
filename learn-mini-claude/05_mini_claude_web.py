@@ -66,7 +66,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import agent_core
-from agent_core import SYSTEM_PROMPT, Tool, Usage, agent_loop, build_registry, get_model
+from agent_core import (
+    Tool, Usage, agent_loop, build_registry, build_system_prompt, get_model,
+)
 
 load_dotenv()
 
@@ -130,6 +132,9 @@ def web_approve(tool: Tool, args: dict) -> bool:
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
+    # Per-session instructions from the UI's "Custom instructions" panel.
+    # Only applied when the session is created -- see the note below.
+    system_extra: str | None = None
 
 
 @app.post("/chat")
@@ -138,7 +143,13 @@ async def chat(req: ChatRequest):
 
     session_id = req.session_id or str(uuid.uuid4())
     if session_id not in SESSIONS:
-        SESSIONS[session_id] = [SystemMessage(content=SYSTEM_PROMPT)]
+        # The system prompt is message[0]. You can't retroactively change
+        # instructions the model has already been answering under, so a
+        # new prompt means a new session -- the UI sends session_id=null
+        # after you hit Apply, which lands here.
+        SESSIONS[session_id] = [
+            SystemMessage(content=build_system_prompt(req.system_extra or ""))
+        ]
         SESSION_USAGE[session_id] = Usage()
 
     messages = SESSIONS[session_id]
@@ -197,6 +208,23 @@ async def reset(req: ChatRequest):
     SESSIONS.pop(req.session_id or "", None)
     SESSION_USAGE.pop(req.session_id or "", None)
     return {"ok": True}
+
+
+@app.get("/prompt")
+async def prompt(session_id: str = ""):
+    """What the agent is actually being told. Useful for confirming your
+    AGENT.md or custom instructions really made it into the prompt."""
+    active = None
+    if session_id and session_id in SESSIONS:
+        active = SESSIONS[session_id][0].content
+    agent_md = agent_core.read_agent_md()
+    return {
+        "base": agent_core.BASE_SYSTEM_PROMPT,
+        "agent_md": agent_md,
+        "agent_md_loaded": bool(agent_md),
+        # None until the session's first message creates it.
+        "active_system_prompt": active,
+    }
 
 
 # While you're editing index.html/style.css, a cached copy in the browser

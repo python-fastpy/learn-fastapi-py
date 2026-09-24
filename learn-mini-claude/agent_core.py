@@ -286,7 +286,7 @@ class Usage:
 # The agent loop (lesson 01, now with a real model)
 # ============================================================================
 
-SYSTEM_PROMPT = """You are a small coding assistant with tools.
+BASE_SYSTEM_PROMPT = """You are a small coding assistant with tools.
 
 Rules:
 - Use tools to inspect and change files; never guess a file's contents.
@@ -294,6 +294,45 @@ Rules:
 - If a tool returns an error, read it and adapt -- don't repeat the same call.
 - Be concise. When the task is done, reply with a short plain-text summary.
 """
+
+# Persistent project instructions, same idea as Claude Code's CLAUDE.md:
+# a file in the project that gets appended to the system prompt every run.
+# Committed to git, shared by the team, survives restarts.
+AGENT_MD = HERE / "AGENT.md"
+
+
+def read_agent_md() -> str:
+    """The contents of AGENT.md, or '' if there isn't one."""
+    if not AGENT_MD.exists():
+        return ""
+    return AGENT_MD.read_text(encoding="utf-8-sig").strip()
+
+
+def build_system_prompt(extra: str = "") -> str:
+    """Assemble the system prompt from three layers, least to most specific.
+
+    1. BASE_SYSTEM_PROMPT -- the rules the agent needs to function at all
+    2. AGENT.md           -- persistent project instructions (from disk)
+    3. `extra`            -- per-session instructions (from the UI)
+
+    Later layers come last in the prompt, which is also where a model
+    weights them most heavily -- so the more specific instruction wins
+    when two of them disagree. That ordering is the whole design.
+    """
+    parts = [BASE_SYSTEM_PROMPT]
+
+    project = read_agent_md()
+    if project:
+        parts.append("## Project instructions (AGENT.md)\n\n" + project)
+
+    if extra and extra.strip():
+        parts.append("## Instructions for this session\n\n" + extra.strip())
+
+    return "\n\n".join(parts)
+
+
+# Back-compat for anything importing the old name.
+SYSTEM_PROMPT = BASE_SYSTEM_PROMPT
 
 
 def get_model(model_name: str = "gpt-4-1"):

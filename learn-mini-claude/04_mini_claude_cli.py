@@ -57,7 +57,9 @@ import sys
 from dotenv import load_dotenv
 
 import agent_core
-from agent_core import SYSTEM_PROMPT, Tool, Usage, agent_loop, build_registry, get_model
+from agent_core import (
+    Tool, Usage, agent_loop, build_registry, build_system_prompt, get_model,
+)
 
 load_dotenv()
 
@@ -100,9 +102,13 @@ def on_event(kind: str, data) -> None:
 HELP = """
   /tools    list every tool, and where it came from
   /usage    token usage and estimated cost for this session
+  /prompt   show the system prompt currently in effect
+  /system   <text>  add instructions for this session (restarts the chat)
   /clear    forget the conversation and start fresh
   /help     this message
   /exit     quit
+
+  Persistent instructions go in AGENT.md (like Claude Code's CLAUDE.md).
 """
 
 
@@ -123,11 +129,18 @@ async def main():
     model = get_model("gpt-4-1")
 
     from langchain_core.messages import HumanMessage, SystemMessage
-    messages: list = [SystemMessage(content=SYSTEM_PROMPT)]
+
+    # Per-session instructions added with /system. Empty to start.
+    session_extra = ""
+    messages: list = [SystemMessage(content=build_system_prompt(session_extra))]
 
     print()
     print(f"mini-claude -- {builtin_count} builtin tools, {mcp_count} MCP tools")
     print(f"Working directory: {agent_core.WORKDIR.name}/  (everything is sandboxed here)")
+    project_instructions = agent_core.read_agent_md()
+    if project_instructions:
+        print(f"Project instructions: AGENT.md loaded "
+              f"({len(project_instructions)} chars)")
     print("Type /help for commands.")
     print()
 
@@ -147,8 +160,27 @@ async def main():
             print(HELP)
             continue
         if user_input == "/clear":
-            messages = [SystemMessage(content=SYSTEM_PROMPT)]
-            print("  (conversation cleared)")
+            # Re-reads AGENT.md, so edits to it take effect without a restart.
+            messages = [SystemMessage(content=build_system_prompt(session_extra))]
+            print("  (conversation cleared; AGENT.md re-read)")
+            continue
+        if user_input == "/prompt":
+            print("  ---- system prompt in effect ----")
+            for line in messages[0].content.splitlines():
+                print(f"  {line}")
+            print("  ---------------------------------")
+            continue
+        if user_input.startswith("/system"):
+            session_extra = user_input[len("/system"):].strip()
+            # The system prompt is the first message, so changing it means
+            # starting the conversation over -- you can't retroactively
+            # alter instructions the model has already been answering under.
+            messages = [SystemMessage(content=build_system_prompt(session_extra))]
+            if session_extra:
+                print(f"  session instructions set; conversation restarted")
+                print(f"  > {session_extra}")
+            else:
+                print("  session instructions cleared; conversation restarted")
             continue
         if user_input == "/tools":
             for t in sorted(registry.values(), key=lambda t: (t.source, t.name)):

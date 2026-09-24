@@ -19,7 +19,29 @@
   <div id="subbar">
     <span class="subbar-label">Tools available</span>
     <span id="tool-list" class="subbar-tools">…</span>
+    <button id="toggle-prompt" class="linkish" type="button">custom prompt</button>
   </div>
+
+  <details id="prompt-panel">
+    <summary>Custom instructions <span id="prompt-state"></span></summary>
+    <div class="panel-body">
+      <p class="panel-hint">
+        Appended to the system prompt for this chat only. Applying starts a
+        new conversation — you can't change instructions the model has
+        already been answering under.
+        For permanent instructions edit <code>AGENT.md</code> (this project's
+        <code>CLAUDE.md</code>) and restart.
+      </p>
+      <textarea id="system-extra" rows="4"
+        placeholder="e.g. Always add type hints. Explain each step before doing it. Reply in bullet points."></textarea>
+      <div class="panel-actions">
+        <button id="apply-prompt" type="button">Apply &amp; restart chat</button>
+        <button id="clear-prompt" class="ghost" type="button">Clear</button>
+        <button id="view-prompt" class="ghost" type="button">View full prompt</button>
+      </div>
+      <pre id="prompt-dump" hidden></pre>
+    </div>
+  </details>
 
   <main id="messages">
     <div class="msg assistant">
@@ -122,6 +144,54 @@ function updateSessionUsage(su) {
     `Cost is an estimate from public list prices.`;
 }
 
+// Custom instructions, remembered across reloads.
+const extraEl = document.getElementById('system-extra');
+const promptState = document.getElementById('prompt-state');
+extraEl.value = localStorage.getItem('mc_system_extra') || '';
+
+function refreshPromptState() {
+  const v = extraEl.value.trim();
+  promptState.textContent = v ? '· active' : '';
+  promptState.className = v ? 'on' : '';
+}
+refreshPromptState();
+
+document.getElementById('toggle-prompt').addEventListener('click', () => {
+  const p = document.getElementById('prompt-panel');
+  p.open = !p.open;
+});
+
+document.getElementById('apply-prompt').addEventListener('click', () => {
+  localStorage.setItem('mc_system_extra', extraEl.value);
+  refreshPromptState();
+  // Drop the session so the next message builds a fresh system prompt.
+  sessionId = null;
+  messagesEl.innerHTML = '';
+  document.getElementById('usage-total').textContent = '0 tokens';
+  addMessage('assistant', extraEl.value.trim()
+    ? 'Custom instructions applied. New conversation started.'
+    : 'Custom instructions cleared. New conversation started.');
+  document.getElementById('prompt-panel').open = false;
+});
+
+document.getElementById('clear-prompt').addEventListener('click', () => {
+  extraEl.value = '';
+  localStorage.removeItem('mc_system_extra');
+  refreshPromptState();
+});
+
+document.getElementById('view-prompt').addEventListener('click', async () => {
+  const dump = document.getElementById('prompt-dump');
+  if (!dump.hidden) { dump.hidden = true; return; }
+  const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '';
+  const d = await (await fetch('/prompt' + q)).json();
+  dump.textContent = d.active_system_prompt
+    || (d.base + (d.agent_md ? '\n\n## Project instructions (AGENT.md)\n\n' + d.agent_md : '')
+        + (extraEl.value.trim() ? '\n\n## Instructions for this session\n\n' + extraEl.value.trim() : '')
+        + '\n\n(preview — send a message to make this the live prompt)');
+  dump.hidden = false;
+});
+
 async function send(text) {
   const userBubble = addMessage('user', text);
   const thinking = addMessage('assistant', '…');
@@ -132,7 +202,11 @@ async function send(text) {
     const res = await fetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, session_id: sessionId }),
+      body: JSON.stringify({
+        message: text,
+        session_id: sessionId,
+        system_extra: extraEl.value,
+      }),
     });
     const data = await res.json();
     sessionId = data.session_id;
