@@ -148,7 +148,7 @@ _How AI skills are built and connected. Follow the lesson numbers in order._
 |------|------|--------|-----------------------|
 | 9:00 - 9:40 | `learn-mcp/01_hello_mcp_server.py` | Create a minimal MCP server with `@mcp.tool()` | Every skill's `main.py` |
 | 9:40 - 10:20 | `learn-mcp/02_mcp_client.py` | Connect to a server, call tools, inspect results | Backend's `mcp_protocol.py` |
-| 10:20 - 11:00 | `learn-mcp/03_tools_resources_prompts.py` | All three primitives: tool, resource, prompt | Skills expose tools; workflows as resources |
+| 10:20 - 11:00 | `learn-mcp/04_resources_and_prompts.py` | All three primitives: tool, resource, prompt | Skills expose tools; workflows as resources |
 
 ### Lunch Break (11:00 - 11:30)
 
