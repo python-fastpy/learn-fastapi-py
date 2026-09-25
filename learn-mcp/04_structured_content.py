@@ -1,153 +1,148 @@
-"""
-Lesson 4: Structured Content and Metadata
-==========================================
-Goal: Return rich structured data from MCP tools — the pattern used by
-every Reuters skill for interrupt payloads and timing metadata.
+"""Lesson 04b -- Structured Content and Metadata: one tool result, three parts
+============================================================================
 
-What you'll learn:
-  - Returning structuredContent from tools
-  - Attaching _meta (out-of-band metadata like timing)
-  - The difference between content (display) and structuredContent (machine-readable)
+A tool result can carry THREE separate things, each for a different reader:
 
-Run:
-  uv run python 04_structured_content.py
+  ┌──────────────────── one tool result ────────────────────┐
+  │ content            "Hello, Shubham!"                    │ -> the LLM / chat UI reads this
+  │                    human-readable text blocks           │
+  │                                                         │
+  │ structuredContent  {"status": "completed",              │ -> YOUR CODE reads this
+  │                     "greeting": "Hello, Shubham!", ...} │    (the orchestrator) --
+  │                    machine-readable JSON                │    no text parsing needed
+  │                                                         │
+  │ _meta              {"skill_call_extras":                │ -> logs / monitoring only
+  │                      {"steps": [...timings...]}}        │    out-of-band: NOT shown to
+  │                    out-of-band metadata                 │    the user or the LLM
+  └─────────────────────────────────────────────────────────┘
 
-Production parallel:
-  Skills return structuredContent with status/interrupt/continuation_token.
-  The _meta field carries skill_call_extras with per-step timing.
-  See: mcp_protocol.py -> _call_tool_result_to_dict()
+  structuredContent.status tells the orchestrator what happened:
+    "completed"   -> done, use the result
+    "interrupted" -> paused for a human: an `interrupt` payload says WHAT to
+                     ask (type, message, context, actions), and a
+                     `continuation_token` says HOW to resume later
+
+  Maps to production:
+    Every Reuters skill returns structuredContent with status / interrupt /
+    continuation_token, and _meta.skill_call_extras with per-step timing.
+    The backend parses it in mcp_protocol.py -> _call_tool_result_to_dict().
+    (Interrupts end to end: lesson 10. Hiding data from the LLM: lesson 08.)
+
+Run:  uv run python 04_structured_content.py
 """
 
 import asyncio
-import json
 import time
 from fastmcp import FastMCP, Client
-from fastmcp.tools.tool import Tool
+from fastmcp.tools import ToolResult
 
-mcp = FastMCP("structured-content")
+mcp = FastMCP("structured-greetings")
 
 
-@mcp.tool()
-def generate_buzz(ric: str, headline: str) -> dict:
-    """Generate a news buzz draft for a given RIC and headline.
+# -- 0. The easy way: return a dict ------------------------------------------
+# FastMCP fills in BOTH parts for you: content = the dict as JSON text,
+# structuredContent = the dict itself. Fine when you don't need _meta.
 
-    Returns structured content with the draft and metadata.
-    """
+@mcp.tool
+def greet(name: str) -> dict:
+    """Greet someone. Returns a plain dict."""
+    return {"greeting": f"Hello, {name}!"}
+
+
+# -- 1. Full control: set content, structuredContent and _meta yourself -------
+
+@mcp.tool
+def greet_with_timing(name: str) -> ToolResult:
+    """Greet someone, with machine-readable status and timing metadata."""
     start = time.time()
+    greeting = f"Hello, {name}! Welcome to MCP."
+    took_ms = int((time.time() - start) * 1000)
 
-    # Simulate LLM generation
-    draft = f"**{ric}** — {headline}\n\nMarket participants noted the development..."
-
-    duration_ms = int((time.time() - start) * 1000)
-
-    # This is what a real skill returns — the backend parses it:
-    return {
-        # Content blocks (what gets displayed)
-        "content": [
-            {"type": "text", "text": draft}
-        ],
-        # Structured content (machine-readable, for the orchestrator)
-        "structuredContent": {
+    return ToolResult(
+        content=greeting,                                   # for the LLM / user
+        structured_content={                                # for your code
             "status": "completed",
-            "draft": draft,
-            "ric": ric,
-            "word_count": len(draft.split()),
-            "continuation_token": None,  # would be set if interrupted
+            "greeting": greeting,
+            "name": name,
+            "word_count": len(greeting.split()),
+            "continuation_token": None,                     # set only if interrupted
         },
-        # Metadata (out-of-band, not shown to user)
-        "_meta": {
+        meta={                                              # out-of-band
             "skill_call_extras": {
                 "steps": [
-                    {"name": "validate_ric", "duration_ms": 50},
-                    {"name": "fetch_context", "duration_ms": 200},
-                    {"name": "llm_generation", "duration_ms": duration_ms},
+                    {"name": "validate_name", "duration_ms": 5},
+                    {"name": "compose_greeting", "duration_ms": took_ms},
                 ],
-                "total_duration_ms": duration_ms + 250,
-                "model_used": "gpt-4o",
+                "total_duration_ms": took_ms + 5,
             }
         },
-    }
+    )
 
 
-@mcp.tool()
-def generate_with_review(ric: str, headline: str) -> dict:
-    """Generate a buzz draft that requires human review before publishing.
+# -- 2. Interrupted: pause and ask a human before continuing ------------------
 
-    Returns an interrupt payload — the frontend renders a review UI.
-    """
-    draft = f"BUZZ — {ric}: {headline}. Sources said the move was expected."
-
-    # This is the interrupt pattern — status: "interrupted" with an interrupt payload
-    return {
-        "content": [
-            {"type": "text", "text": "Please review the generated buzz draft."}
-        ],
-        "structuredContent": {
+@mcp.tool
+def greet_with_review(name: str) -> ToolResult:
+    """Draft a greeting that a human must approve before it is sent."""
+    draft = f"Dear {name}, welcome aboard! We're thrilled to have you."
+    return ToolResult(
+        content="Please review the greeting before it is sent.",
+        structured_content={
             "status": "interrupted",
             "interrupt": {
-                "type": "NEWS_BUZZ.REVIEW",
-                "message": "Review the generated buzz before publishing",
-                "context": {
-                    "draft": draft,
-                    "ric": ric,
-                    "headline": headline,
-                    "word_count": len(draft.split()),
-                },
-                "actions": ["approve", "refine", "reject"],
+                "type": "GREETING.REVIEW",                  # the UI picks a review screen by type
+                "message": "Review the greeting before sending",
+                "context": {"draft": draft, "name": name, "word_count": len(draft.split())},
+                "actions": ["approve", "refine", "reject"],  # buttons the user can press
             },
-            "continuation_token": "ct_demo_12345",
+            "continuation_token": "ct_demo_12345",          # sent back to resume this run
         },
-        "_meta": {
-            "skill_call_extras": {
-                "steps": [{"name": "draft_generation", "duration_ms": 800}],
-            }
-        },
-    }
+        meta={"skill_call_extras": {"steps": [{"name": "draft_greeting", "duration_ms": 800}]}},
+    )
 
+
+# -- Client: read each part separately ----------------------------------------
 
 async def demo():
-    client = Client(mcp)
+    async with Client(mcp) as client:
+        print("=== 0. greet (plain dict) ===")
+        r = await client.call_tool("greet", {"name": "Shubham"})
+        print(f"  content           : {r.content[0].text}")
+        print(f"  structuredContent : {r.structured_content}")
+        print(f"  _meta             : {r.meta}\n")
 
-    async with client:
-        # --- Call the simple generation tool ---
-        print("=== generate_buzz ===")
-        result = await client.call_tool(
-            "generate_buzz",
-            {"ric": "AAPL.O", "headline": "Apple announces new AI features"},
-        )
-        for content in result:
-            # The raw result includes the full structured response
-            data = json.loads(content.text)
-            print(f"Status: {data['structuredContent']['status']}")
-            print(f"Draft: {data['structuredContent']['draft'][:80]}...")
-            print(f"Timing: {data['_meta']['skill_call_extras']['steps']}")
-        print()
+        print("=== 1. greet_with_timing (completed) ===")
+        r = await client.call_tool("greet_with_timing", {"name": "Shubham"})
+        print(f"  content           : {r.content[0].text}")
+        print(f"  status            : {r.structured_content['status']}")
+        print(f"  word_count        : {r.structured_content['word_count']}")
+        print(f"  timing (_meta)    : {r.meta['skill_call_extras']['steps']}\n")
 
-        # --- Call the interrupt tool ---
-        print("=== generate_with_review ===")
-        result = await client.call_tool(
-            "generate_with_review",
-            {"ric": "MSFT.O", "headline": "Microsoft beats earnings estimates"},
-        )
-        for content in result:
-            data = json.loads(content.text)
-            sc = data["structuredContent"]
-            print(f"Status: {sc['status']}")
-            print(f"Interrupt type: {sc['interrupt']['type']}")
-            print(f"Actions: {sc['interrupt']['actions']}")
-            print(f"Continuation token: {sc['continuation_token']}")
-            print(f"Draft preview: {sc['interrupt']['context']['draft'][:60]}...")
+        print("=== 2. greet_with_review (interrupted) ===")
+        r = await client.call_tool("greet_with_review", {"name": "Shubham"})
+        sc = r.structured_content
+        print(f"  content           : {r.content[0].text}")
+        print(f"  status            : {sc['status']}")
+        print(f"  interrupt type    : {sc['interrupt']['type']}")
+        print(f"  actions           : {sc['interrupt']['actions']}")
+        print(f"  continuation_token: {sc['continuation_token']}")
+        print(f"  draft preview     : {sc['interrupt']['context']['draft']}")
 
 
 if __name__ == "__main__":
     asyncio.run(demo())
 
-
-# ============================================================
-# EXERCISES:
-#
-# 1. Add a "refinement" interrupt type that includes the user's
-#    edit suggestions in the context
-# 2. Add multiple content blocks (text + an "image" placeholder)
-# 3. Parse the _meta timing data and print a formatted summary
-# ============================================================
+    # -- Key takeaway --------------------------------------------------------
+    #   content           -> what the LLM / user sees (text)
+    #   structuredContent -> what your code reads (status, data, interrupt)
+    #   _meta             -> side-channel data (timing, model used) -- never shown
+    # Return a dict for simple tools; return ToolResult when you need _meta or
+    # different text for the LLM than the data for your code.
+    #
+    # -- Exercise -------------------------------------------------------------
+    # 1. Add a "refinement" interrupt type (GREETING.REFINE) that includes the
+    #    user's edit suggestions in the context
+    # 2. Return multiple content blocks (text + an image placeholder) --
+    #    hint: content=[TextContent(...), ImageContent(...)] from mcp.types
+    # 3. Parse the _meta timing data and print a formatted summary
+    #    ("compose_greeting: 0ms, total: 5ms")
