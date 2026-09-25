@@ -182,7 +182,8 @@ def part4_tools():
     print("  5. You send the result back as a tool message; the model continues.\n")
     print("  The model never runs anything. It can only WRITE a request. That's")
     print("  the entire basis of agents (learn-mini-claude lesson 01), and why")
-    print("  tool descriptions matter so much: they're the only docs it reads.\n")
+    print("  tool descriptions matter so much: they're the only docs it reads.")
+    print("  Full coverage: lesson 07 (tool calling) and 08 (the six tool types).\n")
 
 
 # ============================================================================

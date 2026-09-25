@@ -2,11 +2,12 @@
 
 What an LLM really is, how every setting (temperature, top_p, top_k,
 penalties, max_tokens, stop) changes its output, what an API call
-actually sends, and the discipline that matters most in real AI apps:
+actually sends, how **tools** work and how to build the six common
+kinds safely, and the discipline that matters most in real AI apps:
 **context engineering**. It ends with a roadmap that maps every
 AI-engineer skill to the folder in this repo that teaches it.
 
-All 6 lessons are **pure Python: no packages, no API keys**. Every
+All 8 lessons are **pure Python: no packages, no API keys**. Every
 number in this README comes from running them.
 
 ```bash
@@ -14,6 +15,8 @@ cd learn-llm-fundamentals
 uv run python 01_what_is_an_llm.py      # or plain: python 01_what_is_an_llm.py
 uv run python 02_sampling_temperature_top_p.py
 uv run python 03_chat_api_anatomy.py
+uv run python 07_tool_calling.py         # tools: read these two right after 03
+uv run python 08_tool_types_catalogue.py
 uv run python 04_context_engineering.py
 uv run python 05_prompt_engineering.py
 uv run python 06_production_llm_engineering.py
@@ -30,6 +33,7 @@ has the diagram and the list of concepts.
 1. [What an LLM is](#1-what-an-llm-is) (lesson 01)
 2. [Sampling: temperature, top_p, top_k and every other knob](#2-sampling-temperature-top_p-top_k-and-every-other-knob) (lesson 02)
 3. [What an API call really is](#3-what-an-api-call-really-is) (lesson 03)
+   - [3b. Tools: function calling and the tool catalogue](#3b-tools-function-calling-and-the-tool-catalogue) (lessons 07, 08)
 4. [No-confusion FAQ](#4-no-confusion-faq)
 5. [Context engineering](#5-context-engineering) (lesson 04)
 6. [Prompt engineering](#6-prompt-engineering) (lesson 05)
@@ -420,6 +424,239 @@ Structured output has three layers, strongest last:
 2. Use the provider's structured-output/JSON-schema mode.
 3. **Always** validate in code (Pydantic) and retry with the error message.
 
+Tools get their own full section next.
+
+---
+
+## 3b. Tools: function calling and the tool catalogue
+
+Lessons 07 (how tool calling works) and 08 (the six kinds of tools).
+Read them right after lesson 03. They're numbered 07/08 only because
+they were added later.
+
+### What a tool is
+
+A model can only write text. A **tool** is a function *you* describe to
+it. The model writes a request to call it, **your code** runs it, and
+the result goes back into the context. The model never executes anything.
+
+```
+ ┌────────────────────────── one tool-call round trip ──────────────────────────┐
+ │                                                                              │
+ │  1. you send   : messages + TOOL DEFINITIONS                                 │
+ │  2. model writes: tool_call {id, name: "search_orders", arguments: {...}}    │
+ │                   stop_reason = tool_use / tool_calls                        │
+ │  3. YOUR CODE  : ┌──────────┐   ┌───────────┐   ┌─────┐   ┌──────────────┐   │
+ │                  │ validate │ → │ permission│ → │ run │ → │ shape result │   │
+ │                  │ args     │   │ gate      │   │     │   │ (small!)     │   │
+ │                  └────┬─────┘   └─────┬─────┘   └──┬──┘   └──────┬───────┘   │
+ │                       └── any failure becomes an ERROR RESULT, not a crash ──┘
+ │  4. you send   : tool result, linked by the call id                          │
+ │  5. model      : answers, or asks for another tool  (loop = an AGENT)        │
+ └──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### The tool definition: four parts
+
+```
+ ┌──────────────── Tool definition ────────────────┐
+ │ 1. Name and description  when to use it, what   │ ← the model's ONLY documentation
+ │                          it returns, what NOT   │
+ │ 2. Input / output schema JSON Schema for args;  │ ← input is sent to the API;
+ │                          shape of the result    │   output schema native in MCP
+ │ 3. Error handling        error codes + how to   │ ← folded into the description
+ │                          recover from each      │
+ │ 4. Usage examples        concrete calls to copy │ ← folded into the description
+ └─────────────────────────────────────────────────┘
+```
+
+Don't hand-write schemas. Generate them from typed functions and
+docstrings (lesson 07 shows the mechanism in ~30 lines; in practice use
+Pydantic, LangChain `@tool`, FastMCP `@mcp.tool`, or your SDK's helper).
+The same definition in each wire format:
+
+| | Wrapper | Schema field |
+|---|---|---|
+| OpenAI | `{"type": "function", "function": {name, description, parameters}}` | `parameters` |
+| Anthropic | `{name, description, input_schema}` | `input_schema` |
+| MCP | `{name, description, inputSchema, outputSchema?}` | `inputSchema` |
+
+Definitions are context too: the 3 tools in lesson 07 cost ~330 input
+tokens **on every call**.
+
+### Measured (lesson 07)
+
+| What | Result |
+|---|---|
+| Model sends wrong arg name + wrong type | Validation returns `missing 'customer_email'`, `unknown 'email'`, `'limit' must be integer`; the model **fixes the call** on the next turn |
+| Side-effect tool (`cancel_order`) | Permission gate asks the user before running |
+| 3 weather lookups in one turn | 0.9s one by one → **0.3s** concurrently |
+| Vague vs clear tool names/descriptions | **4/8 vs 8/8** requests routed to the right tool |
+| Return everything vs a shaped result | **13,093 → 88 tokens**, and it stays in context for the rest of the chat |
+
+### tool_choice
+
+| Mode | OpenAI | Anthropic | Use for |
+|---|---|---|---|
+| Model decides | `"auto"` | `{"type": "auto"}` | Almost always |
+| Never call | `"none"` | `{"type": "none"}` | A summarize-only turn |
+| Must call some tool | `"required"` | `{"type": "any"}` | Pipelines that always need a lookup |
+| Must call tool X | `{"type": "function", "function": {"name": "X"}}` | `{"type": "tool", "name": "X"}` | Rarely; use structured outputs for JSON |
+| One call per turn | `parallel_tool_calls=False` | `disable_parallel_tool_use: true` | Strictly ordered steps |
+
+Some of the newest reasoning models reject forced tool choice (`required`/`any`/specific). Use `auto` and say which tool to use in the prompt.
+
+### Tool design rules
+
+- **Name** = `verb_noun`, unambiguous: `search_orders`, not `orders` or `tool_a`.
+- **Description** = when to use it, what it returns, when *not* to use it, and how it chains ("call `search_orders` first to get the id").
+- **Parameters**: describe each one with an example and units; use enums wherever the values are known.
+- **Errors** say how to *fix* the call; return them as results with `is_error`.
+- **Results**: filter, paginate (`limit` + `count`), return only needed fields plus the ids the next tool takes.
+- **Fewer, distinct tools** beat many overlapping ones.
+- **Tool descriptions are prompts**: version them and evaluate them.
+
+### The tool catalogue: six kinds of tools (lesson 08)
+
+```
+                          Tool definition (name, schemas, errors, examples)
+                                             │
+   ┌──────────────┬──────────────┬───────────┼────────────┬──────────────┬──────────────┐
+   ▼              ▼              ▼           ▼            ▼              ▼              │
+ Web search   Code exec /    Database     API          Email /        File system       │
+              REPL           queries      requests     Slack / SMS    access            │
+   └──────────────┴──────────────┴───────────┬────────────┴──────────────┘              │
+                                             ▼                                          │
+                          Model Context Protocol (MCP): one server per system ◄─────────┘
+```
+
+| Tool type | Typical calls | Main risk | Must-have guardrail | Demo in lesson 08 |
+|---|---|---|---|---|
+| **Web search** | search, fetch page | Injected instructions in pages | Treat as data, cite URLs, domain filters | A spam page saying "IGNORE ALL PREVIOUS INSTRUCTIONS" gets flagged; `allowed_domains` drops it |
+| **Code execution / REPL** | run Python/shell | Arbitrary code | Real sandbox (container, no network), timeout, output cap | Primes sum = 76127 exact; `1/0` returns a traceback; `while True` killed at the timeout |
+| **Database queries** | narrow queries, text-to-SQL | Data leak, destructive SQL | Parameterized queries, read-only DB user, row-level security | `open' OR '1'='1` returns nothing; `DELETE` refused; unknown table → error the model can fix |
+| **API requests** | GET/POST to services | SSRF, leaked secrets | Host allowlist, secrets added server-side, trimmed responses | `169.254.169.254` (cloud metadata) blocked; 503 → `retryable: true`; response 197 → 27 tokens |
+| **Email / Slack / SMS** | draft, send, post | Irreversible, spam | Draft → confirm → send, idempotency key, recipient rules | Retry after send → `already_sent`; external recipient refused; 1 message delivered |
+| **File system access** | list, read, write | Path escape, overwrites | Resolve path *then* check it's inside the root; write gate | `../../.env` and `~/.ssh/id_rsa` blocked |
+
+**Narrow tool vs flexible tool:** `orders_by_status(status)` is safe by
+construction but only answers one question. `run_sql(query)` answers
+anything, but needs a read-only user, row caps, timeouts and row-level
+security. Start narrow for anything user-facing.
+
+### Who runs the tool?
+
+| | Client tools | Server tools |
+|---|---|---|
+| Who executes | **Your code** (everything in lessons 07/08) | **The provider** (typically web search, web fetch, code execution) |
+| Round trip | Model → you → model | Inside one API response |
+| Control | Full | Limited to the provider's options |
+
+### Where MCP fits
+
+```
+  your agent (MCP client) ──► MCP server "files"   → list_files, read_file
+                          ├──► MCP server "db"      → run_sql
+                          ├──► MCP server "slack"   → send_message
+                          └──► MCP server "search"  → web_search
+```
+
+MCP doesn't change anything on the model's side. The client fetches
+tool definitions from each server at runtime, sends them to the model
+exactly as above, and forwards the model's calls to the right server.
+Write a tool once as an MCP server and any MCP client (your agent,
+Claude Code, an IDE) can use it. **The guardrails belong inside the
+server.** Build servers: `learn-mcp/01–09`. Attach them to an agent:
+`learn-mini-claude/03`.
+
+| Term | What it is | Where |
+|---|---|---|
+| Tool call | One request/result round trip | lessons 03, 07 |
+| Agent | A loop of tool calls until the model stops asking | `learn-mini-claude/01–05` |
+| MCP | A protocol for serving tools from a separate process, reusable by any client | `learn-mcp/` |
+| Subagent | An agent exposed as a tool to another agent | `learn-mini-claude/06` |
+
+### Tool calling in code: a complete loop
+
+**This repo's helper (LangChain + Azure OpenAI):**
+
+```python
+import json
+from langchain_core.tools import tool
+from langchain_core.messages import HumanMessage, ToolMessage
+from llm_helper import get_llm
+
+@tool
+def get_weather(city: str) -> dict:
+    """Get the current weather for a city."""
+    return {"city": city, "temp_c": 24}
+
+llm = get_llm(model="gpt-4-1", temperature=0).bind_tools([get_weather])
+messages = [HumanMessage("What's the weather in Rome?")]
+ai = await llm.ainvoke(messages)
+messages.append(ai)
+for call in ai.tool_calls:                               # [{"name", "args", "id"}]
+    result = get_weather.invoke(call["args"])
+    messages.append(ToolMessage(content=json.dumps(result), tool_call_id=call["id"]))
+final = await llm.ainvoke(messages)
+print(final.content)
+```
+
+**OpenAI SDK:**
+
+```python
+import json
+from openai import OpenAI
+client = OpenAI()
+TOOLS = {"get_weather": lambda city: {"city": city, "temp_c": 24}}
+tools = [{"type": "function", "function": {
+    "name": "get_weather", "description": "Get the current weather for a city.",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}},
+                   "required": ["city"]}}}]
+
+messages = [{"role": "user", "content": "What's the weather in Rome?"}]
+while True:
+    resp = client.chat.completions.create(model="gpt-4.1", messages=messages, tools=tools)
+    msg = resp.choices[0].message
+    messages.append(msg)
+    if not msg.tool_calls:
+        break
+    for call in msg.tool_calls:
+        args = json.loads(call.function.arguments)       # arguments is a JSON STRING
+        result = TOOLS[call.function.name](**args)
+        messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps(result)})
+print(msg.content)
+```
+
+**Anthropic SDK:**
+
+```python
+import json
+import anthropic
+client = anthropic.Anthropic()
+TOOLS = {"get_weather": lambda city: {"city": city, "temp_c": 24}}
+tools = [{"name": "get_weather", "description": "Get the current weather for a city.",
+          "input_schema": {"type": "object", "properties": {"city": {"type": "string"}},
+                           "required": ["city"]}}]
+
+messages = [{"role": "user", "content": "What's the weather in Rome?"}]
+while True:
+    resp = client.messages.create(model="claude-opus-5", max_tokens=16000,
+                                  tools=tools, messages=messages)
+    messages.append({"role": "assistant", "content": resp.content})   # keep ALL blocks
+    if resp.stop_reason != "tool_use":
+        break
+    results = [{"type": "tool_result", "tool_use_id": b.id,
+                "content": json.dumps(TOOLS[b.name](**b.input))}      # input is already a dict
+               for b in resp.content if b.type == "tool_use"]
+    messages.append({"role": "user", "content": results})             # ALL results, ONE message
+print(next(b.text for b in resp.content if b.type == "text"))
+```
+
+In production, add everything from lesson 07 to these loops:
+argument validation, a permission gate for side effects, errors
+returned as results, a cap on iterations, and logging.
+
 ---
 
 ## 4. No-confusion FAQ
@@ -686,6 +923,8 @@ models from scratch. Each stage maps to where this repo teaches it.
 | 1 | Tokens, next-token prediction, hallucination | **`learn-llm-fundamentals/01`** | ✅ |
 | 1 | Temperature, top_p, top_k, penalties, stop, max_tokens | **`learn-llm-fundamentals/02`** | ✅ |
 | 1 | API anatomy, roles, statelessness, cost | **`learn-llm-fundamentals/03`** | ✅ |
+| 1 | Tool calling: definitions, validation, tool_choice, parallel calls, design | **`learn-llm-fundamentals/07`** | ✅ |
+| 1 | Tool types: web search, code exec, DB, APIs, messaging, files + guardrails | **`learn-llm-fundamentals/08`** | ✅ |
 | 2 | Context engineering | **`learn-llm-fundamentals/04`** | ✅ |
 | 2 | Prompt engineering, few-shot, CoT, self-consistency | **`learn-llm-fundamentals/05`** | ✅ |
 | 2 | Structured output + validation | `learn-llm-fundamentals/03`, `learn-ai-advanced/04` | ✅ |
@@ -747,6 +986,13 @@ subtopics and progress tracking, is in
 | **Stateless** | The API keeps nothing between calls; you resend history | 03 |
 | **Tool call** | Model output shaped as `{name, arguments}` that your code executes | 03 |
 | **Structured output** | Constraining/validating output to a JSON schema | 03 |
+| **Tool definition** | Name, description, input/output schema, errors, examples: all the model knows about a tool | 07 |
+| **tool_choice** | Whether the model may, must, or must not call tools (or a specific one) | 07 |
+| **Parallel tool calls** | Several tool calls in one model turn; run them concurrently, return results together | 07 |
+| **Client vs server tools** | Tools your code runs vs tools the provider runs for you (e.g. web search) | 08 |
+| **Text-to-SQL** | A tool that lets the model write SQL; needs read-only access and row limits | 08 |
+| **SSRF** | Tricking a server into fetching internal URLs; blocked by a host allowlist | 08 |
+| **Idempotency key** | An id that makes a retried side effect (send, charge) happen only once | 08 |
 | **Hallucination** | Fluent, plausible, false output | 01 |
 | **Knowledge cutoff** | The date the training data ends | 01 |
 | **Context engineering** | Choosing what goes into the context, in what form and order | 04 |

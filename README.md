@@ -179,6 +179,8 @@ Topics still to learn are tracked in
 | `01_what_is_an_llm.py` | Tokenization, next-token prediction, the generation loop, why hallucination is built in, why more context helps |
 | `02_sampling_temperature_top_p.py` | Softmax, temperature sweep 0–2, top_k, top_p, combinations and order, seeds, penalties, max_tokens, stop sequences, settings by task |
 | `03_chat_api_anatomy.py` | Roles, chat templates, statelessness, tool calls as text, structured output, stop_reason, cost math |
+| `07_tool_calling.py` | Tool definitions (name, input/output schema, errors, examples), schema generation, validation + self-correction, tool_choice, parallel calls, tool design, result sizing, safety |
+| `08_tool_types_catalogue.py` | Web search, code execution, database queries, API requests, email/Slack/SMS, file system: each built sandboxed with its key guardrail; client vs server tools; MCP |
 | `04_context_engineering.py` | Token budgets, naive vs engineered context (measured), WRITE/SELECT/COMPRESS/ISOLATE, ordering for caching, failure modes |
 | `05_prompt_engineering.py` | Prompt anatomy, delimiters, few-shot selection, reasoning, self-consistency, chaining, anti-patterns |
 | `06_production_llm_engineering.py` | Latency and streaming, model routing, response caching, retries/fallbacks, batch, prompting vs RAG vs fine-tuning, security |
@@ -387,6 +389,8 @@ learn-fastapi-py/
 │   ├── 04_context_engineering.py
 │   ├── 05_prompt_engineering.py
 │   ├── 06_production_llm_engineering.py
+│   ├── 07_tool_calling.py       # read 07 + 08 right after 03
+│   ├── 08_tool_types_catalogue.py
 │   └── README.md                # START HERE -- diagrams, FAQ, roadmap
 ├── learn-mini-claude/           # Build your own Claude Code + attach MCP servers
 │   ├── 01_agent_loop.py
