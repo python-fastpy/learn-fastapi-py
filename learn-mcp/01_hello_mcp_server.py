@@ -38,7 +38,8 @@ Flow:
 
 PREREQUISITES: None -- this is the starting point.
 
-Run:  uv run python 01_hello_mcp_server.py
+Run:  uv run python 01_hello_mcp_server.py            (in-process demo)
+      uv run python 01_hello_mcp_server.py --serve    (real stdio server; lesson 02 connects to it)
 
 EXPECTED OUTPUT:
   === Registered Tools ===
@@ -55,6 +56,7 @@ EXPECTED OUTPUT:
 """
 
 import asyncio
+import sys
 from typing import Annotated
 from pydantic import Field
 from fastmcp import FastMCP, Client
@@ -139,7 +141,14 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Two ways to run this file:
+    #   uv run python 01_hello_mcp_server.py           -> the in-process demo above
+    #   uv run python 01_hello_mcp_server.py --serve   -> a real MCP server on stdio,
+    #       waiting for a client to connect (lesson 02 launches it this way)
+    if "--serve" in sys.argv:
+        mcp.run(show_banner=False)          # stdio transport; stdout carries JSON-RPC only
+    else:
+        asyncio.run(main())
 
     # -- Key takeaway --------------------------------------------------------
     #
