@@ -5,7 +5,7 @@ with a sandbox and permission prompts, **any MCP server attached via
 `.mcp.json`** (the same config format Claude Code uses), and both a
 terminal CLI and a plain HTML/CSS web UI.
 
-The whole agent is ~250 lines. Lessons 01–03 run with **no credentials**.
+The whole agent is ~250 lines. Lessons 01–03 and 06–11 run with **no credentials**.
 
 ---
 
@@ -30,6 +30,41 @@ registry = dict[str, Tool]      # ONE flat dict: built-ins + every MCP tool
 Once an MCP tool is wrapped into that same `Tool` shape, the loop cannot
 tell it apart from a built-in. That's the trick that makes capability a
 *config* change instead of a *code* change.
+
+### LLM vs agent vs subagent
+
+Three words that get blurred together. They're three layers, each one
+the previous plus a single idea (runnable side by side in lesson 06):
+
+| Layer | What it is | Can act? | Memory |
+|---|---|---|---|
+| **LLM** | A function: `messages -> text` | No — it can only *describe* a tool call | None. "Memory" is you resending history |
+| **Agent** | LLM + tools + a loop + a `messages` list | Yes — your code runs the tools it asks for | Its `messages` list |
+| **Subagent** | An agent that *another agent* starts via a tool call | Yes — usually with a restricted tool set | Its **own fresh** list; the parent only gets the final summary |
+
+```
+LLM        messages ──► MODEL ──► text
+
+AGENT      ┌─► MODEL ──► tool_calls? ──► your code runs them ─┐
+           └──────────── results appended to messages ◄───────┘
+
+SUBAGENT   parent ──spawn_subagent(task)──► NEW agent_loop(fresh messages)
+             ▲                                   reads 40 files…
+             └────────── "found it in X, Y" ◄────┘   (parent never sees them)
+```
+
+A subagent adds no new machinery. It's `agent_loop()` wrapped in a
+`Tool`. What you get from it is **context isolation**: the noisy part of
+a task (reading many files, trying things) happens in a context that
+gets thrown away, so the parent's context, which is resent on every
+call, stays small. Other benefits: several can run **in parallel** from
+one turn, and each can have different tools, instructions or model.
+Measured in lesson 06, the subagent's context held 1,041 chars of file
+contents while the parent's held 223.
+
+Subagents don't get `spawn_subagent` themselves, or a confused model can
+recurse forever. And they cost their own LLM calls, so they pay off for
+*read-a-lot, answer-short* tasks and are wasteful for small ones.
 
 ### The parts
 
@@ -182,6 +217,13 @@ Almost anything you'd want to add is one of these:
      ── you now understand everything in agent_core.py ──
 04 → CLI: the pieces + a real model
 05 → Web UI: the same agent, different shell
+06 → LLM vs agent vs subagent, side by side     (no credentials)
+     ── the depth real Claude Code adds, one topic per lesson ──
+07 → search + edit: grep, glob, exact-match edit (no credentials)
+08 → parallel tool calls: reads together         (no credentials)
+09 → hooks: code before/after every tool         (no credentials)
+10 → planning: a todo list the model writes      (no credentials)
+11 → subagents on the real loop, measured        (no credentials)
 ```
 
 ---
@@ -207,12 +249,13 @@ it for you as a subprocess.
 
 ## Run each lesson
 
-### Lessons 01–03 — no credentials needed
+### Lessons 01–03 and 06 — no credentials needed
 
 ```bash
 uv run python 01_agent_loop.py       # the loop, with a mock model
 uv run python 02_builtin_tools.py    # file tools + sandbox + permission gate
 uv run python 03_attach_mcp.py       # read .mcp.json, attach an MCP server
+uv run python 06_llm_vs_agent_vs_subagent.py   # the three layers, side by side
 ```
 
 Each prints its output and exits. Read the docstring at the top of the
@@ -250,6 +293,28 @@ hover a chip to see the arguments. `Ctrl+C` in the terminal to stop.
 
 > The web UI refuses `run_command` by design — an HTTP handler can't stop
 > and ask you mid-request. See the permission-policy note in lesson 05.
+
+### Lessons 07–11 — no credentials needed
+
+```bash
+uv run python 07_search_and_edit.py   # grep/glob/edit_file vs read-everything, token counts
+uv run python 08_parallel_tools.py    # 3s -> 1s for reads; the lost-update race for writes
+uv run python 09_hooks.py             # pre/post tool hooks, and a hook being bypassed
+uv run python 10_todo_planning.py     # the model keeps its own checklist
+uv run python 11_subagents.py         # context isolation, measured on the real loop
+```
+
+Each one is standalone. It defines its feature in the lesson file and
+does **not** change `agent_core.py`, so the CLI and the web UI work
+exactly as before. Each lesson's exercises end with how to wire the
+feature into the core yourself.
+
+These drive the **real** `agent_core.agent_loop()` with a scripted model
+(`scripted_model.py`) in place of the LLM. The loop, tools and sandbox
+are real, and so are the files the lessons write under `_sandbox/`. Only
+the model's decisions are scripted, so the output is the same every
+run. The token counts they print are estimates (characters ÷ 4), fine for
+comparing two approaches but not real billing.
 
 ### What to type
 
@@ -575,6 +640,32 @@ workflow__start_workflow → read_file → complete_step → complete_step
 > steps happen, not the quality of the thinking inside them. For that you
 > need output evals — see `learn-ai-advanced` lesson 02.
 
+### Testing the agent loop itself
+
+`test_workflow.py` tests the workflow server. `test_agent_loop.py` tests
+the thing everything else sits on, `agent_core.agent_loop()`:
+
+```bash
+uv run pytest test_agent_loop.py -v
+```
+
+You can't make a real model misbehave on cue, so the tests use
+`ScriptedModel`. It calls a tool that doesn't exist, calls one that
+raises, or never stops calling tools, exactly when the test says to. Each
+test pins down one promise this README makes:
+
+| Promise | Test |
+|---|---|
+| Text ends the loop; every tool call gets a result with its `tool_call_id` | `test_text_reply_ends_the_loop`, `test_tool_result_goes_back_with_matching_id` |
+| Read-only tools skip `approve()`; writes always ask | `test_read_only_tools_skip_approve`, `test_write_tools_always_ask` |
+| A denial, an unknown tool, or a crash is a *result*, not an exception | `test_denied_…`, `test_unknown_tool_…`, `test_tool_that_raises_…` |
+| `max_turns` stops a model that never finishes | `test_max_turns_stops_…` |
+| `safe_path()` holds against `..`, absolute paths and prefix tricks | `test_safe_path_…` |
+
+Name the file explicitly. Plain `uv run pytest` also collects
+`test_workflow.py`, which is a script with its own runner, not a pytest
+suite.
+
 ### Checking a server is actually connected
 
 ```bash
@@ -655,6 +746,12 @@ uv run python check_mcp.py
 | 03 | `03_attach_mcp.py` | `.mcp.json`, runtime tool discovery, adapting MCP tools, namespacing, failure isolation | No |
 | 04 | `04_mini_claude_cli.py` | The full terminal REPL: real LLM, conversation state, y/n/a prompts, slash commands | **Yes** |
 | 05 | `05_mini_claude_web.py` | FastAPI + HTML/CSS chat UI, session state, permission *policy* vs. prompt | **Yes** |
+| 06 | `06_llm_vs_agent_vs_subagent.py` | Bare LLM vs agent vs subagent; subagent = agent-as-a-tool; context isolation; parallel fan-out | No |
+| 07 | `07_search_and_edit.py` | `glob_files` / `grep` / `edit_file`; exactly-once edits; the `Path.glob("../*")` sandbox hole; token cost of tool design | No |
+| 08 | `08_parallel_tools.py` | Running read-only calls with `asyncio.gather`; result ordering; the lost-update race; write barriers | No |
+| 09 | `09_hooks.py` | `pre_tool` (block) and `post_tool` (feedback) hooks; audit; why a pattern-matching hook isn't a sandbox | No |
+| 10 | `10_todo_planning.py` | A stateless `todo_write` tool; replace semantics; model-owned plan vs. server-owned workflow | No |
+| 11 | `11_subagents.py` | Subagents on the real `agent_core` loop: read-only child tools, no recursion, context size and follow-up cost measured | No |
 
 ### Supporting files
 
@@ -666,6 +763,8 @@ uv run python check_mcp.py
 | `workflow_mcp_server.py` | A stateful MCP server that walks the agent through a procedure, one step at a time. |
 | `workflows/*.md` | The workflow definitions — markdown + YAML frontmatter. Add a file, restart, done. |
 | `test_workflow.py` | Tests a workflow end to end with **no LLM and no tokens**. |
+| `test_agent_loop.py` | pytest suite for `agent_core.agent_loop()` and `safe_path()`, driven by the scripted model. |
+| `scripted_model.py` | A stand-in for the LLM with `bind_tools()` + `ainvoke()`, so lessons 07–11 and the tests run the real loop without credentials. |
 | `check_mcp.py` | Diagnostic — is each server in `.mcp.json` actually connected? |
 | `.mcp.json` | The server config. Edit this to attach your own. |
 | `AGENT.md` | Persistent instructions appended to the system prompt — this project's `CLAUDE.md`. |
@@ -727,10 +826,17 @@ Two controls, in this order:
 | `AGENT.md` | `CLAUDE.md` — project instructions appended to the system prompt |
 | `SESSION_ALLOW` (`a` option) | "Always allow" in the permission prompt |
 | `max_turns` | Turn/budget limits on an agentic run |
+| `spawn_subagent` (lesson 06), `make_subagent_tool` (lesson 11) | The Agent/Task tool — e.g. the "Explore" subagent |
+| `grep` / `glob_files` / `edit_file` (lesson 07) | Grep / Glob / Edit, with the same exactly-once rule |
+| `run_tool_calls` (lesson 08) | Independent read-only tools run concurrently; edits run one at a time |
+| `Hooks.pre_tool` / `post_tool` (lesson 09) | `PreToolUse` / `PostToolUse` hooks in `settings.json` |
+| `todo_write` (lesson 10) | TodoWrite |
 
-What real Claude Code adds isn't a different architecture — it's depth:
-smarter tools (Edit with ambiguity checks, Grep/Glob), context compaction,
-subagents, hooks, streaming, and a great deal of prompt engineering.
+What real Claude Code adds isn't a different architecture — it's depth.
+Lessons 06–11 build small versions of several of those pieces: subagents,
+smarter tools, parallel calls, hooks and planning. What's still left is
+context compaction (lesson 04 exercise 3), streaming (lesson 05
+exercise 1), and a great deal of prompt engineering.
 
 ## Related lessons in this repo
 

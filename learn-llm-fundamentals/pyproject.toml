@@ -1,0 +1,6 @@
+[project]
+name = "learn-llm-fundamentals"
+version = "0.1.0"
+description = "How LLMs work (tokens, sampling, APIs), context engineering, prompt engineering, production concerns"
+requires-python = ">=3.10"
+dependencies = []

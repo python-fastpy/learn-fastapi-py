@@ -162,6 +162,27 @@ AWS via CloudFormation (both Lambda and ECS Fargate paths). Start at
 | `docs/05-deploy-fargate.md` | Walkthrough: Docker → ECR → ECS, two IAM roles, rolling deploys |
 | `docs/06-operations-and-teardown.md` | Logs, alarms, rollback, cost comparison, CI/CD outline, full teardown |
 
+### LLM Fundamentals (`learn-llm-fundamentals/`)
+
+**Start here for AI engineering.** What an LLM actually is, every
+sampling knob (temperature, top_p, top_k, penalties, stop, max_tokens)
+measured case by case, what an API call really sends, context
+engineering, prompt engineering, and production concerns, ending with
+an AI-engineer roadmap that maps every skill to a folder in this repo.
+Pure Python, no packages, no credentials. Start at
+[`learn-llm-fundamentals/README.md`](learn-llm-fundamentals/README.md).
+Topics still to learn are tracked in
+[`AI_ENGINEER_LEARNING_BACKLOG.md`](AI_ENGINEER_LEARNING_BACKLOG.md).
+
+| File | Topics |
+|------|--------|
+| `01_what_is_an_llm.py` | Tokenization, next-token prediction, the generation loop, why hallucination is built in, why more context helps |
+| `02_sampling_temperature_top_p.py` | Softmax, temperature sweep 0–2, top_k, top_p, combinations and order, seeds, penalties, max_tokens, stop sequences, settings by task |
+| `03_chat_api_anatomy.py` | Roles, chat templates, statelessness, tool calls as text, structured output, stop_reason, cost math |
+| `04_context_engineering.py` | Token budgets, naive vs engineered context (measured), WRITE/SELECT/COMPRESS/ISOLATE, ordering for caching, failure modes |
+| `05_prompt_engineering.py` | Prompt anatomy, delimiters, few-shot selection, reasoning, self-consistency, chaining, anti-patterns |
+| `06_production_llm_engineering.py` | Latency and streaming, model routing, response caching, retries/fallbacks, batch, prompting vs RAG vs fine-tuning, security |
+
 ### Mini Claude Code (`learn-mini-claude/`)
 
 **Build your own Claude Code**, then attach any MCP server to it via
@@ -178,6 +199,7 @@ credentials. Start at
 | `03_attach_mcp.py` | `.mcp.json`, runtime tool discovery, adapting MCP tools, namespacing, failure isolation |
 | `04_mini_claude_cli.py` | The full terminal REPL — real LLM, conversation state, y/n/a prompts, slash commands |
 | `05_mini_claude_web.py` + `web/` | FastAPI + HTML/CSS chat UI, session state, permission *policy* vs. prompt |
+| `06_llm_vs_agent_vs_subagent.py` | Bare LLM vs agent vs subagent side by side; context isolation; parallel subagents |
 | `agent_core.py` | Lessons 01-03 assembled once; both the CLI and the web UI import it |
 | `demo_mcp_server.py` | A tiny MCP server so `.mcp.json` works out of the box |
 
@@ -358,6 +380,14 @@ learn-fastapi-py/
 │   ├── infra-lambda.yaml       # CloudFormation: Lambda path
 │   ├── infra-fargate.yaml      # CloudFormation: Fargate path
 │   └── docs/                   # 6 numbered walkthroughs
+├── learn-llm-fundamentals/      # How LLMs work, sampling, context + prompt engineering, AI-engineer roadmap
+│   ├── 01_what_is_an_llm.py
+│   ├── 02_sampling_temperature_top_p.py
+│   ├── 03_chat_api_anatomy.py
+│   ├── 04_context_engineering.py
+│   ├── 05_prompt_engineering.py
+│   ├── 06_production_llm_engineering.py
+│   └── README.md                # START HERE -- diagrams, FAQ, roadmap
 ├── learn-mini-claude/           # Build your own Claude Code + attach MCP servers
 │   ├── 01_agent_loop.py
 │   ├── 02_builtin_tools.py
