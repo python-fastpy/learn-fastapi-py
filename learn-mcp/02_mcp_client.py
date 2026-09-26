@@ -1,9 +1,21 @@
 """Lesson 02 -- MCP Client: the same server over STDIO and over HTTP
 ====================================================================
 
-Lesson 01 called its tools in-process: `Client(mcp)`, no real server. Here
-the server is a SEPARATE PROGRAM, reached two ways. The server code and the
-client calls are identical in both parts -- only the road changes.
+Lesson 01 called its tools IN MEMORY: `Client(mcp)` is handed the server
+object itself, so client and server live in the same Python program and
+calls are passed directly -- no process, no port, no JSON-RPC text on a wire
+(FastMCP picks `FastMCPTransport` for this; it's what you use in tests).
+
+Here the server is a SEPARATE PROGRAM, reached two ways. The server code and
+the client calls are identical in both parts -- only the road changes.
+
+  IN MEMORY (lesson 01)      PART A -- STDIO            PART B -- HTTP
+  Client(mcp)                Client(PythonStdio...)     Client(StreamableHttp...)
+  ┌──────────────────┐       ┌────────┐ stdin ┌──────┐  ┌────────┐ POST ┌──────┐
+  │ client ⇄ server  │       │ client │ ────► │server│  │ client │ ───► │server│
+  │  one program     │       │        │ ◄──── │ proc │  │        │ ◄─── │(own) │
+  └──────────────────┘       └────────┘ stdout└──────┘  └────────┘      └──────┘
+  direct calls               JSON-RPC lines             JSON-RPC over HTTP
 
   PART A -- STDIO   the client STARTS the server and talks over stdin/stdout
                     (Claude Code, IDEs, .mcp.json "command" entries)
