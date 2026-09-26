@@ -84,9 +84,9 @@ Lesson 13 at the top combines both into the **full production architecture**.
 
 | # | File | What You Learn | Key Concept | Maps To |
 |---|------|----------------|-------------|---------|
-| 01 | `01_hello_mcp_server.py` | Register tools two ways, then validate their input: reject bad input vs clamp edge values | `@mcp.tool` and `mcp.tool()(fn)`; `ToolError` vs silent clamping | story-drafting/main.py, archive_search.py, search_rics.py |
+| 01 | `01_hello_mcp_server.py` | Register one greet tool two ways, and reject bad input | `@mcp.tool` vs `mcp.tool(name, meta)(fn)`; `ToolError` | story-drafting/main.py |
 | 02 | `02_mcp_client.py` | Connect to a server as a client, and see the handshake messages | `Client` over stdio, `list_tools()` / `call_tool()`, JSON-RPC `initialize` | mcp_protocol.py |
-| 03 | `03_logging.py` | Debug tools without print statements | `get_logger()` and log levels | story-drafting/main.py |
+| 03 | `03_logging.py` | Debug tools without print statements: server logs vs logs sent to the client | fastmcp `get_logger()`, `ctx.info()` + client `log_handler` | story-drafting/main.py |
 | 04 | `04_resources_and_prompts.py` | Expose data and templates, not just actions | Resources + Prompts (the other 2 MCP primitives) | workflows/routes.py |
 | 04b | `04_structured_content.py` | One tool result, three parts: text for the LLM, JSON for your code, metadata for logs | `content` vs `structuredContent` vs `_meta`; `status: interrupted` + `continuation_token` | mcp_protocol.py `_call_tool_result_to_dict()` |
 
