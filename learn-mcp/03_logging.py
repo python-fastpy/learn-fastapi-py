@@ -10,6 +10,24 @@ An MCP server can log in two places (three cases):
   3. LOG LEVELS   debug < info < warning < error
                   log.setLevel("WARNING") hides server INFO lines
 
+  ┌──────────── MCP SERVER ─────────────┐
+  │ greet("Shubham") runs:              │
+  │                                     │    stderr     ┌─────────────────────────┐
+  │   1. log.info("greet called ...") ──┼─────────────► │ server terminal/Datadog │
+  │      (filtered by log.setLevel) 3.  │               │ for YOU, the developer  │
+  │                                     │               └─────────────────────────┘
+  │   2. await ctx.info("Greeting ...") │
+  │         │                           │
+  └─────────┼───────────────────────────┘
+            │ MCP notification  {"method": "notifications/message",
+            │                    "params": {"level": "info", "data": {...}}}
+            ▼  (travels with the other MCP messages -- stdio or HTTP)
+  ┌──────────── MCP CLIENT ─────────────┐
+  │ Client(mcp, log_handler=show_log)   │
+  │   show_log(message) is called:      │
+  │   "client got [info] Greeting ..."  │  -> the app shows it in its UI or logs
+  └─────────────────────────────────────┘
+
   Never print() in a stdio server: stdout carries the MCP messages, so a stray
   print corrupts them. Logs go to stderr, a separate channel.
 

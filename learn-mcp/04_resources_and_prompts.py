@@ -13,6 +13,31 @@ An MCP server can offer three kinds of things (four cases):
   Prompt   = reusable INSTRUCTIONS; the client fills in the blanks and
              sends the result to the LLM
 
+      MCP CLIENT                                MCP SERVER "greetings"
+  ┌──────────────────────┐                  ┌──────────────────────────────────┐
+  │                      │  tools/call      │ 1. TOOL                          │
+  │ call_tool("greet",   │ ───────────────► │    greet(name)                   │
+  │   {"name":"Shubham"})│ ◄─────────────── │    -> "Hello, Shubham!"          │
+  │                      │                  │                                  │
+  │ read_resource(       │  resources/read  │ 2. RESOURCE                      │
+  │  "greet://languages")│ ───────────────► │    greet://languages             │
+  │                      │ ◄─────────────── │    -> "en, fr, de"               │
+  │                      │                  │                                  │
+  │ read_resource(       │  resources/read  │ 3. RESOURCE TEMPLATE             │
+  │  "greet://hello/fr") │ ───────────────► │    greet://hello/{lang}          │
+  │                      │ ◄─────────────── │    {lang}="fr" -> "Bonjour"      │
+  │                      │                  │                                  │
+  │ get_prompt(          │  prompts/get     │ 4. PROMPT                        │
+  │  "welcome_message",  │ ───────────────► │    welcome_message(name)         │
+  │  {"name":"Shubham"}) │ ◄─────────────── │    -> "Write a warm 2-sentence   │
+  │         │            │                  │        welcome ... Shubham."     │
+  └─────────┼────────────┘                  └──────────────────────────────────┘
+            ▼
+     send that text to the LLM (the server never talks to the LLM itself)
+
+  Discovery first: list_tools / list_resources / list_resource_templates /
+  list_prompts tell the client what exists -- nothing is hard-coded.
+
 Run:  uv run python 04_resources_and_prompts.py
 
 Maps to: tools -> every @mcp.tool in the skills; resources -> workflow
