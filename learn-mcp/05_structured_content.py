@@ -1,4 +1,4 @@
-"""Lesson 04b -- Structured Content and Metadata: one tool result, three parts
+"""Lesson 05 -- Structured Content and Metadata: one tool result, three parts
 ============================================================================
 
 A tool result can carry THREE separate things, each for a different reader:
@@ -26,9 +26,9 @@ A tool result can carry THREE separate things, each for a different reader:
     Every Reuters skill returns structuredContent with status / interrupt /
     continuation_token, and _meta.skill_call_extras with per-step timing.
     The backend parses it in mcp_protocol.py -> _call_tool_result_to_dict().
-    (Interrupts end to end: lesson 10. Hiding data from the LLM: lesson 08.)
+    (Interrupts end to end: lesson 06. Hiding data from the LLM: lesson 10.)
 
-Run:  uv run python 04_structured_content.py
+Run:  uv run python 05_structured_content.py
 """
 
 import asyncio

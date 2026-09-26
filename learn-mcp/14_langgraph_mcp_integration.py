@@ -1,4 +1,4 @@
-"""Lesson 13 -- LangGraph + MCP Integration (Capstone)
+"""Lesson 14 -- LangGraph + MCP Integration (Capstone)
 ======================================================
 
 WHY THIS MATTERS:
@@ -48,13 +48,13 @@ Architecture (mirrors your production backend):
     mcp_protocol.py              -> MCP client calls inside nodes
     mcp_server_registry.py       -> multi-server discovery
 
-PREREQUISITES: Lesson 12 (orchestration), Lesson 10 (interrupts), Lesson 11 (multi-server)
+PREREQUISITES: Lesson 13 (orchestration), Lesson 06 (interrupts), Lesson 12 (multi-server)
   Also helpful: LangGraph basics (StateGraph, nodes, edges)
 
 No real LLM needed -- uses mock analysis to keep it runnable without
 credentials.  Swap mock_analyze() for LLM-based analysis to go live.
 
-Run:  uv run python 13_langgraph_mcp_integration.py
+Run:  uv run python 14_langgraph_mcp_integration.py
 
 EXPECTED OUTPUT:
   === MCP + LangGraph Orchestrator ===
@@ -108,7 +108,7 @@ from langgraph.types import interrupt, Command
 
 
 # ============================================================================
-# PART 1: MCP Servers (same as lesson 12, representing production skills)
+# PART 1: MCP Servers (same as lesson 13, representing production skills)
 # ============================================================================
 # In production these run on separate ECS containers behind an ALB.
 # Here we use in-process FastMCP for simplicity.
@@ -601,11 +601,11 @@ if __name__ == "__main__":
     #
     # -- Exercise -------------------------------------------------------------
     # 1. Add LLM-based analysis: replace mock_analyze keywords with an
-    #    LLM call using llm_helper.get_llm() (see lesson 07 for pattern)
+    #    LLM call using llm_helper.get_llm() (see lesson 09 for pattern)
     # 2. Add parallel tool execution: use asyncio.gather() in call_tools
     #    when the plan strategy is "parallel"
     # 3. Add workflow support: load workflow definitions from the MCP
-    #    server (lesson 09) and use them to gate which tools are visible
+    #    server (lesson 11) and use them to gate which tools are visible
     # 4. Add streaming: yield progress updates from call_tools using
     #    LangGraph's astream() instead of ainvoke()
     # 5. Swap MemorySaver for a SQLite or file-based checkpointer to

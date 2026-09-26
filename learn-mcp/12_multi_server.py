@@ -1,4 +1,4 @@
-"""Lesson 11 -- Multi-Server Registry
+"""Lesson 12 -- Multi-Server Registry
 ======================================
 
 WHY THIS MATTERS:
@@ -46,9 +46,9 @@ Flow:
     mcp_client_manager.py (connection pool, per-server clients)
     mcp_protocol.py (tool routing, parallel execution)
 
-PREREQUISITES: Lesson 05 (HTTP transport), Lesson 06 (client patterns)
+PREREQUISITES: Lesson 07 (HTTP transport), Lesson 08 (client patterns)
 
-Run:  uv run python 11_multi_server.py
+Run:  uv run python 12_multi_server.py
 
 EXPECTED OUTPUT:
   === Server Registry ===

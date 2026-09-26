@@ -1,4 +1,4 @@
-"""Lesson 15 -- MCP-to-MCP: One Skill Calling Another Over HTTP
+"""Lesson 16 -- MCP-to-MCP: One Skill Calling Another Over HTTP
 ================================================================
 
 WHY THIS MATTERS:
@@ -6,7 +6,7 @@ WHY THIS MATTERS:
   independent services. When one skill needs another's capability — like
   story-drafting asking a quote-checker to verify quotes — it calls that
   skill via MCP over HTTP. No shared imports, no coupling. The caller uses
-  the same Client + StreamableHttpTransport from lesson 05, but *inside*
+  the same Client + StreamableHttpTransport from lesson 07, but *inside*
   a tool handler instead of a standalone script.
 
   This is a NEW pattern. Today, only the backend orchestrator calls skills.
@@ -48,9 +48,9 @@ Flow:
     generate_spot_story.py (lines 242-262)   -> calls quote-fidelity via MCP
     story-drafting/infra/config.py           -> QUOTE_FIDELITY_MCP_URL env var
 
-PREREQUISITES: Lesson 05 (HTTP transport), Lesson 06 (client patterns)
+PREREQUISITES: Lesson 07 (HTTP transport), Lesson 08 (client patterns)
 
-Run:  uv run python 15_mcp_to_mcp.py
+Run:  uv run python 16_mcp_to_mcp.py
 
 EXPECTED OUTPUT:
   Starting quote-checker server on port 8011...
@@ -416,7 +416,7 @@ if __name__ == "__main__":
         print("Both servers stopped.")
 
     # -- Key takeaway --------------------------------------------------------
-    # MCP-to-MCP is just the one-shot client pattern from lesson 06, used
+    # MCP-to-MCP is just the one-shot client pattern from lesson 08, used
     # *inside* a tool handler instead of a standalone script:
     #
     #   async def call_other_skill(args):
@@ -442,8 +442,8 @@ if __name__ == "__main__":
     # 1. Add a third server ("fact-checker") and have story-server call
     #    both quote-checker AND fact-checker in parallel with asyncio.gather()
     # 2. Add retry with exponential backoff to call_quote_checker_mcp()
-    #    (reuse the pattern from lesson 06's call_with_retry)
+    #    (reuse the pattern from lesson 08's call_with_retry)
     # 3. Forward the quote-check result as a _meta.forwarded_blocks entry
-    #    instead of inlining it (combine lesson 08 + this lesson)
+    #    instead of inlining it (combine lesson 10 + this lesson)
     # 4. Replace the hardcoded QUOTE_CHECKER_URL with os.environ.get()
     #    and test with/without the env var set

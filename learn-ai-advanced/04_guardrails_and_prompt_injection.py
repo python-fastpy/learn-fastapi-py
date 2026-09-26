@@ -24,7 +24,7 @@ WHAT YOU'LL LEARN:
      -- detection heuristics, and the structural fix (separating "content
      to read" from "instructions to follow" in the prompt itself)
   5. Where this plugs into the rest of the repo: MCP's `_meta.forwarded_blocks`
-     (learn-mcp lesson 08) already separates agent-visible from UI-visible
+     (learn-mcp lesson 10) already separates agent-visible from UI-visible
      content -- guardrails are the same instinct applied to trust, not visibility
 
 Concepts:
@@ -231,7 +231,7 @@ async def main():
     print()
 
     print("=== Prompt injection: indirect (inside a tool result) ===")
-    # search_web is the same tool shape as learn-mcp lesson 16 -- except
+    # search_web is the same tool shape as learn-mcp lesson 17 -- except
     # this time the "document" it returns has been poisoned by whoever
     # controls that page. The agent asked a normal question; the attack
     # arrives through the DATA path, not the user's own message.
@@ -304,7 +304,7 @@ if __name__ == "__main__":
     #    holds because it never depended on detecting the phrase.
     # 2. Add a redaction pattern for a case not covered (credit card numbers,
     #    physical addresses) and test it against realistic sample text.
-    # 3. Combine with lesson 15 in learn-mcp (MCP-to-MCP): scan a cross-skill
+    # 3. Combine with lesson 16 in learn-mcp (MCP-to-MCP): scan a cross-skill
     #    tool result for injection before returning it to the calling skill.
     # 4. Combine with lesson 02 (evals): build a golden dataset of injection
     #    attempts and eval whether wrap_as_inert_content() actually prevents

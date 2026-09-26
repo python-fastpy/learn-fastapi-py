@@ -149,11 +149,11 @@ async def case_6_transports():
     async with Client(hello.mcp) as client:
         print("   in-memory ->", (await client.call_tool("greet", {"name": "Shubham"})).data)
 
-    # stdio: the client starts the server itself
-    async with Client(PythonStdioTransport(SERVER, args=["--serve"])) as client:
-        print("   stdio     ->", (await client.call_tool("greet", {"name": "Shubham"})).data)
+    # stdio: already shown -- cases 1-4 above used it
+    print("   stdio     -> (cases 1-4 above)")
 
-    # http: the server must be running FIRST; the client only connects to a URL
+    # http: the server must be running FIRST; the client only connects to a URL.
+    #       Full HTTP details (health checks, headers, production settings): lesson 07.
     with socket.socket() as s:                                      # pick a free port
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]

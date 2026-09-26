@@ -28,7 +28,7 @@ Concepts:
   - Permission policy vs. prompt: the CLI asks a human in real time; the
     web UI decides up front (here: allow reads + writes, refuse shell).
     A production UI would stream an approval request to the browser and
-    await the click -- that's learn-mcp lesson 10's interrupt pattern.
+    await the click -- that's learn-mcp lesson 06's interrupt pattern.
   - Event trace: on_event collects tool calls so the response can show
     them as chips under the reply
 
@@ -116,7 +116,7 @@ SESSION_USAGE: dict[str, Usage] = {}
 # shell commands, since those are the hardest to undo. The grown-up
 # version streams an approval request to the browser and waits for a
 # click -- that's exactly the interrupt/resume pattern from learn-mcp
-# lesson 10 and learn-langgraph lesson 09.
+# lesson 06 and learn-langgraph lesson 09.
 
 BLOCKED_IN_WEB_UI = {"run_command"}
 
@@ -276,7 +276,7 @@ if __name__ == "__main__":
     #   3. A PERMISSION POLICY instead of a prompt -- the single real
     #      design problem. HTTP can't block on a human, so you either
     #      decide in advance (this lesson) or implement interrupt/resume
-    #      (learn-mcp lesson 10) to ask the browser and wait.
+    #      (learn-mcp lesson 06) to ask the browser and wait.
     #   4. EVENT REPORTING -- the CLI printed tool calls as they happened;
     #      the UI has to collect and ship them with the response.
     #

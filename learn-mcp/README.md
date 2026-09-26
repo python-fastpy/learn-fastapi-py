@@ -1,6 +1,6 @@
 # Learn MCP (Model Context Protocol)
 
-A 16-lesson progressive series for building MCP servers, clients, workflows, and orchestration — using the same patterns as the Reuters AI Assistant production codebase.
+A 17-lesson progressive series for building MCP servers, clients, workflows, and orchestration — using the same patterns as the Reuters AI Assistant production codebase.
 
 ## How to Use This Guide
 
@@ -19,62 +19,49 @@ cd learn-mcp
 uv sync          # install dependencies from pyproject.toml
 ```
 
-For lessons 07, 08, 12 (LLM-powered): copy `.env.example` to `.env` and fill in TR Orchestrator credentials.
+For lessons 09, 10, 13 (LLM-powered): copy `.env.example` to `.env` and fill in TR Orchestrator credentials.
 
 **You should already know:** Python async/await, basic FastAPI concepts, what an API is.
 **You don't need to know:** MCP, LangGraph, or the Reuters codebase (that's what you're learning).
 
 ## Concept Map
 
+Read it bottom to top: that's the order the lessons go in.
+
 ```
-                           ┌──────────────────┐
-                           │  Full System (13) │
-                           │  LangGraph + MCP  │
-                           └────────┬─────────┘
-                                    │
-                    ┌───────────────┼───────────────┐
-                    │               │               │
-           ┌────────▼─────────┐  ┌─▼────────────┐  │
-           │ Wire Protocol(14)│  │ MCP-to-MCP   │  │
-           │ Raw JSON-RPC HTTP│  │ Cross-Skill  │  │
-           └────────┬─────────┘  │   (15)       │  │
-                    │            └─┬────────────┘  │
-                    │              │                │
-                    ├──────────────┘                │
-                    │                               │
-                    ┌───────────────┐               │
-                    │               │               │
-           ┌───────▼──────┐ ┌──────▼──────┐ ┌──────▼──────┐
-           │ Orchestration │ │  Interrupts │ │ Multi-Server│
-           │    (12)       │ │    (10)     │ │    (11)     │
-           └───────┬──────┘ └──────┬──────┘ └──────┬──────┘
-                   │               │               │
-           ┌───────▼──────┐       │        ┌──────▼──────┐
-           │  Workflows   │       │        │   Client    │
-           │    (09)      ├───────┘        │  Patterns   │
-           └───────┬──────┘                │    (06)     │
-                   │                       └──────┬──────┘
-           ┌───────▼──────┐                       │
-           │  Meta/Fwd    │                ┌──────▼──────┐
-           │  Blocks (08) │                │    HTTP     │
-           └───────┬──────┘                │ Transport   │
-                   │                       │    (05)     │
-           ┌───────▼──────┐                └──────┬──────┘
-           │  LLM Inside  │                       │
-           │  Tools (07)  │                       │
-           └───────┬──────┘                       │
-                   │               ┌──────────────┘
-                   │               │
-           ┌───────▼───────────────▼──────┐
-           │  Server Fundamentals (01-04) │
-           │  Tools, Validation, Logging, │
-           │  Resources & Prompts         │
-           └──────────────────────────────┘
+                        ┌─────────────────────────┐
+  Phase 7  Agents       │ Agent vs MCP, handoff 17│
+                        └────────────┬────────────┘
+                   ┌─────────────────┼─────────────────┐
+  Phase 6  ┌───────▼───────┐ ┌───────▼───────┐ ┌───────▼───────┐
+  Deep     │ Full system   │ │ Wire protocol │ │  MCP-to-MCP   │
+  dives    │ LangGraph  14 │ │ JSON-RPC   15 │ │  cross-skill16│
+           └───────┬───────┘ └───────────────┘ └───────────────┘
+                   │
+  Phase 5  ┌───────▼───────┐                   ┌───────────────┐
+  Prod     │ Orchestration │ ◄──────────────── │ Multi-server  │
+           │           13  │                   │           12  │
+           └───────┬───────┘                   └───────▲───────┘
+                   │                                   │
+  Phase 4  ┌───────▼───────┐                   ┌───────┴───────┐
+  Smart    │ Workflows  11 │                   │ Client        │  Phase 3
+  tools    │ Meta/Fwd   10 │                   │ patterns   08 │  Client &
+           │ LLM inside 09 │                   │ HTTP       07 │  transport
+           └───────▲───────┘                   └───────▲───────┘
+                   │                                   │
+  Phase 2  ┌───────┴───────────────────────────────────┴───────┐
+  Results  │ Interrupts / human-in-the-loop                 06 │
+           │ Structured content: text + JSON + _meta        05 │
+           └───────────────────────▲───────────────────────────┘
+                                   │
+  Phase 1  ┌───────────────────────┴───────────────────────────┐
+  Basics   │ Server 01 · Client 02 · Logging 03 · Primitives 04│
+           └───────────────────────────────────────────────────┘
 ```
 
-Lessons on the left side build the **skill (server)** side.
-Lessons on the right side build the **orchestrator (client)** side.
-Lesson 13 at the top combines both into the **full production architecture**.
+The left column builds the **skill (server)** side and the right column
+builds the **orchestrator (client)** side. Lesson 14 combines both into the
+**full production architecture**.
 
 ## Lesson Index
 
@@ -88,70 +75,77 @@ Lesson 13 at the top combines both into the **full production architecture**.
 | 02 | `02_mcp_client.py` | Connect to a server as a client, and see the handshake messages | `Client` over stdio, `list_tools()` / `call_tool()`, JSON-RPC `initialize` | mcp_protocol.py |
 | 03 | `03_logging.py` | Debug tools without print statements: server logs vs logs sent to the client | fastmcp `get_logger()`, `ctx.info()` + client `log_handler` | story-drafting/main.py |
 | 04 | `04_resources_and_prompts.py` | Expose data and templates, not just actions | Resources + Prompts (the other 2 MCP primitives) | workflows/routes.py |
-| 04b | `04_structured_content.py` | One tool result, three parts: text for the LLM, JSON for your code, metadata for logs | `content` vs `structuredContent` vs `_meta`; `status: interrupted` + `continuation_token` | mcp_protocol.py `_call_tool_result_to_dict()` |
 
-### Phase 2: Client & Transport (No LLM needed)
+### Phase 2: Tool Results & Human-in-the-Loop (No LLM needed)
+
+*What a tool sends back, and how a tool pauses to ask the user. 05 introduces `status: interrupted` and `continuation_token`; 06 uses them end to end.*
+
+| # | File | What You Learn | Key Concept | Maps To |
+|---|------|----------------|-------------|---------|
+| 05 | `05_structured_content.py` | One tool result, three parts: text for the LLM, JSON for your code, metadata for logs | `content` vs `structuredContent` vs `_meta`; `status: interrupted` + `continuation_token` | mcp_protocol.py `_call_tool_result_to_dict()` |
+| 06 | `06_hitl_interrupt.py` | Pause a tool to ask the user (pick a language, review a draft), then resume it | Interrupt `type` / `payload` (`extra="forbid"`) / `actions`, `continuation_token`, user answer in request `_meta` (`call_tool(meta=...)`, `ctx.request_context.meta`) | shared/interrupts/, story-drafting/src/interrupts/ |
+
+### Phase 3: Client & Transport (No LLM needed)
 
 *Connect to MCP servers over HTTP and handle real-world failures.*
 
 | # | File | What You Learn | Key Concept | Maps To |
 |---|------|----------------|-------------|---------|
-| 05 | `05_http_transport.py` | Run an MCP server as a real HTTP service | `mcp.run(transport="http")` + `StreamableHttpTransport` | story-drafting run block |
-| 06 | `06_client_patterns.py` | Handle timeouts, retries, and server failures | Exponential backoff, one-shot clients | mcp_protocol.py |
+| 07 | `07_http_transport.py` | Run an MCP server as a real HTTP service, with health checks and per-tenant headers | `mcp.run(transport="http")`, `/health` route, `StreamableHttpTransport(headers=...)`, `get_http_headers()` | story-drafting run block, mcp_protocol.py |
+| 08 | `08_client_patterns.py` | Handle timeouts, retries, and server failures | Exponential backoff, one-shot clients | mcp_protocol.py |
 
-### Phase 3: LLM + Advanced (Lessons 07-08 require `.env`)
+### Phase 4: Smart Tools (Lessons 09-10 require `.env`)
 
-*Make tools smart by calling LLMs, and learn how to send rich data to the UI.*
+*Make tools smart by calling LLMs, send rich data to the UI, and define multi-step processes.*
 
 | # | File | What You Learn | Key Concept | Maps To |
 |---|------|----------------|-------------|---------|
-| 07 | `07_llm_tool_server.py` | Use an LLM *inside* a tool (LLM is implementation detail) | `llm_helper.get_llm()` inside `@mcp.tool` | generate_spot_story.py |
-| 08 | `08_tool_result_meta.py` | Send data to the UI without the LLM agent seeing it | `_meta.forwarded_blocks` (agent-visible vs UI-visible) | shared/forwarded.py |
-| 09 | `09_workflows.py` | Define multi-step processes as markdown files | YAML frontmatter, `mount_workflows()`, tool gating | shared/workflows/ |
+| 09 | `09_llm_tool_server.py` | Use an LLM *inside* a tool (LLM is implementation detail) | `llm_helper.get_llm()` inside `@mcp.tool` | generate_spot_story.py |
+| 10 | `10_tool_result_meta.py` | Send data to the UI without the LLM agent seeing it | `_meta.forwarded_blocks` (agent-visible vs UI-visible) | shared/forwarded.py |
+| 11 | `11_workflows.py` | Define multi-step processes as markdown files | YAML frontmatter, `mount_workflows()`, tool gating | shared/workflows/ |
 
-### Phase 4: Production Patterns (No LLM for 10-11)
+### Phase 5: Production Patterns (13 runs in mock mode without `.env`)
 
 *Build the same patterns used in the production Reuters AI Assistant.*
 
 | # | File | What You Learn | Key Concept | Maps To |
 |---|------|----------------|-------------|---------|
-| 10 | `10_interrupts.py` | Pause execution and ask the user for input | `SkillInterrupt`, `InterruptPayload`, `.block()` | shared/interrupts/ |
-| 11 | `11_multi_server.py` | Route tool calls across multiple servers | `ServerRegistry`, tool routing table | mcp_server_registry.py |
-| 12 | `12_workflow_orchestration.py` | Full loop: user intent to tool execution | Fast-path regex + LLM selection fallback | langgraph_mcp_orchestrator.py |
+| 12 | `12_multi_server.py` | Route tool calls across multiple servers | `ServerRegistry`, tool routing table | mcp_server_registry.py |
+| 13 | `13_workflow_orchestration.py` | Full loop: user intent to tool execution | Fast-path regex + LLM selection fallback | langgraph_mcp_orchestrator.py |
 
-### Phase 5: Full Integration
+### Phase 6: Full Integration and Deep Dives
 
-*See how LangGraph and MCP combine to form the complete production backend.*
+*See how LangGraph and MCP combine to form the complete production backend, then look under the hood.*
 
 | # | File | What You Learn | Key Concept | Maps To |
 |---|------|----------------|-------------|---------|
-| 13 | `13_langgraph_mcp_integration.py` | LangGraph StateGraph orchestrating MCP servers | Nodes, conditional edges, `interrupt()`, `Command(resume=...)` | langgraph_mcp_orchestrator.py |
-| 14 | `14_raw_jsonrpc_http.py` | Raw HTTP POST + JSON-RPC 2.0 wire protocol | `initialize` handshake, `tools/call` body, `_meta` injection, `structuredContent` | mcp_protocol.py (what StreamableHttpTransport does internally) |
-| 15 | `15_mcp_to_mcp.py` | One MCP tool calling another MCP server's tool | One-shot `Client` inside `@mcp.tool`, cross-skill HTTP, non-fatal error handling | shared/mcp_client.py (planned), generate_spot_story.py |
+| 14 | `14_langgraph_mcp_integration.py` | LangGraph StateGraph orchestrating MCP servers | Nodes, conditional edges, `interrupt()`, `Command(resume=...)` | langgraph_mcp_orchestrator.py |
+| 15 | `15_raw_jsonrpc_http.py` | Raw HTTP POST + JSON-RPC 2.0 wire protocol | `initialize` handshake, `tools/call` body, `_meta` injection, `structuredContent` | mcp_protocol.py (what StreamableHttpTransport does internally) |
+| 16 | `16_mcp_to_mcp.py` | One MCP tool calling another MCP server's tool | One-shot `Client` inside `@mcp.tool`, cross-skill HTTP, non-fatal error handling | shared/mcp_client.py (planned), generate_spot_story.py |
 
-### Phase 6: Agents and Multi-Agent Systems
+### Phase 7: Agents and Multi-Agent Systems
 
 *MCP has no judgment of its own — an agent is the decision loop on top of it. This phase draws that line explicitly, then shows what happens once one agent isn't enough.*
 
 | # | File | What You Learn | Key Concept | Maps To |
 |---|------|----------------|-------------|---------|
-| 16 | `16_agent_vs_mcp_and_handoff.py` | Agent vs MCP boundary, agent-creates-agent, delegation vs control handoff | `Agent.run()` decision loop, agent-as-tool, `Handoff(next_agent=...)` | langgraph_mcp_orchestrator.py (`Command(goto=...)`), sphinx_leon-assistant-skills/* (each skill as agent-as-tool) |
+| 17 | `17_agent_vs_mcp_and_handoff.py` | Agent vs MCP boundary, agent-creates-agent, delegation vs control handoff | `Agent.run()` decision loop, agent-as-tool, `Handoff(next_agent=...)` | langgraph_mcp_orchestrator.py (`Command(goto=...)`), sphinx_leon-assistant-skills/* (each skill as agent-as-tool) |
 
 ### Helper
 
 | File | Purpose |
 |------|---------|
-| `llm_helper.py` | Reusable LLM client — wraps TR Orchestrator auth. Used by lessons 07, 08, 12. |
+| `llm_helper.py` | Reusable LLM client — wraps TR Orchestrator auth. Used by lessons 09, 10, 13. |
 | `.env.example` | Credentials template for LLM lessons |
 
 ## Running
 
 ```bash
-# Any lesson (no .env needed for 01-06, 09-11, 13-16):
+# Any lesson (no .env needed for 01-08, 11-12, 14-17; 13 runs in mock mode):
 uv run python 01_hello_mcp_server.py
 
 # LLM lessons (need .env):
-uv run python 07_llm_tool_server.py
+uv run python 09_llm_tool_server.py
 ```
 
 ## Glossary
@@ -197,24 +191,25 @@ uv run python 07_llm_tool_server.py
 User Message
      |
      v
-+--------------------+     +-----------------+
-| Orchestrator (12)  | --> | MCP Servers     |
-|                    |     | story-drafting  |
-| 1. Discover wfs(9) |     | text-archive    |
-| 2. Select wf (LLM) |     | urgent-drafting  |
-| 3. Gate tools (9)  |     +-----------------+
-| 4. Call tools (6)  |            |
-| 5. Handle          |     +------+------+
-|    interrupts (10) |     | Tools (1-3) |
-| 6. Forward         |     | LLM (7)    |
-|    results (8)     |     | Meta (8)   |
-+--------------------+     | MCP-to-    |
-                           |  MCP (15)  |
-                           +-------------+
++---------------------+     +-----------------+
+| Orchestrator (13)   | --> | MCP Servers     |
+|                     |     | story-drafting  |
+| 1. Discover wfs(11) |     | text-archive    |
+| 2. Select wf (LLM)  |     | urgent-drafting |
+| 3. Gate tools (11)  |     +-----------------+
+| 4. Call tools (8)   |            |
+| 5. Handle           |     +------+------+
+|    interrupts (6)   |     | Tools (1-5) |
+| 6. Forward          |     | HITL (6)    |
+|    results (10)     |     | LLM (9)     |
++---------------------+     | Meta (10)   |
+                            | MCP-to-     |
+                            |  MCP (16)   |
+                            +-------------+
          |
          v
 +--------------------+
-| LangGraph (13)     |
+| LangGraph (14)     |
 | StateGraph nodes:  |
 |  analyze -> tools  |
 |  -> interrupt      |
@@ -256,51 +251,51 @@ MCPClientManager (mcp_client_manager.py)      ← connection / resilience layer
 MCPProtocolManager (mcp_protocol.py)          ← MCP protocol / application layer
 ```
 
-### MCPClientManager — Lessons 05, 06, 11
+### MCPClientManager — Lessons 07, 08, 12
 
 The base class handles connections, retries, and fault tolerance. No MCP protocol semantics.
 
 | Production Pattern | Method | Lesson | Learning Equivalent |
 |---|---|---|---|
-| HTTP/STDIO transport creation | `_create_connection()` | 05 | `StreamableHttpTransport`, `mcp.run(transport="http")` |
-| One-shot client (connect → call → disconnect) | `get_session()` | 06 | `async with Client(mcp) as client:` |
-| Retry with exponential backoff | `call_tool_with_retry()` | 06 | `call_with_retry()` — `base_delay * (2 ** attempt)` |
-| Circuit breaker (CLOSED/OPEN/HALF_OPEN) | `_circuit_breaker_*()` | 06 | Timeout handling, error state concepts |
-| Connection pool per server | `_acquire_connection`, `_release_connection` | 11 | `ServerEntry` — per-server wrapper |
-| Server registration | `register_server()` | 11 | `ServerRegistry.register()` |
-| Health checks and stats | `get_server_health()`, `get_server_stats()` | 11 | `ServerEntry.discover()` |
+| HTTP/STDIO transport creation | `_create_connection()` | 07 | `StreamableHttpTransport`, `mcp.run(transport="http")` |
+| One-shot client (connect → call → disconnect) | `get_session()` | 08 | `async with Client(mcp) as client:` |
+| Retry with exponential backoff | `call_tool_with_retry()` | 08 | `call_with_retry()` — `base_delay * (2 ** attempt)` |
+| Circuit breaker (CLOSED/OPEN/HALF_OPEN) | `_circuit_breaker_*()` | 08 | Timeout handling, error state concepts |
+| Connection pool per server | `_acquire_connection`, `_release_connection` | 12 | `ServerEntry` — per-server wrapper |
+| Server registration | `register_server()` | 12 | `ServerRegistry.register()` |
+| Health checks and stats | `get_server_health()`, `get_server_stats()` | 12 | `ServerEntry.discover()` |
 
-### MCPProtocolManager — Lessons 06, 08, 10, 11, 12, 13
+### MCPProtocolManager — Lessons 06, 08, 10, 12, 13, 14, 15
 
 Extends the base with full MCP protocol: resources, prompts, streaming, tenant headers, interrupts.
 
 | Production Pattern | Method | Lesson | Learning Equivalent |
 |---|---|---|---|
-| Capability discovery | `list_resources()`, `list_prompts()`, `list_tools_enhanced()` | 06 | `client.list_tools()`, `client.list_resources()`, `client.list_prompts()` |
-| Tool call with tenant headers | `call_tool_enhanced()` | 06 | One-shot client pattern with per-request context |
-| `_meta` / forwarded blocks | `call_tool_enhanced()` → `_meta` handling | 08 | `_meta.forwarded_blocks` — agent-visible vs UI-visible |
-| Human-in-the-loop interrupts | `call_tool_enhanced()` → interrupt detection | 10 | `SkillInterrupt`, `InterruptPayload`, `.block()` |
-| Tool routing across servers | used by orchestrator | 11 | `ServerRegistry.get_server_for_tool()`, `call_tools_parallel()` |
-| Multi-server capability cache | `discover_server_capabilities()` | 11 | `ServerRegistry.discover_all()` |
-| Fast-path regex bypass | used by orchestrator | 12 | `WorkflowOrchestrator.select_workflow_by_pattern()` |
-| Full orchestration loop | used by LangGraph orchestrator | 12 | `WorkflowOrchestrator.handle_message()` |
-| LangGraph StateGraph integration | `interrupt()` + `Command(resume=...)` | 13 | `call_mcp_tool()`, `discover_all_tools()`, StateGraph nodes |
-| Raw JSON-RPC wire protocol | `StreamableHttpTransport` internals | 14 | Raw `POST /mcp` with `initialize`, `tools/list`, `tools/call` |
-| `_meta` injection for HITL resume | `call_tool_enhanced()` → `_meta` in arguments | 14 | `arguments._meta = {session_id, continuation_token, user_response}` |
-| `structuredContent` flattening | `_call_tool_result_to_dict()` | 14 | Parse `structuredContent` from JSON-RPC response |
+| Capability discovery | `list_resources()`, `list_prompts()`, `list_tools_enhanced()` | 08 | `client.list_tools()`, `client.list_resources()`, `client.list_prompts()` |
+| Tool call with tenant headers | `call_tool_enhanced()` | 08 | One-shot client pattern with per-request context |
+| `_meta` / forwarded blocks | `call_tool_enhanced()` → `_meta` handling | 10 | `_meta.forwarded_blocks` — agent-visible vs UI-visible |
+| Human-in-the-loop interrupts | `call_tool_enhanced()` → interrupt detection | 06 | `SkillInterrupt`, `InterruptPayload`, `.block()` |
+| Tool routing across servers | used by orchestrator | 12 | `ServerRegistry.get_server_for_tool()`, `call_tools_parallel()` |
+| Multi-server capability cache | `discover_server_capabilities()` | 12 | `ServerRegistry.discover_all()` |
+| Fast-path regex bypass | used by orchestrator | 13 | `WorkflowOrchestrator.select_workflow_by_pattern()` |
+| Full orchestration loop | used by LangGraph orchestrator | 13 | `WorkflowOrchestrator.handle_message()` |
+| LangGraph StateGraph integration | `interrupt()` + `Command(resume=...)` | 14 | `call_mcp_tool()`, `discover_all_tools()`, StateGraph nodes |
+| Raw JSON-RPC wire protocol | `StreamableHttpTransport` internals | 15 | Raw `POST /mcp` with `initialize`, `tools/list`, `tools/call` |
+| `_meta` injection for HITL resume | `call_tool_enhanced()` → `_meta` in arguments | 15 | `arguments._meta = {session_id, continuation_token, user_response}` |
+| `structuredContent` flattening | `_call_tool_result_to_dict()` | 15 | Parse `structuredContent` from JSON-RPC response |
 
 ### Reading Order for Backend Engineers
 
 If you're working on `mcp_client_manager.py` or `mcp_protocol.py`, read the lessons in this order:
 
 ```
-05 (transport)  → how servers and clients connect
-06 (client)     → MCPClientManager core: retry, timeout, one-shot pattern
-08 (_meta)      → MCPProtocolManager's forwarded-block handling
-10 (interrupts) → MCPProtocolManager's human-in-the-loop support
-11 (registry)   → MCPClientManager's registry + MCPProtocolManager's routing
-12 (orchestration) → how the orchestrator drives MCPProtocolManager
-13 (langgraph)  → full system: LangGraph StateGraph → MCPProtocolManager → skills
-14 (wire proto)  → raw JSON-RPC over HTTP: what StreamableHttpTransport does
-15 (mcp-to-mcp) → skill calling another skill over HTTP (cross-skill pattern)
+06 (interrupts)    → MCPProtocolManager's human-in-the-loop support
+07 (transport)     → how servers and clients connect
+08 (client)        → MCPClientManager core: retry, timeout, one-shot pattern
+10 (_meta)         → MCPProtocolManager's forwarded-block handling
+12 (registry)      → MCPClientManager's registry + MCPProtocolManager's routing
+13 (orchestration) → how the orchestrator drives MCPProtocolManager
+14 (langgraph)     → full system: LangGraph StateGraph → MCPProtocolManager → skills
+15 (wire proto)    → raw JSON-RPC over HTTP: what StreamableHttpTransport does
+16 (mcp-to-mcp)    → skill calling another skill over HTTP (cross-skill pattern)
 ```

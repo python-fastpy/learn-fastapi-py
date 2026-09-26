@@ -59,7 +59,7 @@ uv run python 01_state_basics.py
 
 ## Agent vs MCP, Agent-Creates-Agent, Handoff
 
-See [`../learn-mcp/16_agent_vs_mcp_and_handoff.py`](../learn-mcp/16_agent_vs_mcp_and_handoff.py) — draws the line between "agent" (the decision loop, e.g. lesson 07's `create_react_agent`) and "MCP" (the protocol layer, no judgment of its own), then shows a supervisor creating specialist agents on demand and two ways to hand a job to one: delegation (call and wait) vs. control handoff (step aside), which is what LangGraph's `Command(goto=..., update=...)` in lesson 13 actually does under the hood.
+See [`../learn-mcp/17_agent_vs_mcp_and_handoff.py`](../learn-mcp/17_agent_vs_mcp_and_handoff.py) — draws the line between "agent" (the decision loop, e.g. lesson 07's `create_react_agent`) and "MCP" (the protocol layer, no judgment of its own), then shows a supervisor creating specialist agents on demand and two ways to hand a job to one: delegation (call and wait) vs. control handoff (step aside), which is what LangGraph's `Command(goto=..., update=...)` in lesson 13 actually does under the hood.
 
 ## Flow-to-Learning Map
 

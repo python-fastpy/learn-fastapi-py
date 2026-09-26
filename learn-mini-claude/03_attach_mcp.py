@@ -57,11 +57,11 @@ Flow:
   +-------------------------------------------+
 
   Maps to:
-    Claude Code's own `.mcp.json` handling; learn-mcp lesson 11
+    Claude Code's own `.mcp.json` handling; learn-mcp lesson 12
     (ServerRegistry / multi-server routing) is the same idea inside the
     production backend.
 
-PREREQUISITES: Lessons 01-02. learn-mcp lessons 01/05 help but aren't required.
+PREREQUISITES: Lessons 01-02. learn-mcp lessons 01/07 help but aren't required.
 
 Run:  uv run python 03_attach_mcp.py
 
@@ -204,7 +204,7 @@ def make_mcp_tool(server_name: str, transport, spec) -> Tool:
     async def call(**kwargs):
         # One-shot client: connect -> call -> disconnect, per invocation.
         # Simple and robust (a crashed server can't leave a dead handle
-        # behind); learn-mcp lesson 06 covers pooling if you need speed.
+        # behind); learn-mcp lesson 08 covers pooling if you need speed.
         try:
             async with Client(transport=transport) as client:
                 result = await asyncio.wait_for(
@@ -330,7 +330,7 @@ if __name__ == "__main__":
     #    namespaced in the merged registry.
     # 2. Break the command in .mcp.json ("pythonn") and confirm the agent
     #    still starts, reporting the failure and continuing without it.
-    # 3. Run learn-mcp's 05_http_transport.py server, then attach it here
+    # 3. Run learn-mcp's 07_http_transport.py server, then attach it here
     #    with {"url": "http://localhost:8000/mcp"} -- same registry, no
     #    code change.
     # 4. Feed this merged registry into lesson 01's agent_loop() and watch

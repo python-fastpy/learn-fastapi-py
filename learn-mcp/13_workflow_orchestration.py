@@ -1,8 +1,8 @@
-"""Lesson 12 -- Workflow-Driven Orchestration
+"""Lesson 13 -- Workflow-Driven Orchestration
 ===============================================
 
 WHY THIS MATTERS:
-  This lesson combines everything from lessons 01-11 into a single
+  This lesson combines everything from lessons 01-12 into a single
   orchestration loop -- the same pattern used by the production backend.
   When a user says "create a welcome message for Alice," the orchestrator:
     1. Discovers available workflows from the skill servers
@@ -52,11 +52,11 @@ Flow:
     fast_path_matcher.py (regex shortcut for known patterns)
     mcp_protocol.py (tool execution)
 
-PREREQUISITES: Lessons 09 (workflows), 11 (multi-server), 06 (client patterns)
+PREREQUISITES: Lessons 11 (workflows), 12 (multi-server), 08 (client patterns)
 
 ** Requires .env for full LLM orchestration; runs in mock mode without it **
 
-Run:  uv run python 12_workflow_orchestration.py
+Run:  uv run python 13_workflow_orchestration.py
 
 EXPECTED OUTPUT (mock mode -- no .env):
   === Workflow-Driven Orchestration Demo ===
@@ -438,8 +438,8 @@ if __name__ == "__main__":
     # -- Key takeaway --------------------------------------------------------
     # This lesson ties everything together into the full orchestration loop:
     #
-    # 1. DISCOVER: list tools from all MCP servers (lesson 11)
-    # 2. DISCOVER: list workflows from servers (lesson 09)
+    # 1. DISCOVER: list tools from all MCP servers (lesson 12)
+    # 2. DISCOVER: list workflows from servers (lesson 11)
     # 3. SELECT: match user intent to workflow
     #    - Fast-path: regex patterns (fast_path_matcher.py)
     #    - LLM: ask the model to select (langgraph_mcp_orchestrator.py)
@@ -451,8 +451,8 @@ if __name__ == "__main__":
     #   - LangGraph StateGraph for execution flow
     #   - DynamoDB checkpointing for interrupt/resume
     #   - SSE streaming for real-time responses
-    #   - Human-in-the-loop interrupts (lesson 10)
-    #   - Forwarded blocks for UI payloads (lesson 08)
+    #   - Human-in-the-loop interrupts (lesson 06)
+    #   - Forwarded blocks for UI payloads (lesson 10)
     #
     # -- Exercise -------------------------------------------------------------
     # 1. Add LLM-driven step planning (LLM decides tool call order)

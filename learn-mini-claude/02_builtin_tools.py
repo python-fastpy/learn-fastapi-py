@@ -28,7 +28,7 @@ Concepts:
   - Permission gate: a policy function (tool, args) -> allow / deny / ask
   - Auto-approve list: read-only tools that don't need a prompt
   - Non-fatal errors: tool failures come back as tool RESULTS, so the
-    model can try something else (same instinct as learn-mcp lesson 15)
+    model can try something else (same instinct as learn-mcp lesson 16)
 
 Flow:
      model asks: write_file(path="../secrets.txt", content="...")

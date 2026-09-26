@@ -559,7 +559,7 @@ Two things that run shows:
   Worth it for procedures that must not be skipped; wasteful for
   one-liners.
 
-> Compare with `learn-mcp` lesson 09, which uses workflows to **gate**
+> Compare with `learn-mcp` lesson 11, which uses workflows to **gate**
 > tools (hide what's irrelevant). This one **sequences** work and keeps
 > state. Both are real patterns and they compose.
 
@@ -842,11 +842,11 @@ exercise 1), and a great deal of prompt engineering.
 
 | Topic | Where |
 |-------|-------|
-| Building MCP servers properly | `learn-mcp` lessons 01–09 |
-| Multi-server routing, MCP-to-MCP | `learn-mcp` lessons 11, 15 |
-| Agent vs. MCP, handoffs, supervisors | `learn-mcp` lesson 16 |
+| Building MCP servers properly | `learn-mcp` lessons 01–11 |
+| Multi-server routing, MCP-to-MCP | `learn-mcp` lessons 12, 16 |
+| Agent vs. MCP, handoffs, supervisors | `learn-mcp` lesson 17 |
 | The same loop as a state machine | `learn-langgraph` lesson 07 |
-| Pausing to ask the user (interrupt/resume) | `learn-mcp` lesson 10, `learn-langgraph` lesson 09 |
+| Pausing to ask the user (interrupt/resume) | `learn-mcp` lesson 06, `learn-langgraph` lesson 09 |
 | Prompt injection via poisoned tool output | `learn-ai-advanced` lesson 04 |
 | Tracing tool calls, token cost | `learn-ai-advanced` lesson 03 |
 | Session storage beyond in-memory | `fastapi/08-session.py` |

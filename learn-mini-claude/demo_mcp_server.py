@@ -11,7 +11,7 @@ Run it directly to sanity-check it:
 (It will sit waiting on stdin -- that's correct for a stdio MCP server.
  Press Ctrl+C. Normally the agent launches it for you.)
 
-Built with FastMCP -- see learn-mcp lessons 01-05 for how this works.
+Built with FastMCP -- see learn-mcp lessons 01-07 for how this works.
 """
 
 import json

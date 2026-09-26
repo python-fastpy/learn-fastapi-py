@@ -2,7 +2,7 @@
 ========================================================================
 
 WHY THIS MATTERS:
-  Lesson 16 in learn-mcp built agent handoffs; lesson 13 in learn-langgraph
+  Lesson 17 in learn-mcp built agent handoffs; lesson 13 in learn-langgraph
   built a StateGraph orchestrator. Neither answers the question you get
   asked in production: "why did this request take 4 seconds," "which tool
   call cost the most tokens," or "which step actually failed." Checkpointers
@@ -62,7 +62,7 @@ Flow:
     -- each StateGraph node and each MCP tool call becomes one span,
     nested under the request's root span.
 
-PREREQUISITES: Lesson 16 in learn-mcp (agent/tool call shape this traces)
+PREREQUISITES: Lesson 17 in learn-mcp (agent/tool call shape this traces)
 
 Run:  uv run python 03_observability_and_tracing.py
 
@@ -151,7 +151,7 @@ class Tracer:
 
 
 # ============================================================================
-# STEP 2: A traced request -- reuses the agent shape from learn-mcp lesson 16
+# STEP 2: A traced request -- reuses the agent shape from learn-mcp lesson 17
 # ============================================================================
 # search_web and the LLM call are simulated with time.sleep so the demo has
 # real, varying durations to show in the waterfall -- no network, no LLM
@@ -280,7 +280,7 @@ async def main():
         print(line)
     print("    A failing tool call still appears in the trace, marked [ERROR],")
     print("    instead of vanishing -- same non-fatal-but-visible pattern as")
-    print("    MCP-to-MCP's try/except (learn-mcp lesson 15).")
+    print("    MCP-to-MCP's try/except (learn-mcp lesson 16).")
 
 
 if __name__ == "__main__":
