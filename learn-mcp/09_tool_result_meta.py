@@ -1,4 +1,4 @@
-"""Lesson 10 -- ToolResult & Forwarded Blocks
+"""Lesson 09 -- ToolResult & Forwarded Blocks
 ===============================================
 
 WHY THIS MATTERS:
@@ -45,11 +45,11 @@ Flow:
     mcp_protocol.py (_call_tool_result_to_dict extracts forwarded blocks)
     story-drafting tools (return drafts via forwarded blocks)
 
-PREREQUISITES: Lesson 09 (LLM tools), Lesson 04 (resources/primitives)
+PREREQUISITES: Lesson 08 (LLM tools), Lesson 04 (resources/primitives)
 
 ** Requires .env with TR Orchestrator credentials **
 
-Run:  uv run python 10_tool_result_meta.py
+Run:  uv run python 09_tool_result_meta.py
 
 EXPECTED OUTPUT (without .env -- mock mode):
   === 1. Simple Tool (greet) ===

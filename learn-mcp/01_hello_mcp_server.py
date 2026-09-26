@@ -10,7 +10,7 @@
                                       -> tool "say_hello"
 
 Run:  uv run python 01_hello_mcp_server.py            (demo)
-      uv run python 01_hello_mcp_server.py --serve    (real stdio server; lesson 02 uses this)
+      uv run python 01_hello_mcp_server.py --serve    (real stdio server; lesson 02 explains stdio)
       uv run python 01_hello_mcp_server.py --http 8765  (real HTTP server at http://127.0.0.1:8765/mcp)
 
 Maps to: story-drafting/src/main.py (imperative registration + meta)
@@ -53,7 +53,7 @@ async def main():
 
 if __name__ == "__main__":
     if "--serve" in sys.argv:
-        mcp.run(show_banner=False)                    # stdio server for lesson 02
+        mcp.run(show_banner=False)                    # stdio server (see lesson 02)
     elif "--http" in sys.argv:                        # HTTP server: --http 8765
         port = int(sys.argv[sys.argv.index("--http") + 1])
         mcp.run(transport="http", host="127.0.0.1", port=port, show_banner=False)

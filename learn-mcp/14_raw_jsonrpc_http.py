@@ -1,4 +1,4 @@
-"""Lesson 15 -- Raw JSON-RPC over HTTP (What the SDK Does Under the Hood)
+"""Lesson 14 -- Raw JSON-RPC over HTTP (What the SDK Does Under the Hood)
 =========================================================================
 
 WHY THIS MATTERS:
@@ -32,7 +32,7 @@ Flow:
   | Script   |     {"method":"initialize"}  | (child process)  |
   | (httpx)  |  <-- {"result":{caps}}       |                  |
   |          |  <-- Mcp-Session-Id header   | Same server as   |
-  |          |                              | lesson 07, but   |
+  |          |                              | lesson 02, but   |
   |          |  2. POST /mcp               | we call it with  |
   |          |     {"method":"notif/init"}  | raw HTTP instead |
   |          |                              | of the SDK.      |
@@ -51,9 +51,9 @@ Flow:
     mcp_protocol.py -> _one_shot_client() and call_tool_enhanced()
     What StreamableHttpTransport does internally on every call
 
-PREREQUISITES: Lesson 07 (HTTP transport), Lesson 08 (client patterns)
+PREREQUISITES: Lesson 02 (HTTP transport), Lesson 07 (client patterns)
 
-Run:  uv run python 15_raw_jsonrpc_http.py
+Run:  uv run python 14_raw_jsonrpc_http.py
 
 EXPECTED OUTPUT:
   Starting MCP server on port 8766...
@@ -159,7 +159,7 @@ SERVER_URL = f"http://localhost:{SERVER_PORT}"
 MCP_ENDPOINT = f"{SERVER_URL}/mcp"
 
 # ============================================================================
-# SERVER SIDE -- same pattern as lesson 07, runs in a child process
+# SERVER SIDE -- same pattern as lesson 02, runs in a child process
 # ============================================================================
 
 mcp = FastMCP(name="jsonrpc-demo")

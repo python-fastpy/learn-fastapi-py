@@ -13,7 +13,7 @@
 | 10:20 - 11:00 | 3. Tools, Resources, Prompts | `learn-mcp/04_resources_and_prompts.py` | All three MCP primitives: `@mcp.tool`, `@mcp.resource`, `@mcp.prompt` | Skills expose tools; workflows loaded as resources |
 | 11:00 - 11:40 | 4. Structured Content | `learn-mcp/05_structured_content.py` | Return `structuredContent` + `_meta` with timing data from tools | How skills return interrupt payloads + `skill_call_extras` |
 | 11:40 - 12:20 | 5. Human-in-the-Loop | `learn-mcp/06_hitl_interrupt.py` | Implement interrupt/resume with continuation tokens and `_meta` injection | The full HITL cycle: skill interrupts -> backend checkpoints -> user responds -> resume |
-| 12:20 - 13:00 | 6. HTTP Transport | `learn-mcp/07_http_transport.py` | Run MCP over Streamable HTTP (production transport), test with `httpx` | Production: ECS Fargate behind ALB, path-based routing |
+| 12:20 - 13:00 | 6. HTTP Transport | `learn-mcp/02_mcp_client.py` (part B) | Run MCP over Streamable HTTP (production transport), test with `httpx` | Production: ECS Fargate behind ALB, path-based routing |
 
 **Lunch break: 13:00 - 13:30**
 

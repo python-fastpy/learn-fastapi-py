@@ -21,7 +21,7 @@ tracks -- the agent can't reach the end without passing through it.
                                     ... until "workflow complete"
 
 Workflows are markdown files in workflows/ with YAML frontmatter -- the
-same shape as learn-mcp lesson 11 and the production shared/workflows/
+same shape as learn-mcp lesson 10 and the production shared/workflows/
 loader. Add a .md file, restart, and it's available. No code change.
 
 The difference from lesson 09: that lesson uses workflows to GATE tools

@@ -1,4 +1,4 @@
-"""Lesson 08 -- Client Patterns: discover, timeout, retry, errors, one-shot
+"""Lesson 07 -- Client Patterns: discover, timeout, retry, errors, one-shot
 ==========================================================================
 
 Skills run on remote containers that can be slow, crash, or be briefly
@@ -22,7 +22,7 @@ recovering server. Five patterns, all calling one greet tool:
   │              └── client #3 ── greet ──────────────┼───────► │                    │
   └───────────────────────────────────────────────────┘         └────────────────────┘
 
-Run:  uv run python 08_client_patterns.py
+Run:  uv run python 07_client_patterns.py
 
 Maps to: mcp_protocol.py (one-shot client), mcp_client_manager.py (retry,
          circuit breaker), mcp_server_registry.py (discovery via list_tools)
@@ -98,4 +98,4 @@ if __name__ == "__main__":
 # Exercises:
 # 1. Circuit breaker: after 3 failures in a row, stop calling for 30 seconds.
 # 2. Greet 5 names at once with asyncio.gather() -- how long does it take with delay=1?
-# 3. Use call_with_retry against lesson 07's HTTP server.
+# 3. Use call_with_retry against lesson 02's HTTP server.

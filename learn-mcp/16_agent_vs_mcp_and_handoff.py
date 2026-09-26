@@ -1,8 +1,8 @@
-"""Lesson 17 -- Agent vs MCP, Agent-Creates-Agent, and Handoff Patterns
+"""Lesson 16 -- Agent vs MCP, Agent-Creates-Agent, and Handoff Patterns
 ========================================================================
 
 WHY THIS MATTERS:
-  Lessons 01-16 taught MCP: how tools/resources/prompts are exposed and
+  Lessons 01-15 taught MCP: how tools/resources/prompts are exposed and
   called over a standard protocol. But MCP itself has no brain -- it never
   decides *which* tool to call, *when* to stop, or *who* should handle a
   task. That decision loop is the "agent". Once a system needs more than
@@ -14,9 +14,9 @@ WHY THIS MATTERS:
 
 WHAT YOU'LL LEARN:
   1. Agent vs MCP -- which layer does what, and why MCP works with zero
-     agents involved (lessons 01-08 never touched an LLM)
+     agents involved (lessons 01-07 never touched an LLM)
   2. Agent-as-tool -- wrapping a whole agent (loop + tools + memory) as one
-     callable, the same shape as lesson 16's MCP-to-MCP, one level up
+     callable, the same shape as lesson 15's MCP-to-MCP, one level up
   3. Agent-creates-agent -- a supervisor that *instantiates* the right
      specialist at runtime based on the task, instead of a hardcoded
      pipeline of fixed tools
@@ -25,7 +25,7 @@ WHAT YOU'LL LEARN:
          (nested call stack -- parent is still "on the hook")
        - Control handoff (routing): parent transfers the turn to the child
          and steps aside (flat call stack -- mirrors LangGraph's
-         Command(goto=...) primitive from lesson 14)
+         Command(goto=...) primitive from lesson 13)
   5. A map (not a full build) of where this leads: planner/executor,
      hierarchical supervisors, and shared-state ("blackboard") systems
 
@@ -78,10 +78,10 @@ Flow:
     LangGraph `Command(goto=..., update=...)` -- the real control-handoff
                                             primitive this lesson mimics
 
-PREREQUISITES: Lesson 12 (multi-server routing), Lesson 13 (orchestration),
-                Lesson 16 (MCP-to-MCP)
+PREREQUISITES: Lesson 11 (multi-server routing), Lesson 12 (orchestration),
+                Lesson 15 (MCP-to-MCP)
 
-Run:  uv run python 17_agent_vs_mcp_and_handoff.py
+Run:  uv run python 16_agent_vs_mcp_and_handoff.py
 
 EXPECTED OUTPUT:
   === Part 1: MCP alone (no agent, no judgment) ===
@@ -156,7 +156,7 @@ async def draft_summary(
 # ============================================================================
 # An "agent" here is nothing more than: a name, a set of tools it's allowed
 # to call, and a `run()` method that decides which tool(s) to call and when
-# it's done. In production this decision is made by an LLM (lesson 09's
+# it's done. In production this decision is made by an LLM (lesson 08's
 # create_react_agent); here it's a small deterministic policy so the lesson
 # runs without an .env file. Swap `_decide()` for an LLM call and the shape
 # doesn't change -- that's the point: MCP tools stay identical either way.
@@ -334,7 +334,7 @@ if __name__ == "__main__":
     # Agent vs MCP:
     #   MCP is the interface (tools/resources/prompts, callable by anyone).
     #   Agent is the judgment on top of it (which tool, when to stop, who
-    #   should even handle this). Lessons 01-08 proved MCP works with zero
+    #   should even handle this). Lessons 01-07 proved MCP works with zero
     #   agents. This lesson proves an agent doesn't require MCP either --
     #   what matters is the decision loop, MCP is just how it reaches tools.
     #
@@ -351,7 +351,7 @@ if __name__ == "__main__":
     #   2. Handoff (Part 4): transfer the turn, step aside. Matches
     #      LangGraph's Command(goto=...) -- the graph executor, not any one
     #      agent, tracks "who's active now." Needed once agents run long,
-    #      get interrupted (lessons 06, 11), or need to resume independently.
+    #      get interrupted (lessons 06, 10), or need to resume independently.
     #
     # Advanced techniques this generalizes into (see production mapping in
     # README.md for what maps where):
@@ -361,9 +361,9 @@ if __name__ == "__main__":
     #     mid-level supervisor owns a domain and creates its own specialists.
     #   - Blackboard / shared state: agents don't call each other at all;
     #     they all read/write one shared state object (LangGraph's
-    #     OrchestratorState from lesson 14 is a small version of this).
+    #     OrchestratorState from lesson 13 is a small version of this).
     #   - Agent-as-MCP-server: expose an entire agent behind an MCP server
-    #     (combine this lesson with lesson 16) so ANY MCP client -- not just
+    #     (combine this lesson with lesson 15) so ANY MCP client -- not just
     #     code in this repo -- can call it as one black-box tool.
     #
     # -- Exercise -------------------------------------------------------------
@@ -373,8 +373,8 @@ if __name__ == "__main__":
     #    "supervisor" (a loop, not just a line) -- e.g. writer-agent hands
     #    back to supervisor for approval before finishing.
     # 3. Replace `_decide()`-style logic with an LLM call (llm_helper.get_llm)
-    #    that picks the next agent by name -- same shape as lesson 13's
+    #    that picks the next agent by name -- same shape as lesson 12's
     #    LLM-based workflow selection.
     # 4. Wrap ResearchAgent in its own FastMCP server and call it via
-    #    MCP-to-MCP (lesson 16) instead of an in-process Python call --
+    #    MCP-to-MCP (lesson 15) instead of an in-process Python call --
     #    that's "agent-as-MCP-server" made concrete.

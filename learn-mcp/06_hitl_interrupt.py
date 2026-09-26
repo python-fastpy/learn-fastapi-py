@@ -28,7 +28,7 @@ Run:  uv run python 06_hitl_interrupt.py
 Maps to production (shared/interrupts/models.py, story-drafting/src/interrupts/):
   SkillInterrupt(type, message, payload, actions)  ~  interrupt() below
   .block() puts the UI payload in _meta.forwarded_blocks so the agent sees
-  only a summary (lesson 10); the orchestrator checkpoints to DynamoDB and
+  only a summary (lesson 09); the orchestrator checkpoints to DynamoDB and
   resumes with LangGraph interrupt().
 """
 

@@ -1,4 +1,4 @@
-"""Lesson 09 -- Tools That Call LLMs
+"""Lesson 08 -- Tools That Call LLMs
 =====================================
 
 WHY THIS MATTERS:
@@ -39,7 +39,7 @@ PREREQUISITES: Lesson 01 (tools), llm_helper.py (credentials)
 
 ** Requires .env with TR Orchestrator credentials **
 
-Run:  uv run python 09_llm_tool_server.py
+Run:  uv run python 08_llm_tool_server.py
 
 EXPECTED OUTPUT (without .env -- schema-only mode):
   === LLM Tools Demo (NO .env - showing tool schemas only) ===

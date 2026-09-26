@@ -158,9 +158,9 @@ _How AI skills are built and connected. Follow the lesson numbers in order._
 |------|------|--------|-----------------------|
 | 11:30 - 12:10 | `learn-mcp/05_structured_content.py` | Return `structuredContent` + `_meta` with timing | Interrupt payloads + `skill_call_extras` |
 | 12:10 - 12:50 | `learn-mcp/06_hitl_interrupt.py` | Interrupt/resume with continuation tokens | HITL cycle: interrupt -> checkpoint -> resume |
-| 12:50 - 13:30 | `learn-mcp/07_http_transport.py` | MCP over Streamable HTTP (production transport) | ECS Fargate behind ALB, path-based routing |
+| 12:50 - 13:30 | `learn-mcp/02_mcp_client.py` (part B) | MCP over Streamable HTTP (production transport) | ECS Fargate behind ALB, path-based routing |
 
-**Bonus files if time permits:** `09_llm_tool_server.py` through `16_mcp_to_mcp.py` for advanced patterns (multi-server, workflows, LangGraph integration).
+**Bonus files if time permits:** `08_llm_tool_server.py` through `15_mcp_to_mcp.py` for advanced patterns (multi-server, workflows, LangGraph integration).
 
 **End of day check:** Can you build an MCP server with tools, connect to it with a client, implement HITL interrupts, and run it over HTTP transport?
 

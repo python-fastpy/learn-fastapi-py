@@ -27,7 +27,7 @@ uv sync
 ```
 
 **You should already know:** the agent/MCP shape from `learn-mcp` lesson
-17 (agent-vs-MCP, agent-as-tool) — several examples here reuse that
+16 (agent-vs-MCP, agent-as-tool) — several examples here reuse that
 vocabulary. You don't need `learn-langgraph` or a real LLM: all four
 lessons run fully deterministic by default.
 
@@ -84,9 +84,9 @@ uv run python 04_guardrails_and_prompt_injection.py
 
 | This Series | Related Lesson |
 |--------------|----------------|
-| 01 RAG retrieval as an MCP tool | `learn-mcp` lesson 16 (MCP-to-MCP) — wrap `VectorStore.search()` as `@mcp.tool` |
+| 01 RAG retrieval as an MCP tool | `learn-mcp` lesson 15 (MCP-to-MCP) — wrap `VectorStore.search()` as `@mcp.tool` |
 | 02 Evals generalize a production pattern | Quote-fidelity checking (verify LLM draft against source) is a one-question eval at request time |
-| 03 Tracing an agent's tool calls | `learn-mcp` lesson 17 (agent-vs-MCP, agent-as-tool) — the call shape this lesson traces |
+| 03 Tracing an agent's tool calls | `learn-mcp` lesson 16 (agent-vs-MCP, agent-as-tool) — the call shape this lesson traces |
 | 03 vs. checkpointers | `learn-langgraph` lesson 08 saves *state* for resume; tracing records *what happened and when*, a different concern |
-| 04 Guardrails on tool/document content | `learn-mcp` lesson 10's `_meta.forwarded_blocks` separates agent-visible from UI-visible content — guardrails apply the same instinct to trust, not visibility |
+| 04 Guardrails on tool/document content | `learn-mcp` lesson 09's `_meta.forwarded_blocks` separates agent-visible from UI-visible content — guardrails apply the same instinct to trust, not visibility |
 | 04 Indirect injection surface | Any lesson where an agent reads tool output it didn't generate (`learn-mcp` L06, L11, L15; `learn-langgraph` L07) |

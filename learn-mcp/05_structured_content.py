@@ -26,7 +26,7 @@ A tool result can carry THREE separate things, each for a different reader:
     Every Reuters skill returns structuredContent with status / interrupt /
     continuation_token, and _meta.skill_call_extras with per-step timing.
     The backend parses it in mcp_protocol.py -> _call_tool_result_to_dict().
-    (Interrupts end to end: lesson 06. Hiding data from the LLM: lesson 10.)
+    (Interrupts end to end: lesson 06. Hiding data from the LLM: lesson 09.)
 
 Run:  uv run python 05_structured_content.py
 """

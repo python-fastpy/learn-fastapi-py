@@ -1,4 +1,4 @@
-"""Lesson 11 -- Workflow System
+"""Lesson 10 -- Workflow System
 ================================
 
 WHY THIS MATTERS:
@@ -50,7 +50,7 @@ Flow:
 
 PREREQUISITES: Lesson 01 (tools), Lesson 04 (resources)
 
-Run:  uv run python 11_workflows.py
+Run:  uv run python 10_workflows.py
 
 EXPECTED OUTPUT:
   === Workflow Files Created ===
