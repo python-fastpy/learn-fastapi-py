@@ -19,7 +19,7 @@ cd learn-mcp
 uv sync          # install dependencies from pyproject.toml
 ```
 
-For lessons 08, 09, 12 (LLM-powered): copy `.env.example` to `.env` and fill in TR Orchestrator credentials.
+For lesson 08 (and lesson 12's LLM-fallback step): copy `.env.example` to `.env` and fill in TR Orchestrator credentials.
 
 **You should already know:** Python async/await, basic FastAPI concepts, what an API is.
 **You don't need to know:** MCP, LangGraph, or the Reuters codebase (that's what you're learning).
@@ -95,14 +95,14 @@ builds the **orchestrator (client)** side. Lesson 13 combines both into the
 |---|------|----------------|-------------|---------|
 | 07 | `07_client_patterns.py` | Handle timeouts, retries, and server failures | Exponential backoff, one-shot clients | mcp_protocol.py |
 
-### Phase 4: Smart Tools (Lessons 08-09 require `.env`)
+### Phase 4: Smart Tools (Lesson 08 requires `.env`)
 
 *Make tools smart by calling LLMs, send rich data to the UI, and define multi-step processes.*
 
 | # | File | What You Learn | Key Concept | Maps To |
 |---|------|----------------|-------------|---------|
 | 08 | `08_llm_tool_server.py` | Use an LLM *inside* a tool (LLM is implementation detail) | `llm_helper.get_llm()` inside `@mcp.tool` | generate_spot_story.py |
-| 09 | `09_tool_result_meta.py` | Send data to the UI without the LLM agent seeing it | `_meta.forwarded_blocks` (agent-visible vs UI-visible) | shared/forwarded.py |
+| 09 | `09_tool_result_meta.py` | Send data to the UI without the LLM agent seeing it | Block-level `_meta.forwarded_blocks` (agent-visible vs UI-visible) | shared/forwarded.py |
 | 10 | `10_workflows.py` | Define multi-step processes as markdown files | YAML frontmatter, `mount_workflows()`, tool gating | shared/workflows/ |
 
 ### Phase 5: Production Patterns (12 runs in mock mode without `.env`)
@@ -136,16 +136,17 @@ builds the **orchestrator (client)** side. Lesson 13 combines both into the
 
 | File | Purpose |
 |------|---------|
-| `llm_helper.py` | Reusable LLM client — wraps TR Orchestrator auth. Used by lessons 08, 09, 12. |
+| `llm_helper.py` | Reusable LLM client — wraps TR Orchestrator auth. Used by lessons 08 and 12. |
 | `.env.example` | Credentials template for LLM lessons |
 
 ## Running
 
 ```bash
-# Any lesson (no .env needed for 01-07, 10-11, 13-16; 12 runs in mock mode):
+# Any lesson (no .env needed for 01-07, 09-11, 13-16):
 uv run python 01_hello_mcp_server.py
 
-# LLM lessons (need .env):
+# Lesson 08 needs .env; without it, it prints the tool schema and stops.
+# Lesson 12 runs either way -- .env only enables its LLM-selection step.
 uv run python 08_llm_tool_server.py
 ```
 

@@ -1,439 +1,193 @@
-"""Lesson 10 -- Workflow System
-================================
+"""Lesson 10 -- Workflows: markdown files that gate the tools
+=============================================================
 
-WHY THIS MATTERS:
-  A skill might have 10+ tools, but for a given task (e.g., "create a
-  greeting card"), only 2 of them are relevant. Workflows solve this:
-  they're markdown files that say "for this task, use these tools in
-  this order." The orchestrator reads workflows at startup, picks the
-  right one based on the user's message, and hides all other tools
-  from the LLM agent. This keeps the agent focused and prevents it
-  from calling tools that don't belong to the current task.
+This server has three greeting tools. For "say hello and goodbye to Shubham"
+only two of them matter. A WORKFLOW is a markdown file that says which tools
+a task needs, so the agent is shown those and nothing else.
 
-WHAT YOU'LL LEARN:
-  1. Define workflows as markdown files with YAML frontmatter
-  2. Parse and load workflows programmatically
-  3. Mount REST endpoints so the orchestrator can discover workflows
-  4. Understand tool gating -- only workflow-listed tools are visible
+  A workflow file = YAML frontmatter (the contract) + markdown (the steps):
 
-Concepts:
-  - Workflows: markdown files with YAML frontmatter
-  - Workflow fields: name, description, tools, trigger_patterns
-  - mount_workflows(): auto-register REST endpoints
-  - GET /workflows: list all workflows
-  - GET /workflows/{name}: get specific workflow
-  - Workflow-driven tool visibility (tools listed in workflow props)
+    ---
+    name: welcome-message                  <- unique id
+    description: Say hello and goodbye     <- how the orchestrator picks it
+    tools: [greet, farewell]               <- the gate: only these are shown
+    trigger_patterns: ["welcome.*message"] <- regex fast-path for user intent
+    ---
+    # Steps
+    1. Call `greet` ...                    <- instructions for the agent
 
-Flow:
-  +------------------+     +-------------------+
-  | Orchestrator     | --> | MCP Skill Server  |
-  | (backend agent)  |     |                   |
-  +------------------+     | Endpoints:        |
-       |                   |  GET /workflows   |
-       |                   |  GET /workflows/X |
-       +-- discover -----> |  POST /mcp (tools)|
-       |   workflows       +-------------------+
-       |                   | Workflows:        |
-       +-- select one ---> |  welcome-message  |
-       |                   |  translated-greet |
-       +-- read tools ---> +-------------------+
-       |   from workflow   | Tools:            |
-       +-- execute ------> |  greet            |
-           tools           |  farewell         |
-                           |  translate        |
-                           +-------------------+
+  ┌──── ORCHESTRATOR ────┐                 ┌──── MCP SKILL SERVER ────┐
+  │                      │  GET /workflows │ mount_workflows() serves │
+  │ 1. discover ─────────┼───────────────► │   welcome-message        │
+  │                      │ ◄───────────────┤   translated-greeting    │
+  │                      │                 │                          │
+  │ 2. match the user's  │                 │ tools/list:              │
+  │    message to one    │                 │   greet                  │
+  │    description       │                 │   farewell               │
+  │                      │                 │   translate              │
+  │ 3. show the agent    │   tools/call    │                          │
+  │    ONLY wf.tools ────┼───────────────► │ only wf.tools are        │
+  │                      │                 │ reachable this turn      │
+  └──────────────────────┘                 └──────────────────────────┘
 
-  Maps to:
-    shared/workflows/loader.py (WorkflowDef, parse markdown)
-    shared/workflows/routes.py (mount_workflows, REST endpoints)
-    story-drafting/src/workflows/*.md (production workflow files)
-
-PREREQUISITES: Lesson 01 (tools), Lesson 04 (resources)
+  Gating matters because an agent shown every tool picks wrong ones. With
+  "welcome-message" selected, `translate` is not in its list, so it cannot
+  call it -- no prompt engineering needed.
 
 Run:  uv run python 10_workflows.py
 
-EXPECTED OUTPUT:
-  === Workflow Files Created ===
-
-    greeting_card.md
-    translated_greeting.md
-    welcome_message.md
-
-  === Server Tools (6) ===
-
-    - greet: Return a greeting for the given name.
-    - farewell: Return a farewell for the given name.
-    - translate: Translate text into another language (simulated).
-    - format_card: Format a message as a greeting card.
-    - detect_mood: Detect the mood of a piece of text (simulated).
-    - slow_greet: Greet someone after a short delay.
-
-  === Workflows (3) ===
-
-    Workflow: greeting-card
-      Description: Create a formatted greeting card
-      Tools: ['greet', 'format_card']
-      Triggers: ['greeting.*card', 'create.*card']
-
-    Workflow: translated-greeting
-      Description: Translate a greeting into another language
-      Tools: ['greet', 'translate']
-      Triggers: ['translate.*greeting', 'greet.*in.*language']
-
-    Workflow: welcome-message
-      Description: Generate a full welcome message with greeting and farewell
-      Tools: ['greet', 'farewell']
-      Triggers: ['welcome.*message', 'say.*hello.*goodbye']
-
-  === Workflow-Driven Tool Visibility ===
-
-    Concept: tools listed in a workflow's 'tools' field are
-    only loaded when that workflow is selected. This prevents
-    the agent from seeing all tools upfront.
-
-    If 'greeting-card' selected:
-      Visible tools: ['format_card', 'greet']
-      Hidden tools:  ['detect_mood', 'farewell', 'slow_greet', 'translate']
-
-    If 'translated-greeting' selected:
-      Visible tools: ['greet', 'translate']
-      Hidden tools:  ['detect_mood', 'farewell', 'format_card', 'slow_greet']
-
-    If 'welcome-message' selected:
-      Visible tools: ['farewell', 'greet']
-      Hidden tools:  ['detect_mood', 'format_card', 'slow_greet', 'translate']
+Maps to: shared/workflows/loader.py (parse), shared/workflows/routes.py
+(mount_workflows), story-drafting/src/workflows/*.md
 """
 
 import asyncio
-import os
-import json
 import tempfile
 import textwrap
-from typing import Annotated
+from dataclasses import dataclass, field
 from pathlib import Path
-from pydantic import Field
-from fastmcp import FastMCP, Client
+
 import yaml
+from fastmcp import FastMCP, Client
 from starlette.responses import JSONResponse
 
-
-mcp = FastMCP(name="workflow-demo")
-
-
-# ============================================================================
-# Workflow loader (simplified version of shared/workflows/loader.py)
-# ============================================================================
-
-class WorkflowDef:
-    """A workflow definition parsed from a markdown file."""
-
-    def __init__(self, name: str, description: str, tools: list[str],
-                 trigger_patterns: list[str], content: str):
-        self.name = name
-        self.description = description
-        self.tools = tools
-        self.trigger_patterns = trigger_patterns
-        self.content = content
-
-    def to_dict(self) -> dict:
-        return {
-            "name": self.name,
-            "description": self.description,
-            "tools": self.tools,
-            "trigger_patterns": self.trigger_patterns,
-            "content": self.content,
-        }
-
-    @classmethod
-    def from_markdown(cls, text: str) -> "WorkflowDef":
-        """Parse a workflow markdown file with YAML frontmatter."""
-        if not text.startswith("---"):
-            raise ValueError("Workflow must start with YAML frontmatter (---)")
-
-        _, frontmatter, content = text.split("---", 2)
-        meta = yaml.safe_load(frontmatter)
-
-        return cls(
-            name=meta["name"],
-            description=meta["description"],
-            tools=meta.get("tools", []),
-            trigger_patterns=meta.get("trigger_patterns", []),
-            content=content.strip(),
-        )
+mcp = FastMCP(name="workflow-greetings")
 
 
-def load_workflows(directory: str) -> list[WorkflowDef]:
-    """Load all workflow markdown files from a directory."""
-    workflows = []
-    for md_file in sorted(Path(directory).glob("*.md")):
-        text = md_file.read_text(encoding="utf-8")
-        try:
-            wf = WorkflowDef.from_markdown(text)
-            workflows.append(wf)
-        except Exception as e:
-            print(f"  Warning: failed to parse {md_file.name}: {e}")
-    return workflows
-
-
-def mount_workflows(server: FastMCP, workflow_dir: str):
-    """Mount workflow REST endpoints on the MCP server.
-
-    This mirrors shared/workflows/routes.py:
-      GET /workflows -> list all workflows (name + description only)
-      GET /workflows/{name} -> full workflow definition
-    """
-    workflows = load_workflows(workflow_dir)
-    wf_by_name = {wf.name: wf for wf in workflows}
-
-    @server.custom_route("/workflows", methods=["GET"])
-    async def list_workflows(request):
-        summaries = [
-            {"name": wf.name, "description": wf.description}
-            for wf in workflows
-        ]
-        return JSONResponse(summaries)
-
-    @server.custom_route("/workflows/{name}", methods=["GET"])
-    async def get_workflow(request):
-        name = request.path_params["name"]
-        wf = wf_by_name.get(name)
-        if not wf:
-            return JSONResponse({"error": f"Workflow '{name}' not found"}, status_code=404)
-        return JSONResponse(wf.to_dict())
-
-
-# ============================================================================
-# Create sample workflow markdown files
-# ============================================================================
-
-def create_sample_workflows(directory: str):
-    """Create sample workflow files matching production patterns."""
-
-    wf1 = textwrap.dedent("""\
-    ---
-    name: welcome-message
-    description: Generate a full welcome message with greeting and farewell
-    tools:
-      - greet
-      - farewell
-    trigger_patterns:
-      - "welcome.*message"
-      - "say.*hello.*goodbye"
-    ---
-
-    # Welcome Message Workflow
-
-    ## Steps
-
-    1. Ask the user for the person's name
-    2. Call `greet` with the name to generate a hello message
-    3. Call `farewell` with the name to generate a goodbye message
-    4. Combine both into a full welcome message for the user
-
-    ## Notes
-
-    - Always greet before farewell -- order matters for politeness
-    - Present both messages together as one cohesive welcome
-    """)
-
-    wf2 = textwrap.dedent("""\
-    ---
-    name: translated-greeting
-    description: Translate a greeting into another language
-    tools:
-      - greet
-      - translate
-    trigger_patterns:
-      - "translate.*greeting"
-      - "greet.*in.*language"
-    ---
-
-    # Translated Greeting Workflow
-
-    ## Steps
-
-    1. Ask the user for the person's name and target language
-    2. Call `greet` with the name to generate the greeting
-    3. Call `translate` with the greeting text and target language
-    4. Present both the original and translated greeting
-
-    ## Notes
-
-    - Default to Spanish if no language is specified
-    - Always show the original alongside the translation
-    """)
-
-    wf3 = textwrap.dedent("""\
-    ---
-    name: greeting-card
-    description: Create a formatted greeting card
-    tools:
-      - greet
-      - format_card
-    trigger_patterns:
-      - "greeting.*card"
-      - "create.*card"
-    ---
-
-    # Greeting Card Workflow
-
-    ## Steps
-
-    1. Ask the user for the recipient's name
-    2. Call `greet` to generate the greeting message
-    3. Call `format_card` with the name and greeting to create the card
-    4. Present the formatted card to the user
-
-    ## Notes
-
-    - The card format uses a bordered text layout
-    - Optionally allow the user to customize the message before formatting
-    """)
-
-    os.makedirs(directory, exist_ok=True)
-    for filename, content in [
-        ("welcome_message.md", wf1),
-        ("translated_greeting.md", wf2),
-        ("greeting_card.md", wf3),
-    ]:
-        Path(os.path.join(directory, filename)).write_text(content, encoding="utf-8")
-
-
-# ============================================================================
-# Register tools referenced by workflows
-# ============================================================================
+# -- The three tools the workflows choose between -----------------------------
 
 @mcp.tool
-async def greet(
-    name: Annotated[str, Field(description="Name of the person to greet")],
-) -> dict:
-    """Return a greeting for the given name."""
+def greet(name: str) -> dict:
+    """Say hello to someone."""
     return {"message": f"Hello, {name}!"}
 
 
 @mcp.tool
-async def farewell(
-    name: Annotated[str, Field(description="Name of the person to bid farewell")],
-) -> dict:
-    """Return a farewell for the given name."""
+def farewell(name: str) -> dict:
+    """Say goodbye to someone."""
     return {"message": f"Goodbye, {name}!"}
 
 
 @mcp.tool
-async def translate(
-    text: Annotated[str, Field(description="Text to translate")],
-    language: Annotated[str, Field(description="Target language")],
-) -> dict:
+def translate(text: str, language: str) -> dict:
     """Translate text into another language (simulated)."""
-    return {"original": text, "translated": f"[{language}] {text}", "language": language}
+    return {"translated": f"[{language}] {text}"}
 
 
-@mcp.tool
-async def format_card(
-    name: Annotated[str, Field(description="Recipient name")],
-    message: Annotated[str, Field(description="Card message")],
-) -> dict:
-    """Format a message as a greeting card."""
-    card = f"=== Card for {name} ===\n{message}\n================="
-    return {"card": card, "name": name}
+# -- Workflow loader (simplified shared/workflows/loader.py) ------------------
+
+@dataclass
+class WorkflowDef:
+    name: str
+    description: str
+    tools: list[str] = field(default_factory=list)
+    trigger_patterns: list[str] = field(default_factory=list)
+    content: str = ""
+
+    @classmethod
+    def from_markdown(cls, text: str) -> "WorkflowDef":
+        """Split '---\\nYAML\\n---\\nmarkdown' into the contract and the steps."""
+        if not text.startswith("---"):
+            raise ValueError("workflow must start with YAML frontmatter (---)")
+        _, frontmatter, content = text.split("---", 2)
+        meta = yaml.safe_load(frontmatter)
+        return cls(content=content.strip(), **meta)
 
 
-@mcp.tool
-async def detect_mood(
-    text: Annotated[str, Field(description="Text to analyse for mood")],
-) -> dict:
-    """Detect the mood of a piece of text (simulated)."""
-    return {"text": text, "mood": "happy"}
+def load_workflows(directory: str) -> list[WorkflowDef]:
+    """Parse every *.md in a directory into a WorkflowDef."""
+    return [
+        WorkflowDef.from_markdown(f.read_text(encoding="utf-8"))
+        for f in sorted(Path(directory).glob("*.md"))
+    ]
 
 
-@mcp.tool
-async def slow_greet(
-    name: Annotated[str, Field(description="Name of the person to greet")],
-    seconds: Annotated[float, Field(default=1.0, description="Seconds to wait")] = 1.0,
-) -> dict:
-    """Greet someone after a short delay."""
-    await asyncio.sleep(seconds)
-    return {"message": f"Hello, {name}!", "waited": seconds}
+def mount_workflows(server: FastMCP, workflows: list[WorkflowDef]) -> None:
+    """Expose the workflows over REST, the way the orchestrator discovers them."""
+    by_name = {wf.name: wf for wf in workflows}
+
+    @server.custom_route("/workflows", methods=["GET"])
+    async def list_workflows(request):
+        return JSONResponse([{"name": w.name, "description": w.description} for w in workflows])
+
+    @server.custom_route("/workflows/{name}", methods=["GET"])
+    async def get_workflow(request):
+        wf = by_name.get(request.path_params["name"])
+        if not wf:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(wf.__dict__)
 
 
-# ============================================================================
-# Main: create workflows, mount them, demonstrate discovery
-# ============================================================================
+# -- Two sample workflow files over the same three tools ----------------------
+
+WORKFLOW_FILES = {
+    "welcome_message.md": textwrap.dedent("""\
+        ---
+        name: welcome-message
+        description: Say hello and goodbye to someone
+        tools: [greet, farewell]
+        trigger_patterns: ["welcome.*message", "hello.*goodbye"]
+        ---
+
+        # Welcome Message
+
+        ## Steps
+        1. Call `greet` with the name.
+        2. Call `farewell` with the same name.
+        3. Present both lines together.
+        """),
+    "translated_greeting.md": textwrap.dedent("""\
+        ---
+        name: translated-greeting
+        description: Greet someone in another language
+        tools: [greet, translate]
+        trigger_patterns: ["translate.*greeting", "greet.*in.*language"]
+        ---
+
+        # Translated Greeting
+
+        ## Steps
+        1. Call `greet` with the name.
+        2. Pass that greeting to `translate` with the target language.
+        3. Show the original and the translation.
+        """),
+}
+
 
 async def main():
-    # Create temp workflow directory with sample files
     with tempfile.TemporaryDirectory() as tmpdir:
-        create_sample_workflows(tmpdir)
-        mount_workflows(mcp, tmpdir)
+        for filename, text in WORKFLOW_FILES.items():
+            (Path(tmpdir) / filename).write_text(text, encoding="utf-8")
 
-        print("=== Workflow Files Created ===\n")
-        for f in sorted(Path(tmpdir).glob("*.md")):
-            print(f"  {f.name}")
-        print()
-
-        # Use in-process client (no HTTP needed for workflow demo)
-        async with Client(mcp) as client:
-            # -- Discovery: what tools does this server have? --
-            tools = await client.list_tools()
-            print(f"=== Server Tools ({len(tools)}) ===\n")
-            for t in tools:
-                print(f"  - {t.name}: {t.description}")
-            print()
-
-        # -- Workflow discovery (via REST-like access) --
-        # In production, the orchestrator calls GET /workflows
-        # Here we demonstrate the workflow loader directly
         workflows = load_workflows(tmpdir)
+        mount_workflows(mcp, workflows)     # served at GET /workflows over HTTP
 
-        print(f"=== Workflows ({len(workflows)}) ===\n")
-        for wf in workflows:
-            print(f"  Workflow: {wf.name}")
-            print(f"    Description: {wf.description}")
-            print(f"    Tools: {wf.tools}")
-            print(f"    Triggers: {wf.trigger_patterns}")
-            print()
+        async with Client(mcp) as client:
+            all_tools = {t.name for t in await client.list_tools()}
+            print("server tools:", sorted(all_tools), "\n")
 
-        # -- Workflow-driven tool visibility --
-        print("=== Workflow-Driven Tool Visibility ===\n")
-        print("  Concept: tools listed in a workflow's 'tools' field are")
-        print("  only loaded when that workflow is selected. This prevents")
-        print("  the agent from seeing all tools upfront.\n")
+            for wf in workflows:
+                print(f"workflow: {wf.name}")
+                print(f"  description: {wf.description}")
+                print(f"  triggers   : {wf.trigger_patterns}")
+                print(f"  VISIBLE    : {sorted(set(wf.tools) & all_tools)}")
+                print(f"  hidden     : {sorted(all_tools - set(wf.tools))}")
+                print(f"  step 1     : {wf.content.splitlines()[3]}")
+                print()
 
-        for wf in workflows:
-            all_tools = {t.name for t in tools}
-            wf_tools = set(wf.tools)
-            visible = wf_tools & all_tools
-            hidden = all_tools - wf_tools
-
-            print(f"  If '{wf.name}' selected:")
-            print(f"    Visible tools: {sorted(visible)}")
-            print(f"    Hidden tools:  {sorted(hidden)}")
-            print()
+            # The gate is just set membership -- the agent is handed wf.tools.
+            wf = next(w for w in workflows if w.name == "welcome-message")
+            hidden = sorted(all_tools - set(wf.tools))
+            r = await client.call_tool("greet", {"name": "Shubham"})
+            print(f"'{wf.name}' calls greet ->", r.data["message"])
+            print(f"'{wf.name}' cannot call {hidden[0]}: not in {wf.tools}")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 
-    # -- Key takeaway --------------------------------------------------------
-    # Workflows are markdown files with YAML frontmatter that define:
-    #   - name: unique identifier
-    #   - description: what the workflow does (used for routing)
-    #   - tools: which MCP tools this workflow uses
-    #   - trigger_patterns: regex patterns that match user intent
-    #   - content: step-by-step instructions for the agent
-    #
-    # The orchestrator workflow:
-    #   1. GET /workflows -> see available workflows
-    #   2. Select workflow by matching user intent to descriptions
-    #   3. Load only the tools listed in that workflow
-    #   4. Execute the workflow steps
-    #
-    # This is the exact pattern from:
-    #   shared/workflows/loader.py (parsing)
-    #   shared/workflows/routes.py (REST endpoints)
-    #   langgraph_mcp_orchestrator.py (workflow selection)
-    #
-    # -- Exercise -------------------------------------------------------------
-    # 1. Add a new workflow markdown file and verify it gets discovered
-    # 2. Implement trigger_patterns matching with regex
-    # 3. Add a "sub-workflow" reference (e.g., a reusable greeting step)
+# Exercises:
+# 1. Add farewell_only.md with tools: [farewell]. It is discovered with no
+#    code change -- that is the point of file-based workflows.
+# 2. Match trigger_patterns with re.search against "send a welcome message"
+#    to pick the workflow, instead of selecting it by name.
+# 3. Serve the server over HTTP (lesson 01 --http) and curl GET /workflows.

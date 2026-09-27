@@ -1,461 +1,219 @@
-"""Lesson 12 -- Workflow-Driven Orchestration
-===============================================
+"""Lesson 12 -- The Orchestration Loop: user message to tool calls
+==================================================================
 
-WHY THIS MATTERS:
-  This lesson combines everything from lessons 01-11 into a single
-  orchestration loop -- the same pattern used by the production backend.
-  When a user says "create a welcome message for Alice," the orchestrator:
-    1. Discovers available workflows from the skill servers
-    2. Picks the right workflow (fast-path regex or LLM fallback)
-    3. Gates tools to only those listed in the workflow
-    4. Calls tools in sequence
-    5. Returns the result
+Lessons 10 and 11 built the parts: workflows gate tools, a registry routes
+them. This is the loop that runs them, for one greeting request.
 
-  This is the highest-level pattern *before* LangGraph (lesson 13).
+  "Create a welcome message for Shubham"
+              │
+              ▼
+  ┌───────────────── ORCHESTRATOR ─────────────────┐
+  │ 1. DISCOVER   tools from every server (11)     │      ┌─ greeting-server ─┐
+  │               workflows from their files (10)  │ ───► │ greet, farewell   │
+  │                                                │      └───────────────────┘
+  │ 2. SELECT     a) fast path: regex on the       │      ┌─ translate-server ┐
+  │                  message        ~1ms           │ ───► │ translate         │
+  │               b) miss? ask the LLM  ~2s        │      └───────────────────┘
+  │                  (costs a call, so try a       │
+  │                   regex first)                 │
+  │                                                │
+  │ 3. GATE       tools = wf.tools ONLY            │
+  │                                                │
+  │ 4. EXECUTE    call them in the workflow's      │
+  │               order, collect the results       │
+  │                                                │
+  │ 5. no workflow matched -> plain chat, no tools │
+  └────────────────────────────────────────────────┘
 
-WHAT YOU'LL LEARN:
-  1. The complete orchestration loop from user message to response
-  2. Fast-path matching: skip the LLM for well-known patterns (~100ms)
-  3. LLM-based workflow selection as fallback (~2-3s)
-  4. Tool gating in action: hiding irrelevant tools from the agent
-  5. How all the pieces from prior lessons fit together
+  Step 2 is the whole trick: a regex costs nothing and handles the phrasings
+  you have seen before; the LLM handles everything else. Production calls
+  these the fast path and the selector.
 
-Concepts:
-  - Full orchestration loop: user intent -> workflow selection -> tool execution
-  - Workflow discovery from MCP servers
-  - LLM selects which workflow to run based on user message
-  - Tool gating: only workflow-listed tools are available
-  - Multi-step execution following workflow instructions
+  In production the LLM also does step 4 -- picking the next tool from the
+  workflow text and the results so far. Here step 4 just walks wf.tools in
+  order, so the loop stays readable.
 
-Flow:
-  +-----------+     +--------------------+     +------------------+
-  | User      | --> | Orchestrator       | --> | MCP Servers      |
-  | "create a |     |                    |     |                  |
-  |  welcome  |     | 1. Discover wfs    |     | greeting-server  |
-  |  message  |     | 2. LLM selects wf  |     | translation-srv  |
-  |  for      |     | 3. Load wf tools   |     +------------------+
-  |  Alice"   |     | 4. LLM plans steps |
-  +-----------+     | 5. Execute tools   |
-                    | 6. Return result   |
-                    +--------------------+
-                         |         ^
-                         v         |
-                    +--------------------+
-                    | LLM (TR Orch.)     |
-                    | - Select workflow  |
-                    | - Plan tool calls  |
-                    | - Process results  |
-                    +--------------------+
-
-  Maps to:
-    langgraph_mcp_orchestrator.py (full orchestration loop)
-    fast_path_matcher.py (regex shortcut for known patterns)
-    mcp_protocol.py (tool execution)
-
-PREREQUISITES: Lessons 10 (workflows), 11 (multi-server), 07 (client patterns)
-
-** Requires .env for full LLM orchestration; runs in mock mode without it **
+** .env gives you real LLM selection in test 2; without it that test simply
+   reports no match. Tests 1 and 3 never need it. **
 
 Run:  uv run python 12_workflow_orchestration.py
 
-EXPECTED OUTPUT (mock mode -- no .env):
-  === Workflow-Driven Orchestration Demo ===
-
-  Setting up orchestrator...
-    Registered 2 servers with 5 tools
-    Loaded 3 workflows
-
-  === Test 1: "Create a welcome message for Alice" ===
-    Fast-path matched -> welcome-message
-    Available tools (gated): ['greet', 'farewell']
-    Calling greet({name: 'Alice'})...
-    Calling farewell({name: 'Alice'})...
-    Result: Welcome message for Alice (2 tool calls)
-
-  === Test 2: "Translate a greeting into French for Bob" ===
-    Fast-path matched -> translated-greeting
-    Available tools (gated): ['greet', 'translate']
-    Calling greet({name: 'Bob'})...
-    Calling translate({text: 'Hello, Bob!', language: 'French'})...
-    Result: Translated greeting for Bob (2 tool calls)
-
-  === Test 3: "Create a greeting card for Bob" ===
-    Fast-path matched -> greeting-card
-    Available tools (gated): ['greet', 'format_card']
-    Calling greet({name: 'Bob'})...
-    Calling format_card({name: 'Bob', message: 'Hello, Bob!'})...
-    Result: Greeting card for Bob (2 tool calls)
-
-  === Test 4: "What's the weather today?" ===
-    No workflow matched (no fast-path, no LLM match)
-    Falling back to general response.
+Maps to: langgraph_mcp_orchestrator.py (the loop), fast_path_matcher.py
+(step 2a), mcp_protocol.py (step 4)
 """
 
 import asyncio
-import json
 import os
 import re
-import tempfile
-import textwrap
-from typing import Annotated
-from pathlib import Path
-from pydantic import Field
-from fastmcp import FastMCP, Client
+from dataclasses import dataclass, field
+
 from dotenv import load_dotenv
-import yaml
+from fastmcp import FastMCP, Client
 
 load_dotenv()
 
-
-# ============================================================================
-# MCP Servers (simplified versions of production servers)
-# ============================================================================
+# -- The servers (lesson 11) --------------------------------------------------
 
 greeting_server = FastMCP(name="greeting-server")
-translation_server = FastMCP(name="translation-server")
+translate_server = FastMCP(name="translate-server")
 
 
 @greeting_server.tool
-async def greet(
-    name: Annotated[str, Field(description="Name of the person to greet")],
-) -> dict:
-    """Generate a friendly greeting for someone."""
-    return {"message": f"Hello, {name}!", "word_count": 3}
+def greet(name: str) -> dict:
+    """Say hello to someone."""
+    return {"message": f"Hello, {name}!"}
 
 
 @greeting_server.tool
-async def farewell(
-    name: Annotated[str, Field(description="Name of the person to say goodbye to")],
-) -> dict:
-    """Generate a farewell message for someone."""
-    return {"message": f"Goodbye, {name}!", "word_count": 2}
+def farewell(name: str) -> dict:
+    """Say goodbye to someone."""
+    return {"message": f"Goodbye, {name}!"}
 
 
-@greeting_server.tool
-async def format_card(
-    name: Annotated[str, Field(description="Name for the card")],
-    message: Annotated[str, Field(description="Message to display on the card")],
-) -> dict:
-    """Format a message as a decorative greeting card."""
-    return {
-        "card": f"=== Card for {name} ===\n{message}\n=======",
-        "name": name,
-    }
+@translate_server.tool
+def translate(text: str, language: str = "French") -> dict:
+    """Translate text into another language (simulated)."""
+    return {"translated": f"[{language}] {text}"}
 
 
-@translation_server.tool
-async def translate(
-    text: Annotated[str, Field(description="Text to translate")],
-    language: Annotated[str, Field(default="French", description="Target language")] = "French",
-) -> dict:
-    """Translate text into another language."""
-    return {"original": text, "translated": f"[{language}] {text}", "language": language}
+# -- The workflows (lesson 10, inlined) ---------------------------------------
 
+@dataclass
+class WorkflowDef:
+    name: str
+    description: str
+    tools: list[str] = field(default_factory=list)
+    trigger_patterns: list[str] = field(default_factory=list)
 
-@translation_server.tool
-async def detect_language(
-    text: Annotated[str, Field(description="Text to detect language of")],
-) -> dict:
-    """Detect the language of the given text."""
-    return {"text": text, "detected": "en", "confidence": 0.95}
-
-
-# ============================================================================
-# Workflow definitions (inline, no temp files needed)
-# ============================================================================
 
 WORKFLOWS = [
-    {
-        "name": "welcome-message",
-        "description": "Create a welcome message that greets and bids farewell to someone",
-        "tools": ["greet", "farewell"],
-        "trigger_patterns": [r"welcome.*message", r"say.*hello.*goodbye"],
-        "content": (
-            "1. Greet the person with greet\n"
-            "2. Say farewell with farewell\n"
-            "3. Present the combined welcome message"
-        ),
-    },
-    {
-        "name": "translated-greeting",
-        "description": "Greet someone and translate the greeting into another language",
-        "tools": ["greet", "translate"],
-        "trigger_patterns": [r"translate.*greeting", r"greet.*in.*language"],
-        "content": (
-            "1. Generate a greeting with greet\n"
-            "2. Translate the greeting with translate\n"
-            "3. Present the translated greeting"
-        ),
-    },
-    {
-        "name": "greeting-card",
-        "description": "Create a decorative greeting card for someone",
-        "tools": ["greet", "format_card"],
-        "trigger_patterns": [r"greeting.*card", r"create.*card"],
-        "content": (
-            "1. Generate a greeting with greet\n"
-            "2. Format as a card with format_card\n"
-            "3. Present the greeting card"
-        ),
-    },
+    WorkflowDef(
+        name="welcome-message",
+        description="Say hello and goodbye to someone",
+        tools=["greet", "farewell"],
+        trigger_patterns=[r"welcome.*message", r"hello.*goodbye"],
+    ),
+    WorkflowDef(
+        name="translated-greeting",
+        description="Greet someone in another language",
+        tools=["greet", "translate"],
+        trigger_patterns=[r"translate.*greeting", r"greet.*in.*language"],
+    ),
 ]
 
 
-# ============================================================================
-# Orchestrator
-# ============================================================================
+class Orchestrator:
+    """The loop. Simplified langgraph_mcp_orchestrator.py."""
 
-class WorkflowOrchestrator:
-    """Simplified version of langgraph_mcp_orchestrator.py.
+    def __init__(self, workflows: list[WorkflowDef]):
+        self.workflows = workflows
+        self.servers: dict[str, FastMCP] = {}
+        self.routes: dict[str, str] = {}           # tool -> server
 
-    Demonstrates the full orchestration loop:
-      1. Discover workflows from servers
-      2. Select workflow based on user intent
-      3. Gate tools to workflow-listed tools only
-      4. Execute workflow steps by calling tools
-    """
-
-    def __init__(self):
-        self._servers: dict[str, FastMCP] = {}
-        self._all_tools: dict[str, str] = {}  # tool_name -> server_name
-        self._workflows = WORKFLOWS
-
-    def register_server(self, name: str, server: FastMCP):
-        self._servers[name] = server
-
-    async def discover_tools(self):
-        """Discover tools from all registered servers."""
-        for name, server in self._servers.items():
+    # 1. DISCOVER
+    async def discover(self, *servers: FastMCP) -> None:
+        for server in servers:
+            self.servers[server.name] = server
             async with Client(server) as client:
-                tools = await client.list_tools()
-                for t in tools:
-                    self._all_tools[t.name] = name
+                for tool in await client.list_tools():
+                    self.routes[tool.name] = server.name
 
-    def select_workflow_by_pattern(self, user_message: str) -> dict | None:
-        """Fast-path: select workflow by regex pattern matching.
-        Maps to fast_path_matcher.py."""
-        msg_lower = user_message.lower()
-        for wf in self._workflows:
-            for pattern in wf.get("trigger_patterns", []):
-                if re.search(pattern, msg_lower):
-                    return wf
-        return None
-
-    async def select_workflow_by_llm(self, user_message: str) -> dict | None:
-        """LLM-based workflow selection. Uses the LLM to pick the best
-        workflow based on the user's message and workflow descriptions."""
-        try:
-            from llm_helper import get_llm
-            llm = get_llm(model="gpt-4o", temperature=0.0)
-        except Exception:
-            return None
-
-        wf_descriptions = "\n".join(
-            f"- {wf['name']}: {wf['description']}"
-            for wf in self._workflows
-        )
-
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a workflow selector. Given a user message and available "
-                    "workflows, respond with ONLY the workflow name that best matches. "
-                    "If none match, respond with 'none'.\n\n"
-                    f"Available workflows:\n{wf_descriptions}"
-                ),
-            },
-            {"role": "user", "content": user_message},
-        ]
-
-        response = await llm.ainvoke(messages)
-        selected_name = response.content.strip().lower()
-
-        for wf in self._workflows:
-            if wf["name"] == selected_name:
+    # 2a. SELECT -- fast path
+    def match_pattern(self, message: str) -> WorkflowDef | None:
+        for wf in self.workflows:
+            if any(re.search(p, message.lower()) for p in wf.trigger_patterns):
                 return wf
         return None
 
-    def get_gated_tools(self, workflow: dict) -> list[str]:
-        """Get only the tools listed in the workflow.
-        Maps to workflow-driven tool visibility in the orchestrator."""
-        return [t for t in workflow.get("tools", []) if t in self._all_tools]
+    # 2b. SELECT -- LLM fallback
+    async def match_llm(self, message: str) -> WorkflowDef | None:
+        if not os.getenv("ORCHESTRATOR_ENDPOINT"):
+            return None
+        from llm_helper import get_llm
 
-    async def call_tool(self, tool_name: str, args: dict) -> dict:
-        """Call a tool on the appropriate server."""
-        server_name = self._all_tools.get(tool_name)
-        if not server_name:
-            return {"error": f"Unknown tool: {tool_name}"}
+        catalogue = "\n".join(f"- {wf.name}: {wf.description}" for wf in self.workflows)
+        reply = await get_llm(model="gpt-4o", temperature=0.0).ainvoke([
+            {"role": "system", "content": "Reply with ONE workflow name from the list, "
+                                          f"or 'none'.\n\n{catalogue}"},
+            {"role": "user", "content": message},
+        ])
+        choice = reply.content.strip().lower()
+        return next((wf for wf in self.workflows if wf.name == choice), None)
 
-        server = self._servers[server_name]
-        async with Client(server) as client:
-            result = await client.call_tool(tool_name, args)
-            return {"tool": tool_name, "server": server_name, "result": result}
+    # 3. GATE
+    def gate(self, wf: WorkflowDef) -> list[str]:
+        return [t for t in wf.tools if t in self.routes]
 
-    async def execute_workflow(self, workflow: dict, user_message: str) -> list[dict]:
-        """Execute a workflow by calling its tools in sequence.
+    # 4. EXECUTE
+    async def call(self, tool: str, args: dict) -> dict:
+        async with Client(self.servers[self.routes[tool]]) as client:
+            return (await client.call_tool(tool, args)).data
 
-        In production, the LLM drives this loop (deciding which tool
-        to call next based on workflow instructions + prior results).
-        Here we demonstrate the sequential execution pattern.
-        """
-        results = []
-        gated_tools = self.get_gated_tools(workflow)
+    async def handle(self, message: str) -> dict:
+        wf = self.match_pattern(message)
+        how = "fast-path"
+        if not wf:
+            wf, how = await self.match_llm(message), "llm"
+        if not wf:
+            return {"status": "no_workflow", "how": "none matched -> plain chat"}
 
-        for tool_name in gated_tools:
-            # Build simple args from user message
-            args = self._build_args(tool_name, user_message)
-            result = await self.call_tool(tool_name, args)
-            results.append(result)
-
-        return results
-
-    def _build_args(self, tool_name: str, user_message: str) -> dict:
-        """Build tool arguments from user message (simplified).
-        In production, the LLM extracts parameters from context."""
-        # Extract name from messages like "create a welcome message for Alice"
-        name_match = re.search(r"\bfor\s+([A-Z][a-z]+)", user_message)
-        name = name_match.group(1) if name_match else "World"
-
-        # Extract language from messages like "into French" or "in Spanish"
-        lang_match = re.search(r"(?:into|in)\s+([A-Z][a-z]+)", user_message)
-        language = lang_match.group(1) if lang_match else "French"
-
-        arg_map = {
-            "greet": {"name": name},
-            "farewell": {"name": name},
-            "format_card": {"name": name, "message": f"Hello, {name}!"},
-            "translate": {"text": f"Hello, {name}!", "language": language},
-            "detect_language": {"text": user_message},
-        }
-        return arg_map.get(tool_name, {"name": name})
-
-    async def handle_message(self, user_message: str) -> dict:
-        """Full orchestration loop for a user message."""
-
-        # Step 1: Try fast-path (regex matching)
-        workflow = self.select_workflow_by_pattern(user_message)
-        selection_method = "fast-path"
-
-        # Step 2: Fall back to LLM selection if no regex match
-        if not workflow and os.getenv("ORCHESTRATOR_ENDPOINT"):
-            workflow = await self.select_workflow_by_llm(user_message)
-            selection_method = "llm"
-
-        if not workflow:
-            return {
-                "status": "no_workflow",
-                "message": "No matching workflow found. Falling back to general chat.",
-            }
-
-        # Step 3: Gate tools
-        gated = self.get_gated_tools(workflow)
-
-        # Step 4: Execute workflow
-        results = await self.execute_workflow(workflow, user_message)
+        gated = self.gate(wf)
+        name, language = _extract(message)
+        steps = []
+        for tool in gated:                          # production: the LLM picks the order
+            args = {"greet": {"name": name},
+                    "farewell": {"name": name},
+                    "translate": {"text": f"Hello, {name}!", "language": language}}[tool]
+            steps.append((tool, await self.call(tool, args)))
 
         return {
             "status": "completed",
-            "workflow": workflow["name"],
-            "selection_method": selection_method,
-            "gated_tools": gated,
-            "all_tools_available": list(self._all_tools.keys()),
-            "tools_hidden": [t for t in self._all_tools if t not in gated],
-            "steps": len(results),
-            "results": results,
+            "workflow": wf.name,
+            "how": how,
+            "gated": gated,
+            "hidden": sorted(set(self.routes) - set(gated)),
+            "steps": steps,
         }
 
 
-# ============================================================================
-# Demo
-# ============================================================================
+def _extract(message: str) -> tuple[str, str]:
+    """Pull name and language out of the message. Production lets the LLM do this."""
+    name = re.search(r"\b(?:for|to)\s+([A-Z][a-z]+)", message)
+    language = re.search(r"\b(?:in|into)\s+([A-Z][a-z]+)", message)
+    return (name.group(1) if name else "World",
+            language.group(1) if language else "French")
+
 
 async def main():
-    # -- Setup orchestrator --
-    orch = WorkflowOrchestrator()
-    orch.register_server("greeting-server", greeting_server)
-    orch.register_server("translation-server", translation_server)
-    await orch.discover_tools()
+    orch = Orchestrator(WORKFLOWS)
+    await orch.discover(greeting_server, translate_server)     # 1. DISCOVER
 
-    print("=== Workflow Orchestrator ===\n")
-    print(f"  Servers: {list(orch._servers.keys())}")
-    print(f"  All tools: {list(orch._all_tools.keys())}")
-    print(f"  Workflows: {[wf['name'] for wf in orch._workflows]}")
-    print()
+    print("tools    :", sorted(orch.routes))
+    print("workflows:", [wf.name for wf in orch.workflows])
 
-    # -- Test 1: Welcome message (matches fast-path) --
-    print("=" * 60)
-    print("Test 1: 'Create a welcome message for Alice'")
-    print("=" * 60 + "\n")
-
-    r1 = await orch.handle_message("Create a welcome message for Alice")
-    _print_result(r1)
-
-    # -- Test 2: Translated greeting (matches fast-path) --
-    print("=" * 60)
-    print("Test 2: 'Translate a greeting into French for Bob'")
-    print("=" * 60 + "\n")
-
-    r2 = await orch.handle_message("Translate a greeting into French for Bob")
-    _print_result(r2)
-
-    # -- Test 3: Greeting card (matches fast-path) --
-    print("=" * 60)
-    print("Test 3: 'Create a greeting card for Bob'")
-    print("=" * 60 + "\n")
-
-    r3 = await orch.handle_message("Create a greeting card for Bob")
-    _print_result(r3)
-
-    # -- Test 4: No match --
-    print("=" * 60)
-    print("Test 4: 'What is the weather today?'")
-    print("=" * 60 + "\n")
-
-    r4 = await orch.handle_message("What is the weather today?")
-    _print_result(r4)
-
-
-def _print_result(result: dict):
-    if result["status"] == "no_workflow":
-        print(f"  Status: {result['status']}")
-        print(f"  Message: {result['message']}")
-    else:
-        print(f"  Status: {result['status']}")
-        print(f"  Workflow: {result['workflow']}")
-        print(f"  Selection: {result['selection_method']}")
-        print(f"  Gated tools: {result['gated_tools']}")
-        print(f"  Hidden tools: {result['tools_hidden']}")
-        print(f"  Steps executed: {result['steps']}")
-        for step in result["results"]:
-            print(f"    [{step['server']}] {step['tool']}: {str(step['result'])[:80]}")
-    print()
+    for message in (
+        "Create a welcome message for Shubham",      # 2a. regex hit
+        "Say something nice to Shubham in German",   # 2b. no regex -> LLM
+        "What is the weather today?",                # 5.  nothing matches
+    ):
+        print(f"\n--- {message!r}")
+        r = await orch.handle(message)
+        print(f"  selected by : {r['how']}")
+        if r["status"] == "no_workflow":
+            continue
+        print(f"  workflow    : {r['workflow']}")
+        print(f"  gated tools : {r['gated']}   (hidden: {r['hidden']})")
+        for tool, data in r["steps"]:
+            print(f"    {tool:<10} -> {list(data.values())[0]}")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 
-    # -- Key takeaway --------------------------------------------------------
-    # This lesson ties everything together into the full orchestration loop:
-    #
-    # 1. DISCOVER: list tools from all MCP servers (lesson 11)
-    # 2. DISCOVER: list workflows from servers (lesson 10)
-    # 3. SELECT: match user intent to workflow
-    #    - Fast-path: regex patterns (fast_path_matcher.py)
-    #    - LLM: ask the model to select (langgraph_mcp_orchestrator.py)
-    # 4. GATE: restrict available tools to workflow's tool list
-    # 5. EXECUTE: call tools following workflow instructions
-    # 6. RESPOND: return results to the user
-    #
-    # Production adds:
-    #   - LangGraph StateGraph for execution flow
-    #   - DynamoDB checkpointing for interrupt/resume
-    #   - SSE streaming for real-time responses
-    #   - Human-in-the-loop interrupts (lesson 06)
-    #   - Forwarded blocks for UI payloads (lesson 09)
-    #
-    # -- Exercise -------------------------------------------------------------
-    # 1. Add LLM-driven step planning (LLM decides tool call order)
-    # 2. Add interrupt support mid-workflow (pause for user approval)
-    # 3. Add parallel tool execution for independent steps
-    # 4. Add workflow chaining (one workflow triggers another)
+# Exercises:
+# 1. Time both selection paths (time.perf_counter) -- how much does the regex
+#    actually save?
+# 2. Message 2 has no regex. Add a trigger_pattern that catches it, and watch
+#    the LLM call disappear.
+# 3. Let the LLM choose the tool ORDER too, instead of walking wf.tools.
+# 4. Pause mid-workflow for approval before farewell runs (lesson 06).

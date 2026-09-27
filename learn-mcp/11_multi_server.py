@@ -1,328 +1,142 @@
-"""Lesson 11 -- Multi-Server Registry
-======================================
+"""Lesson 11 -- Multi-Server Registry: which server owns this tool?
+===================================================================
 
-WHY THIS MATTERS:
-  Real MCP deployments don't stop at a single server. You might have one
-  server for greetings, another for translations, and a third for
-  formatting -- each running independently on a different port. When
-  the orchestrator says "call translate," something needs to know that
-  tool lives on the translation-server, not on the greeting-server.
-  The ServerRegistry solves this: it discovers all tools from all servers
-  at startup and builds a routing table (tool_name -> server).
+Greetings live on one server, translation on another. When the orchestrator
+decides to call "translate", something has to know that tool is not on the
+greeting server. A REGISTRY answers that: it asks every server what it has
+(tools/list) and builds one routing table, tool name -> server.
 
-WHAT YOU'LL LEARN:
-  1. Register multiple MCP servers in a central registry
-  2. Discover tools from all servers at startup
-  3. Route tool calls to the correct server automatically
-  4. Execute tools in parallel across different servers
+  ┌──────── REGISTRY ────────┐
+  │ 1. register(name, server)│
+  │ 2. discover_all():       │        tools/list      ┌── greeting-server ──┐
+  │      ask each server ────┼──────────────────────► │  greet              │
+  │                          │ ◄──────────────────────┤  farewell           │
+  │                          │                        └─────────────────────┘
+  │    routing table:        │        tools/list      ┌── translate-server ─┐
+  │      greet     -> greet… ├──────────────────────► │  translate          │
+  │      farewell  -> greet… │ ◄──────────────────────┤                     │
+  │      translate -> trans… │                        └─────────────────────┘
+  │                          │
+  │ 3. call_tool("translate")│   look up the table, open a client to THAT
+  │      ────────────────────┼─► server, call it, return the result
+  │                          │
+  │ 4. call_tools_parallel() │   asyncio.gather -- calls to different servers
+  │      ────────────────────┼─► overlap instead of queueing
+  └──────────────────────────┘
 
-Concepts:
-  - Running multiple MCP servers simultaneously
-  - ServerRegistry: track servers and their capabilities
-  - Tool routing: which server handles which tool
-  - Parallel tool calls across servers
-
-Flow:
-  +-------------------+
-  | Server Registry   |
-  +-------------------+
-  | Servers:          |
-  |  greeting-server  |-----> Client A --> [greet, farewell]
-  |  translation-srv  |-----> Client B --> [translate, detect_language]
-  |  format-server    |-----> Client C --> [format_card]
-  +-------------------+
-         |
-         v
-  +-------------------+
-  | Orchestrator      |
-  |  1. List all tools|
-  |  2. Route to      |
-  |     correct server|
-  |  3. Parallel calls|
-  +-------------------+
-
-  Maps to:
-    mcp_server_registry.py (server registration, capability cache)
-    mcp_client_manager.py (connection pool, per-server clients)
-    mcp_protocol.py (tool routing, parallel execution)
-
-PREREQUISITES: Lesson 02 (HTTP transport), Lesson 07 (client patterns)
+  An unknown tool fails in the registry, before any network call.
+  In production each server is a separate process on its own URL; here they
+  are two in-process FastMCP objects so the lesson runs with no ports.
 
 Run:  uv run python 11_multi_server.py
 
-EXPECTED OUTPUT:
-  === Server Registry ===
-
-    Servers: ['greeting-server', 'translation-server', 'format-server']
-
-  === Tool Routing Table ===
-
-    detect_language        -> translation-server
-    farewell               -> greeting-server
-    format_card            -> format-server
-    greet                  -> greeting-server
-    translate              -> translation-server
-
-  === Routed Tool Calls ===
-
-    greet -> routed to 'greeting-server': ...
-    translate -> routed to 'translation-server': ...
-    format_card -> routed to 'format-server': ...
-
-  === Unknown Tool ===
-
-    nonexistent -> {'error': "No server found for tool 'nonexistent'"}
-
-  === Parallel Calls Across Servers ===
-
-    [greeting-server] greet: done
-    [translation-server] translate: done
-    [format-server] format_card: done
-
-    All 3 calls completed in parallel.
+Maps to: mcp_server_registry.py (registration + capability cache),
+mcp_client_manager.py (per-server clients), mcp_protocol.py (routing)
 """
 
 import asyncio
-from typing import Annotated
-from pydantic import Field
 from fastmcp import FastMCP, Client
 
-
-# ============================================================================
-# Server 1: Greeting Server
-# ============================================================================
+# -- Two servers, each owning part of the greeting job ------------------------
 
 greeting_server = FastMCP(name="greeting-server")
 
 
 @greeting_server.tool
-async def greet(
-    name: Annotated[str, Field(description="Name of the person to greet")],
-) -> dict:
-    """Greet someone with a friendly hello."""
-    return {
-        "source": "greeting-server",
-        "message": f"Hello, {name}!",
-    }
+def greet(name: str) -> dict:
+    """Say hello to someone."""
+    return {"source": "greeting-server", "message": f"Hello, {name}!"}
 
 
 @greeting_server.tool
-async def farewell(
-    name: Annotated[str, Field(description="Name of the person to bid farewell")],
-) -> dict:
+def farewell(name: str) -> dict:
     """Say goodbye to someone."""
-    return {
-        "source": "greeting-server",
-        "message": f"Goodbye, {name}!",
-    }
+    return {"source": "greeting-server", "message": f"Goodbye, {name}!"}
 
 
-# ============================================================================
-# Server 2: Translation Server
-# ============================================================================
-
-translation_server = FastMCP(name="translation-server")
+translate_server = FastMCP(name="translate-server")
 
 
-@translation_server.tool
-async def translate(
-    text: Annotated[str, Field(description="Text to translate")],
-    language: Annotated[str, Field(description="Target language")],
-) -> dict:
-    """Translate text into another language."""
-    return {
-        "source": "translation-server",
-        "original": text,
-        "translated": f"[{language}] {text}",
-        "language": language,
-    }
+@translate_server.tool
+def translate(text: str, language: str) -> dict:
+    """Translate text into another language (simulated)."""
+    return {"source": "translate-server", "translated": f"[{language}] {text}"}
 
 
-@translation_server.tool
-async def detect_language(
-    text: Annotated[str, Field(description="Text to detect language of")],
-) -> dict:
-    """Detect the language of a text."""
-    return {
-        "source": "translation-server",
-        "text": text,
-        "detected": "en",
-        "confidence": 0.95,
-    }
-
-
-# ============================================================================
-# Server 3: Format Server
-# ============================================================================
-
-format_server = FastMCP(name="format-server")
-
-
-@format_server.tool
-async def format_card(
-    name: Annotated[str, Field(description="Name for the card")],
-    message: Annotated[str, Field(description="Message content")],
-) -> dict:
-    """Format a greeting card."""
-    return {
-        "source": "format-server",
-        "card": f"=== Card for {name} ===\n{message}\n=================",
-        "name": name,
-    }
-
-
-# ============================================================================
-# Server Registry (simplified mcp_server_registry.py)
-# ============================================================================
-
-class ServerEntry:
-    """A registered MCP server with cached capabilities."""
-
-    def __init__(self, name: str, server: FastMCP):
-        self.name = name
-        self.server = server
-        self.tools: list[str] = []
-        self._client: Client | None = None
-
-    async def discover(self):
-        """Discover tools from this server."""
-        async with Client(self.server) as client:
-            tool_list = await client.list_tools()
-            self.tools = [t.name for t in tool_list]
-        return self.tools
-
-    async def call_tool(self, tool_name: str, args: dict) -> dict:
-        """Call a tool on this server (one-shot pattern)."""
-        async with Client(self.server) as client:
-            result = await client.call_tool(tool_name, args)
-            return {"server": self.name, "tool": tool_name, "result": result}
-
+# -- The registry (simplified mcp_server_registry.py) ------------------------
 
 class ServerRegistry:
-    """Registry of MCP servers with tool routing.
-
-    Mirrors mcp_server_registry.py:
-      - register servers
-      - discover capabilities
-      - route tool calls to the right server
-    """
+    """Servers by name, plus a tool -> server routing table."""
 
     def __init__(self):
-        self._servers: dict[str, ServerEntry] = {}
-        self._tool_to_server: dict[str, str] = {}
+        self.servers: dict[str, FastMCP] = {}
+        self.routes: dict[str, str] = {}          # tool name -> server name
 
-    def register(self, name: str, server: FastMCP):
-        """Register a new MCP server."""
-        self._servers[name] = ServerEntry(name, server)
+    def register(self, server: FastMCP) -> None:
+        self.servers[server.name] = server
 
-    async def discover_all(self):
-        """Discover tools from all registered servers."""
-        for name, entry in self._servers.items():
-            tools = await entry.discover()
-            for tool in tools:
-                self._tool_to_server[tool] = name
+    async def discover_all(self) -> None:
+        """Ask every server for its tools and build the routing table once."""
+        for name, server in self.servers.items():
+            async with Client(server) as client:
+                for tool in await client.list_tools():
+                    self.routes[tool.name] = name
 
-    def get_all_tools(self) -> dict[str, str]:
-        """Get mapping of tool_name -> server_name."""
-        return dict(self._tool_to_server)
-
-    def get_server_for_tool(self, tool_name: str) -> ServerEntry | None:
-        """Route a tool call to the correct server."""
-        server_name = self._tool_to_server.get(tool_name)
-        if server_name:
-            return self._servers[server_name]
-        return None
-
-    async def call_tool(self, tool_name: str, args: dict) -> dict:
-        """Route and execute a tool call."""
-        entry = self.get_server_for_tool(tool_name)
-        if not entry:
-            return {"error": f"No server found for tool '{tool_name}'"}
-        return await entry.call_tool(tool_name, args)
+    async def call_tool(self, tool: str, args: dict) -> dict:
+        """Route one call to the server that owns the tool."""
+        server_name = self.routes.get(tool)
+        if not server_name:                        # fails here, before any I/O
+            return {"error": f"no server owns tool '{tool}'"}
+        async with Client(self.servers[server_name]) as client:
+            r = await client.call_tool(tool, args)
+            return {"server": server_name, "tool": tool, "result": r.data}
 
     async def call_tools_parallel(self, calls: list[tuple[str, dict]]) -> list[dict]:
-        """Execute multiple tool calls in parallel across servers."""
-        tasks = [self.call_tool(name, args) for name, args in calls]
-        return await asyncio.gather(*tasks)
+        """Different servers, so the calls overlap instead of queueing."""
+        return await asyncio.gather(*(self.call_tool(t, a) for t, a in calls))
 
-
-# ============================================================================
-# Demo
-# ============================================================================
 
 async def main():
-    # -- 1. Build the registry --
+    # 1 + 2. register, then discover
     registry = ServerRegistry()
-    registry.register("greeting-server", greeting_server)
-    registry.register("translation-server", translation_server)
-    registry.register("format-server", format_server)
-
-    # -- 2. Discover all capabilities --
+    registry.register(greeting_server)
+    registry.register(translate_server)
     await registry.discover_all()
 
-    print("=== Server Registry ===\n")
-    print(f"  Servers: {list(registry._servers.keys())}")
-    print()
+    print("servers:", list(registry.servers), "\n")
+    print("routing table")
+    for tool, server in sorted(registry.routes.items()):
+        print(f"  {tool:<10} -> {server}")
 
-    all_tools = registry.get_all_tools()
-    print("=== Tool Routing Table ===\n")
-    for tool, server in sorted(all_tools.items()):
-        print(f"  {tool:25s} -> {server}")
-    print()
+    # 3. routed calls -- the caller never names a server
+    print("\nrouted calls")
+    r = await registry.call_tool("greet", {"name": "Shubham"})
+    print(f"  greet     -> [{r['server']}] {r['result']['message']}")
 
-    # -- 3. Route individual tool calls --
-    print("=== Routed Tool Calls ===\n")
+    r = await registry.call_tool("translate", {"text": "Hello, Shubham!", "language": "fr"})
+    print(f"  translate -> [{r['server']}] {r['result']['translated']}")
 
-    r1 = await registry.call_tool("greet", {"name": "Alice"})
-    print(f"  greet -> routed to '{r1['server']}': {r1['result']}")
+    print("  nonexistent ->", await registry.call_tool("nonexistent", {}))
 
-    r2 = await registry.call_tool("translate", {"text": "Hello!", "language": "French"})
-    print(f"  translate -> routed to '{r2['server']}': {r2['result']}")
-
-    r3 = await registry.call_tool("format_card", {"name": "Bob", "message": "Best wishes!"})
-    print(f"  format_card -> routed to '{r3['server']}': {r3['result']}")
-    print()
-
-    # -- 4. Unknown tool --
-    print("=== Unknown Tool ===\n")
-    r4 = await registry.call_tool("nonexistent", {})
-    print(f"  nonexistent -> {r4}")
-    print()
-
-    # -- 5. Parallel calls across servers --
-    print("=== Parallel Calls Across Servers ===\n")
+    # 4. parallel across servers
     results = await registry.call_tools_parallel([
-        ("greet", {"name": "Alice"}),
-        ("translate", {"text": "Hello!", "language": "French"}),
-        ("format_card", {"name": "Bob", "message": "Best wishes!"}),
+        ("greet", {"name": "Shubham"}),
+        ("farewell", {"name": "Shubham"}),
+        ("translate", {"text": "Hello!", "language": "de"}),
     ])
+    print("\nparallel")
     for r in results:
-        print(f"  [{r['server']}] {r['tool']}: done")
-    print()
-    print(f"  All {len(results)} calls completed in parallel.")
+        print(f"  [{r['server']:<16}] {r['tool']}")
+    print(f"  {len(results)} calls, all in flight at once")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 
-    # -- Key takeaway --------------------------------------------------------
-    # In production, multiple MCP servers run on different ports/URLs:
-    #   greeting-server     -> :8001
-    #   translation-server  -> :8002
-    #   format-server       -> :8003
-    #
-    # The ServerRegistry:
-    #   1. Tracks which servers are available
-    #   2. Discovers tools from each server (list_tools)
-    #   3. Routes tool calls to the correct server
-    #   4. Enables parallel execution across servers
-    #
-    # This maps to:
-    #   mcp_server_registry.py -> registration + capability cache
-    #   mcp_client_manager.py  -> connection pool per server
-    #   mcp_protocol.py        -> routing + parallel execution
-    #
-    # -- Exercise -------------------------------------------------------------
-    # 1. Add a "health_check" method that pings all servers
-    # 2. Implement a simple circuit breaker per server
-    # 3. Add server priority/fallback (if server A fails, try server B)
+# Exercises:
+# 1. Register a third server with a `greet_formal` tool -- the table grows
+#    with no change to call_tool.
+# 2. Add greet to translate-server too. Which server wins the route, and why?
+#    (hint: discover_all overwrites -- add a conflict warning)
+# 3. Give call_tool a try/except that returns {"error": ...} so one dead
+#    server cannot break call_tools_parallel.

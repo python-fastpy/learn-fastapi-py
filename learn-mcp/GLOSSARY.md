@@ -35,17 +35,17 @@ Cheat sheet for terms used across the 13 lessons. Open this side-by-side while r
 | `mcp.run(transport="http")` | Start the server as a real HTTP service | Lesson 02 |
 | `stateless_http=True` | No session state between requests (each call is independent) | Lesson 02 |
 | `call_tool(name, args)` | Call a tool, get back a Python dict | Lesson 01 |
-| `call_tool_mcp(name, args)` | Call a tool, get back the raw MCP `CallToolResult` (preserves `_meta`) | Lesson 07 |
+| `call_tool_mcp(name, args)` | Call a tool, get back the raw MCP `CallToolResult`. Both methods preserve `_meta`; this one reports errors via `is_error` instead of raising | Lesson 07 |
 | **One-shot client** | Connect → call → disconnect per request (no persistent connection) | Lesson 07 |
 | **Exponential backoff** | Wait 1s, 2s, 4s... between retries (don't flood a recovering server) | Lesson 07 |
 
-## LLM Integration (Lessons 08-09)
+## LLM Tools and Result Metadata (Lessons 08-09)
 
 | Term | What It Is | First Seen |
 |------|-----------|------------|
 | `get_llm()` | Helper that returns an `AzureChatOpenAI` instance connected to TR Orchestrator | Lesson 08 |
 | `_meta` | Metadata field on tool results — carries forwarded blocks and other out-of-band data | Lesson 09 |
-| `forwarded_blocks` | Content inside `_meta` that goes to the **UI** but is **invisible** to the LLM agent | Lesson 09 |
+| `forwarded_blocks` | Content inside a content block's `_meta` that the backend routes to the **UI** instead of into the agent's context | Lesson 09 |
 | `forwarded_tool_result()` | Helper that builds a tool result with both agent-visible text and UI-only blocks | Lesson 09 |
 
 ## Workflows (Lesson 10)

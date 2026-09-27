@@ -1,612 +1,251 @@
-"""Lesson 13 -- LangGraph + MCP Integration (Capstone)
-======================================================
+"""Lesson 13 -- LangGraph + MCP: the orchestrator as a graph
+===========================================================
 
-WHY THIS MATTERS:
-  This is the capstone lesson. The production backend uses LangGraph
-  to orchestrate MCP tool calls -- it's a directed graph where each
-  node is a step (analyze, call tools, interrupt for review, synthesize).
-  LangGraph gives you checkpointing (save state, resume after interrupt),
-  conditional routing (skip tools if not needed), and a clear execution
-  flow. This lesson builds the same architecture with mock LLM calls
-  so you can run it without credentials.
+Lesson 12's loop was a while-loop with if-statements. LangGraph turns that
+same loop into a GRAPH: each step is a node, each decision is an edge, and
+the state travels between them. What you get for that is the ability to STOP
+mid-run, save everything, and resume later -- which is how a human review
+step works (lesson 06) without a process sitting there waiting.
 
-WHAT YOU'LL LEARN:
-  1. Build a LangGraph StateGraph with nodes and conditional edges
-  2. Call MCP tools from inside LangGraph nodes
-  3. Use interrupt() to pause for human review + Command(resume=...) to continue
-  4. Use MemorySaver to checkpoint state (production uses DynamoDB)
-  5. See how all MCP lessons (01-12) combine into the final architecture
+  ┌──────────────────── the graph ────────────────────┐
+  │                                                   │
+  │  START                                            │      ┌ greeting-server ┐
+  │    │                                              │ ───► │ greet, farewell │
+  │    ▼                                              │      └─────────────────┘
+  │  analyze        message -> a plan of tool calls   │      ┌ translate-server┐
+  │    │                                              │ ───► │ translate       │
+  │    ├── no tools needed ──────────────┐            │      └─────────────────┘
+  │    ▼                                 │            │
+  │  call_tools     run the plan over MCP│            │
+  │    │                                 │            │
+  │    ├── needs_approval? no ───────────┤            │
+  │    ▼                                 │            │
+  │  human_review   interrupt() -- the graph STOPS    │
+  │    │            here; state is checkpointed and   │
+  │    │            ainvoke() returns to you          │
+  │    │                                 │            │
+  │    ▼                                 ▼            │
+  │  synthesize  ◄────────────────────────            │
+  │    │            results -> one answer             │
+  │    ▼                                              │
+  │   END                                             │
+  └───────────────────────────────────────────────────┘
 
-Concepts:
-  - LangGraph StateGraph as the orchestrator
-  - MCP servers (FastMCP) as the tool providers
-  - Full loop: user message -> analyze -> call MCP tools -> synthesize
-  - Human-in-the-loop interrupts via LangGraph interrupt() + MCP
-  - MemorySaver checkpointer for interrupt/resume
-  - Multi-server orchestration (greeting-server + translation-server)
+  1. STATE      one TypedDict flows through every node. A node returns only
+                the keys it changes. tool_results is Annotated with
+                operator.add, so results accumulate instead of overwriting.
+  2. NODES      plain functions. call_tools is where MCP lives -- the graph
+                has no idea the tools are remote (lessons 11, 12).
+  3. EDGES      add_edge is unconditional; add_conditional_edges calls your
+                function and jumps to the node whose name it returns.
+  4. INTERRUPT  interrupt(payload) stops the run. ainvoke returns with
+                "__interrupt__" in the result, holding your payload for the
+                UI. Nothing is blocked or held open.
+  5. RESUME     ainvoke(Command(resume="approved"), same thread_id) picks up
+                inside human_review -- interrupt() returns "approved" as its
+                value and the run continues to synthesize.
+  6. CHECKPOINT MemorySaver stores state per thread_id, which is what makes
+                5 possible. Production swaps it for DynamoDB; the graph code
+                does not change.
 
-Architecture (mirrors your production backend):
-  +--------+     +------------------------+     +------------------+
-  | User   | --> | LangGraph Orchestrator | --> | MCP Servers      |
-  +--------+     |                        |     |                  |
-                 | Nodes:                 |     | greeting-server: |
-                 |  1. analyze            |     |   greet          |
-                 |  2. route              |     |   farewell       |
-                 |  3. call_mcp_tools     |     |                  |
-                 |  4. maybe_interrupt    |     | translation:     |
-                 |  5. synthesize         |     |   translate      |
-                 +------------------------+     +------------------+
-                        |        ^
-                        v        |
-                 +------------------------+
-                 | MemorySaver            |
-                 | (in-memory checkpoint) |
-                 +------------------------+
-
-  Maps to:
-    langgraph_mcp_orchestrator.py -> the full StateGraph
-    mcp_protocol.py              -> MCP client calls inside nodes
-    mcp_server_registry.py       -> multi-server discovery
-
-PREREQUISITES: Lesson 12 (orchestration), Lesson 06 (interrupts), Lesson 11 (multi-server)
-  Also helpful: LangGraph basics (StateGraph, nodes, edges)
-
-No real LLM needed -- uses mock analysis to keep it runnable without
-credentials.  Swap mock_analyze() for LLM-based analysis to go live.
+  The analysis here is keyword matching so the lesson runs with no .env.
+  Replace analyze() with an LLM call (lesson 08) and the graph is unchanged.
 
 Run:  uv run python 13_langgraph_mcp_integration.py
 
-EXPECTED OUTPUT:
-  === MCP + LangGraph Orchestrator ===
-
-  MCP Servers: ['greeting-server', 'translation-server']
-  Discovered tools: ['greet', 'farewell', 'translate']
-  Tool -> Server map: {'greet': 'greeting-server', ...}
-
-  === Graph (Mermaid) ===
-    %%{init: ...}%%
-    graph TD; ...
-    analyze --> route --> ...
-
-  === Test 1: "Translate hello into French" ===
-    [MCP] translation-server/translate -> OK
-    Plan: {'strategy': 'single', 'tools': [...]}
-    Response: [translation-server/translate] ...
-
-  === Test 2: "Create a greeting and farewell for Alice" ===
-    [MCP] greeting-server/greet -> OK
-    [MCP] greeting-server/farewell -> OK
-    [Paused] Graph PAUSED -- waiting for human review
-    [Interrupt] type=GREETING_REVIEW
-    [Interrupt] message=Please review the greeting below:
-    [Step 3] User approves...
-    Approval: approved
-    Response: [greeting-server/greet] ... [greeting-server/farewell] ...
-
-  === Test 3: "How are you?" ===
-    Plan: {'strategy': 'none', 'tools': []}
-    Response: I can help with that! ...
-
-  === Test 4: "Greet Bob and translate it to Spanish" ===
-    [MCP] greeting-server/greet -> OK
-    [MCP] translation-server/translate -> OK
-    [Paused for review -- auto-approving]
-    Tools used: ['greet', 'translate']
-    Servers hit: ['greeting-server', 'translation-server']
-    Response: [greeting-server/greet] ... [translation-server/translate] ...
+Maps to: langgraph_mcp_orchestrator.py (_build_graph, ExecutionState, the
+interrupt block), mcp_protocol.py (tool calls inside a node)
 """
 
 import asyncio
 import operator
-from typing import TypedDict, Annotated, Literal
+import re
+from typing import Annotated, Literal, TypedDict
 
-from pydantic import Field
-from fastmcp import FastMCP, Client
-from langgraph.graph import StateGraph, START, END
+from fastmcp import Client, FastMCP
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import interrupt, Command
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 
-
-# ============================================================================
-# PART 1: MCP Servers (same as lesson 12, representing production skills)
-# ============================================================================
-# In production these run on separate ECS containers behind an ALB.
-# Here we use in-process FastMCP for simplicity.
+# -- The MCP side: two servers, discovered once at startup -------------------
 
 greeting_server = FastMCP(name="greeting-server")
-translation_server = FastMCP(name="translation-server")
+translate_server = FastMCP(name="translate-server")
 
 
 @greeting_server.tool
-async def greet(
-    name: Annotated[str, Field(description="Name to greet")],
-) -> dict:
-    """Greet someone by name."""
+def greet(name: str) -> dict:
+    """Say hello to someone."""
     return {"message": f"Hello, {name}!"}
 
 
 @greeting_server.tool
-async def farewell(
-    name: Annotated[str, Field(description="Name to say goodbye to")],
-) -> dict:
-    """Say goodbye to someone by name."""
-    return {"message": f"Goodbye, {name}! Take care."}
+def farewell(name: str) -> dict:
+    """Say goodbye to someone."""
+    return {"message": f"Goodbye, {name}!"}
 
 
-@translation_server.tool
-async def translate(
-    text: Annotated[str, Field(description="Text to translate")],
-    language: Annotated[str, Field(default="French", description="Target language")] = "French",
-) -> dict:
-    """Translate text into another language."""
-    return {"original": text, "translated": f"[{language}] {text}", "language": language}
+@translate_server.tool
+def translate(text: str, language: str = "French") -> dict:
+    """Translate text into another language (simulated)."""
+    return {"message": f"[{language}] {text}"}
 
 
-# ============================================================================
-# PART 2: MCP Tool Registry
-# ============================================================================
-# Mirrors mcp_server_registry.py: discover tools from all servers,
-# know which server owns each tool.
-
-MCP_SERVERS = {
-    "greeting-server": greeting_server,
-    "translation-server": translation_server,
-}
-
-TOOL_OWNERSHIP: dict[str, str] = {}  # tool_name -> server_name (populated at startup)
+SERVERS = {s.name: s for s in (greeting_server, translate_server)}
+ROUTES: dict[str, str] = {}                     # tool -> server, filled at startup
 
 
-async def discover_all_tools():
-    """Connect to every MCP server, list its tools, build the registry."""
-    for server_name, server in MCP_SERVERS.items():
+async def discover() -> None:
+    for name, server in SERVERS.items():
         async with Client(server) as client:
-            tools = await client.list_tools()
-            for t in tools:
-                TOOL_OWNERSHIP[t.name] = server_name
+            for tool in await client.list_tools():
+                ROUTES[tool.name] = name
 
 
-async def call_mcp_tool(tool_name: str, args: dict) -> dict:
-    """Call a single MCP tool on the correct server.
-    Mirrors mcp_protocol.py's one-shot client pattern."""
-    server_name = TOOL_OWNERSHIP.get(tool_name)
-    if not server_name:
-        return {"error": f"Unknown tool: {tool_name}"}
-
-    server = MCP_SERVERS[server_name]
-    async with Client(server) as client:
-        result = await client.call_tool(tool_name, args)
-        return {"tool": tool_name, "server": server_name, "result": result}
+async def call_mcp(tool: str, args: dict) -> dict:
+    async with Client(SERVERS[ROUTES[tool]]) as client:
+        data = (await client.call_tool(tool, args)).data
+        return {"tool": tool, "server": ROUTES[tool], "message": data["message"]}
 
 
-# ============================================================================
-# PART 3: LangGraph State
-# ============================================================================
-# This is the ExecutionState that flows through the graph.
-# Production version lives in langgraph_mcp_orchestrator.py.
+# -- 1. STATE ----------------------------------------------------------------
 
-class OrchestratorState(TypedDict):
+class State(TypedDict):
     user_message: str
-    execution_plan: dict            # strategy + tool list
-    tool_results: Annotated[list[dict], operator.add]
-    needs_approval: bool            # triggers human-in-the-loop
-    user_approval: str              # "approved" | "rejected" | "edit:..."
-    response: str                   # final answer
-    errors: Annotated[list[str], operator.add]
+    plan: list[dict]
+    needs_approval: bool
+    tool_results: Annotated[list[dict], operator.add]     # accumulates
+    approval: str
+    response: str
 
 
-# ============================================================================
-# PART 4: LangGraph Nodes
-# ============================================================================
-# Each node is an async function that reads/writes OrchestratorState.
+# -- 2. NODES ----------------------------------------------------------------
 
-# -- Node 1: Analyze --------------------------------------------------------
-# In production the LLM decides which tools to call.
-# Here we use keyword matching as a stand-in.
-
-def analyze(state: OrchestratorState) -> dict:
-    """Analyze user message and build an execution plan.
-    Production: LLM call with tool schemas as context.
-    Demo: keyword matching (same idea as fast_path_matcher.py)."""
+def analyze(state: State) -> dict:
+    """Message -> plan. Production asks the LLM; this matches keywords."""
     msg = state["user_message"].lower()
+    # (?i: ...) makes only the keyword case-insensitive -- the name must stay
+    # capitalised, or "Greet and" would hand us the name "and".
+    name = re.search(r"\b(?i:greet|to|for)\s+([A-Z][a-z]+)", state["user_message"])
+    name = name.group(1) if name else "World"
 
-    tools_to_call = []
-    needs_approval = False
-
-    # Extract a name from the message (simple heuristic: last word)
-    words = state["user_message"].split()
-    name = words[-1].strip(".,!?") if words else "World"
-
-    has_greet = any(w in msg for w in ["greet", "hello", "welcome"])
-    has_farewell = any(w in msg for w in ["farewell", "goodbye", "bye"])
-
-    if has_greet:
-        tools_to_call.append({"tool": "greet", "args": {"name": name}})
-
-    if has_farewell:
-        tools_to_call.append({"tool": "farewell", "args": {"name": name}})
-
-    # If both greet AND farewell are planned, require approval
-    if has_greet and has_farewell:
-        needs_approval = True
-
+    plan = []
+    if any(w in msg for w in ("greet", "hello")):
+        plan.append({"tool": "greet", "args": {"name": name}})
+    if any(w in msg for w in ("goodbye", "farewell", "bye")):
+        plan.append({"tool": "farewell", "args": {"name": name}})
     if "translate" in msg:
-        # Extract target language if mentioned
-        text = state["user_message"]
-        language = "French"
-        for lang in ["Spanish", "French", "German", "Italian", "Japanese"]:
-            if lang.lower() in msg:
-                language = lang
-                break
-        # Extract the text to translate (simple: use the whole message)
-        tools_to_call.append({"tool": "translate", "args": {"text": text, "language": language}})
-        # Multi-server (greet + translate) also needs approval
-        if has_greet or has_farewell:
-            needs_approval = True
+        plan.append({"tool": "translate", "args": {"text": f"Hello, {name}!"}})
 
-    strategy = "none"
-    if len(tools_to_call) == 1:
-        strategy = "single"
-    elif len(tools_to_call) > 1:
-        strategy = "sequential"
-
-    return {
-        "execution_plan": {"strategy": strategy, "tools": tools_to_call},
-        "needs_approval": needs_approval,
-    }
+    # Two or more messages going out under our name? Have a human look first.
+    return {"plan": plan, "needs_approval": len(plan) > 1}
 
 
-# -- Routing: should we call tools? -----------------------------------------
-# Conditional edge after analyze node.
-
-def route_after_analysis(state: OrchestratorState) -> Literal["call_tools", "synthesize"]:
-    """Route to tool execution or skip to synthesis."""
-    strategy = state["execution_plan"].get("strategy", "none")
-    if strategy == "none":
-        return "synthesize"
-    return "call_tools"
-
-
-# -- Node 2: Call MCP Tools -------------------------------------------------
-# Executes tools from the plan by calling MCP servers.
-
-async def call_tools(state: OrchestratorState) -> dict:
-    """Execute each tool in the plan via MCP.
-    Production calls real MCP servers over HTTP."""
-    plan = state["execution_plan"]
+async def call_tools(state: State) -> dict:
+    """The only node that touches MCP."""
     results = []
-    errors = []
-
-    for step in plan.get("tools", []):
-        tool_name = step["tool"]
-        args = step.get("args", {})
-
-        try:
-            result = await call_mcp_tool(tool_name, args)
-            results.append(result)
-            print(f"    [MCP] {result['server']}/{tool_name} -> OK")
-        except Exception as e:
-            errors.append(f"{tool_name}: {e}")
-            print(f"    [MCP] {tool_name} -> ERROR: {e}")
-
-    return {"tool_results": results, "errors": errors}
+    for step in state["plan"]:
+        results.append(await call_mcp(step["tool"], step["args"]))
+        print(f"      [mcp] {results[-1]['server']}/{results[-1]['tool']} ok")
+    return {"tool_results": results}
 
 
-# -- Routing: does this need human approval? --------------------------------
-
-def route_after_tools(state: OrchestratorState) -> Literal["human_review", "synthesize"]:
-    """If the plan flagged needs_approval, pause for human review."""
-    if state.get("needs_approval", False):
-        return "human_review"
-    return "synthesize"
-
-
-# -- Node 3: Human-in-the-Loop ----------------------------------------------
-# Uses LangGraph's interrupt() to pause and wait for user input.
-# MemorySaver checkpoints state in memory so we can resume later.
-
-def human_review(state: OrchestratorState) -> dict:
-    """Pause execution for human review.
-    The interrupt() call checkpoints state and returns control
-    to the caller. When resumed, the user's response is available."""
-
-    # Build a preview of what was produced
-    greetings = [
-        r for r in state.get("tool_results", [])
-        if r.get("tool") in ("greet", "farewell")
-    ]
-
-    greeting_preview = "No greeting found."
-    if greetings:
-        previews = []
-        for g in greetings:
-            data = g.get("result", {})
-            if isinstance(data, list) and data:
-                content = data[0]
-                if hasattr(content, "text"):
-                    previews.append(content.text)
-                else:
-                    previews.append(str(content))
-            elif isinstance(data, dict):
-                previews.append(str(data))
-        greeting_preview = " | ".join(previews)
-
-    # interrupt() checkpoints the graph and returns to the caller.
-    # When the caller resumes with a Command, the value becomes
-    # the return from interrupt().
-    user_response = interrupt({
+def human_review(state: State) -> dict:
+    """Stop the graph and ask. Resumes here with the caller's answer."""
+    answer = interrupt({                                   # 4. INTERRUPT
         "type": "GREETING_REVIEW",
-        "message": "Please review the greeting below:",
-        "preview": greeting_preview,
-        "actions": ["approve", "reject", "edit"],
+        "message": "Approve these before they go out?",
+        "preview": [r["message"] for r in state["tool_results"]],
+        "actions": ["approve", "reject"],
     })
-
-    return {"user_approval": user_response, "needs_approval": False}
-
-
-# -- Routing: what did the human say? ---------------------------------------
-
-def route_after_review(state: OrchestratorState) -> Literal["synthesize", "call_tools"]:
-    """Route based on human review response."""
-    approval = state.get("user_approval", "approved")
-    if approval.startswith("edit:"):
-        return "call_tools"  # re-execute with edits
-    return "synthesize"
+    return {"approval": answer}                            # 5. value from Command(resume=...)
 
 
-# -- Node 4: Synthesize -----------------------------------------------------
-# Combines tool results into a final response.
-# Production sends results to the LLM for natural-language synthesis.
-
-def synthesize(state: OrchestratorState) -> dict:
-    """Turn tool results into a user-facing response.
-    Production: LLM call with results + original query as context.
-    Demo: simple string formatting."""
-    results = state.get("tool_results", [])
-    approval = state.get("user_approval", "")
-
-    if not results:
-        return {"response": f"I can help with that! You asked: '{state['user_message']}'"}
-
-    parts = []
-    for r in results:
-        tool = r.get("tool", "?")
-        data = r.get("result", {})
-
-        # Extract text from MCP TextContent list
-        if isinstance(data, list):
-            text_parts = []
-            for item in data:
-                if hasattr(item, "text"):
-                    text_parts.append(item.text)
-                else:
-                    text_parts.append(str(item))
-            data_str = " | ".join(text_parts)
-        else:
-            data_str = str(data)
-
-        parts.append(f"[{r.get('server', '?')}/{tool}] {data_str[:120]}")
-
-    if approval == "rejected":
-        parts.append("(User rejected the greeting)")
-    elif approval.startswith("edit:"):
-        parts.append(f"(User requested edits: {approval[5:]})")
-
-    errors = state.get("errors", [])
-    if errors:
-        parts.append(f"Warnings: {'; '.join(errors)}")
-
-    return {"response": "\n".join(parts)}
+def synthesize(state: State) -> dict:
+    """Results -> one answer."""
+    if not state["tool_results"]:
+        return {"response": f"No tool needed for {state['user_message']!r}."}
+    lines = " / ".join(r["message"] for r in state["tool_results"])
+    if state.get("approval") == "reject":
+        return {"response": f"Discarded on review: {lines}"}
+    return {"response": lines}
 
 
-# ============================================================================
-# PART 5: Build the LangGraph
-# ============================================================================
-# Wire up nodes + edges. This is the equivalent of
-# langgraph_mcp_orchestrator.py's _build_graph().
+# -- 3. EDGES ----------------------------------------------------------------
 
-def build_orchestrator():
-    """Build and compile the orchestrator graph.
+def after_analyze(state: State) -> Literal["call_tools", "synthesize"]:
+    return "call_tools" if state["plan"] else "synthesize"
 
-    Graph:
-      START -> analyze -> [route] -> call_tools -> [route] -> human_review
-                 |                                               |
-                 +-> synthesize <---------------------------------+
-                        |
-                       END
 
-    With MemorySaver checkpointer for interrupt/resume.
-    """
-    graph = StateGraph(OrchestratorState)
+def after_tools(state: State) -> Literal["human_review", "synthesize"]:
+    return "human_review" if state["needs_approval"] else "synthesize"
 
-    # Add nodes
+
+def build():
+    graph = StateGraph(State)
     graph.add_node("analyze", analyze)
     graph.add_node("call_tools", call_tools)
     graph.add_node("human_review", human_review)
     graph.add_node("synthesize", synthesize)
 
-    # Add edges
     graph.add_edge(START, "analyze")
-    graph.add_conditional_edges("analyze", route_after_analysis)
-    graph.add_conditional_edges("call_tools", route_after_tools)
-    graph.add_conditional_edges("human_review", route_after_review)
+    graph.add_conditional_edges("analyze", after_analyze)
+    graph.add_conditional_edges("call_tools", after_tools)
+    graph.add_edge("human_review", "synthesize")
     graph.add_edge("synthesize", END)
 
-    # Compile with checkpointer (enables interrupt/resume)
-    checkpointer = MemorySaver()
-    return graph.compile(checkpointer=checkpointer)
+    return graph.compile(checkpointer=MemorySaver())       # 6. CHECKPOINT
 
-
-# ============================================================================
-# PART 6: Run the orchestrator
-# ============================================================================
 
 async def main():
-    # -- Startup: discover tools from all MCP servers --
-    await discover_all_tools()
-    print("=== MCP + LangGraph Orchestrator ===\n")
-    print(f"  MCP Servers: {list(MCP_SERVERS.keys())}")
-    print(f"  Discovered tools: {list(TOOL_OWNERSHIP.keys())}")
-    print(f"  Tool -> Server map: {TOOL_OWNERSHIP}")
-    print()
+    await discover()
+    print("tool -> server:", ROUTES, "\n")
+    app = build()
 
-    orchestrator = build_orchestrator()
+    # 1. No tool needed: analyze routes straight past call_tools.
+    print("1. 'How are you?'")
+    r = await app.ainvoke({"user_message": "How are you?"},
+                          config={"configurable": {"thread_id": "t1"}})
+    print(f"   path    : analyze -> synthesize")
+    print(f"   response: {r['response']}\n")
 
-    # Print the graph structure
-    print("=== Graph (Mermaid) ===")
-    print(orchestrator.get_graph().draw_mermaid())
-    print()
+    # 2. One tool, no approval needed.
+    print("2. 'Greet Shubham'")
+    r = await app.ainvoke({"user_message": "Greet Shubham"},
+                          config={"configurable": {"thread_id": "t2"}})
+    print(f"   path    : analyze -> call_tools -> synthesize")
+    print(f"   response: {r['response']}\n")
 
-    # -- Test 1: Translate (no approval needed) -----------------------------
-    print("=" * 60)
-    print("Test 1: Translate (no interrupt)")
-    print("=" * 60 + "\n")
+    # 3. Two tools -> needs_approval -> the graph stops inside human_review.
+    print("3. 'Greet Shubham and say goodbye'")
+    config = {"configurable": {"thread_id": "t3"}}         # the resume handle
+    r = await app.ainvoke({"user_message": "Greet Shubham and say goodbye"}, config=config)
 
-    config1 = {"configurable": {"thread_id": "session-001"}}
-    result1 = await orchestrator.ainvoke(
-        {"user_message": "Translate hello into French"},
-        config=config1,
-    )
+    payload = r["__interrupt__"][0].value
+    print(f"   PAUSED, nothing is blocked. The UI gets:")
+    print(f"     type    : {payload['type']}")
+    print(f"     preview : {payload['preview']}")
+    print(f"     actions : {payload['actions']}")
 
-    print(f"\n  Plan: {result1['execution_plan']}")
-    print(f"  Response:\n    {result1['response']}")
-    print()
+    # Same thread_id -> resumes inside human_review, interrupt() returns this.
+    r = await app.ainvoke(Command(resume="approve"), config=config)
+    print(f"   resumed with 'approve' -> {r['approval']}")
+    print(f"   response: {r['response']}")
 
-    # -- Test 2: Greet + farewell (triggers interrupt for review) -----------
-    print("=" * 60)
-    print("Test 2: Greeting + farewell (with human-in-the-loop interrupt)")
-    print("=" * 60 + "\n")
-
-    config2 = {"configurable": {"thread_id": "session-002"}}
-
-    # First invoke: runs until interrupt()
-    print("  [Step 1] Sending message...")
-    result2 = await orchestrator.ainvoke(
-        {"user_message": "Create a greeting and farewell for Alice"},
-        config=config2,
-    )
-
-    # After interrupt, the graph is paused. Check the state snapshot.
-    snapshot = await orchestrator.aget_state(config2)
-    is_interrupted = bool(snapshot.tasks and any(
-        hasattr(t, "interrupts") and t.interrupts
-        for t in snapshot.tasks
-    ))
-
-    if is_interrupted:
-        print("  [Step 2] Graph PAUSED -- waiting for human review")
-
-        # Extract what the interrupt is showing the user
-        for task in snapshot.tasks:
-            if hasattr(task, "interrupts") and task.interrupts:
-                for intr in task.interrupts:
-                    print(f"  [Interrupt] type={intr.value.get('type')}")
-                    print(f"  [Interrupt] message={intr.value.get('message')}")
-                    print(f"  [Interrupt] actions={intr.value.get('actions')}")
-        print()
-
-        # Resume with user's approval
-        print("  [Step 3] User approves the greeting...")
-        result2 = await orchestrator.ainvoke(
-            Command(resume="approved"),
-            config=config2,
-        )
-
-        print(f"\n  Approval: {result2.get('user_approval')}")
-        print(f"  Response:\n    {result2['response']}")
-    else:
-        print(f"  Response:\n    {result2['response']}")
-    print()
-
-    # -- Test 3: Simple query (no tools) ------------------------------------
-    print("=" * 60)
-    print("Test 3: Simple query (no tools, LLM-only path)")
-    print("=" * 60 + "\n")
-
-    config3 = {"configurable": {"thread_id": "session-003"}}
-    result3 = await orchestrator.ainvoke(
-        {"user_message": "How are you?"},
-        config=config3,
-    )
-    print(f"  Plan: {result3['execution_plan']}")
-    print(f"  Response: {result3['response']}")
-    print()
-
-    # -- Test 4: Multi-server (greet + translate) ---------------------------
-    print("=" * 60)
-    print("Test 4: Multi-server (greeting-server + translation-server)")
-    print("=" * 60 + "\n")
-
-    config4 = {"configurable": {"thread_id": "session-004"}}
-    result4 = await orchestrator.ainvoke(
-        {"user_message": "Greet Bob and translate it to Spanish"},
-        config=config4,
-    )
-
-    # This triggers interrupt because it combines greet + translate
-    snapshot4 = await orchestrator.aget_state(config4)
-    is_interrupted4 = bool(snapshot4.tasks and any(
-        hasattr(t, "interrupts") and t.interrupts
-        for t in snapshot4.tasks
-    ))
-
-    if is_interrupted4:
-        print("  [Paused for review -- auto-approving]")
-        result4 = await orchestrator.ainvoke(
-            Command(resume="approved"),
-            config=config4,
-        )
-
-    print(f"  Tools used: {[r['tool'] for r in result4.get('tool_results', [])]}")
-    print(f"  Servers hit: {list(set(r['server'] for r in result4.get('tool_results', [])))}")
-    print(f"  Response:\n    {result4['response']}")
+    # The checkpoint kept every earlier step: results survived the pause.
+    print(f"   tool_results still in state: {[x['tool'] for x in r['tool_results']]}")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 
-    # -- Key takeaway --------------------------------------------------------
-    # This lesson shows how LangGraph and MCP work together:
-    #
-    # LangGraph provides:
-    #   - StateGraph: defines the orchestration flow (analyze -> tools -> synthesize)
-    #   - Conditional edges: route based on analysis (which tools? need approval?)
-    #   - Checkpointing: save state so interrupted flows can resume
-    #   - interrupt(): pause execution for human input
-    #   - Command(resume=...): resume from where we left off
-    #
-    # MCP (FastMCP) provides:
-    #   - Tool definitions: @server.tool decorated functions
-    #   - Tool discovery: client.list_tools() at startup
-    #   - Tool execution: client.call_tool(name, args) during graph execution
-    #   - Multi-server: each skill is a separate server with its own tools
-    #   - Transport: HTTP in production, in-process here
-    #
-    # The integration pattern:
-    #   1. STARTUP: discover tools from all MCP servers
-    #   2. ANALYZE: LLM (or regex) determines which MCP tools to call
-    #   3. EXECUTE: LangGraph node calls MCP tools via one-shot clients
-    #   4. INTERRUPT: LangGraph pauses, checkpoints, waits for human input
-    #   5. RESUME: human response flows back, graph continues
-    #   6. SYNTHESIZE: LLM combines MCP tool results into a response
-    #
-    # How it maps to your production codebase:
-    #   build_orchestrator()  -> langgraph_mcp_orchestrator.py:_build_graph()
-    #   analyze()             -> chat.py:analyze_query_for_mcp_tools()
-    #   call_mcp_tool()       -> mcp_protocol.py:call_tool()
-    #   discover_all_tools()  -> mcp_server_registry.py:refresh_capabilities()
-    #   human_review()        -> langgraph_mcp_orchestrator.py (interrupt block)
-    #   MemorySaver           -> checkpointer (persists state for resume)
-    #   MCP_SERVERS dict      -> mcp_server_registry.py:get_servers()
-    #   OrchestratorState     -> langgraph_mcp_orchestrator.py:ExecutionState
-    #
-    # -- Exercise -------------------------------------------------------------
-    # 1. Add LLM-based analysis: replace mock_analyze keywords with an
-    #    LLM call using llm_helper.get_llm() (see lesson 08 for pattern)
-    # 2. Add parallel tool execution: use asyncio.gather() in call_tools
-    #    when the plan strategy is "parallel"
-    # 3. Add workflow support: load workflow definitions from the MCP
-    #    server (lesson 10) and use them to gate which tools are visible
-    # 4. Add streaming: yield progress updates from call_tools using
-    #    LangGraph's astream() instead of ainvoke()
-    # 5. Swap MemorySaver for a SQLite or file-based checkpointer to
-    #    persist state across process restarts
+# Exercises:
+# 1. Resume with "reject" instead and watch synthesize take the other path.
+# 2. Print app.get_graph().draw_mermaid() and paste it into mermaid.live.
+# 3. Add an "edit:<text>" answer that routes human_review BACK to call_tools
+#    (add_conditional_edges) -- needs_approval is already False, so the
+#    second pass falls through to synthesize instead of looping forever.
+# 4. Run the plan with asyncio.gather in call_tools -- the graph does not
+#    change, only the node.
+# 5. Swap MemorySaver for SqliteSaver: test 3 can then resume after the
+#    process restarts, which is what DynamoDB does in production.
