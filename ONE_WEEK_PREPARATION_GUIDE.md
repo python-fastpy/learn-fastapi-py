@@ -147,7 +147,7 @@ _How AI skills are built and connected. Follow the lesson numbers in order._
 | Time | File | Topics | Production Equivalent |
 |------|------|--------|-----------------------|
 | 9:00 - 9:40 | `learn-mcp/01_hello_mcp_server.py` | Create a minimal MCP server with `@mcp.tool()` | Every skill's `main.py` |
-| 9:40 - 10:20 | `learn-mcp/02_mcp_client.py` | Connect to a server, call tools, inspect results | Backend's `mcp_protocol.py` |
+| 9:40 - 10:20 | `learn-mcp/02_transports/stdio_client.py` | Connect to a server, call tools, inspect results | Backend's `mcp_protocol.py` |
 | 10:20 - 11:00 | `learn-mcp/04_resources_and_prompts.py` | All three primitives: tool, resource, prompt | Skills expose tools; workflows as resources |
 
 ### Lunch Break (11:00 - 11:30)
@@ -158,7 +158,7 @@ _How AI skills are built and connected. Follow the lesson numbers in order._
 |------|------|--------|-----------------------|
 | 11:30 - 12:10 | `learn-mcp/05_structured_content.py` | Return `structuredContent` + `_meta` with timing | Interrupt payloads + `skill_call_extras` |
 | 12:10 - 12:50 | `learn-mcp/06_hitl_interrupt.py` | Interrupt/resume with continuation tokens | HITL cycle: interrupt -> checkpoint -> resume |
-| 12:50 - 13:30 | `learn-mcp/02_mcp_client.py` (part B) | MCP over Streamable HTTP (production transport) | ECS Fargate behind ALB, path-based routing |
+| 12:50 - 13:30 | `learn-mcp/02_transports/http_client.py` (part B) | MCP over Streamable HTTP (production transport) | ECS Fargate behind ALB, path-based routing |
 
 **Bonus files if time permits:** `08_llm_tool_server.py` through `15_mcp_to_mcp.py` for advanced patterns (multi-server, workflows, LangGraph integration).
 

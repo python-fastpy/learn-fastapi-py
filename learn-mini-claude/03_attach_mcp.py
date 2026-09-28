@@ -330,8 +330,8 @@ if __name__ == "__main__":
     #    namespaced in the merged registry.
     # 2. Break the command in .mcp.json ("pythonn") and confirm the agent
     #    still starts, reporting the failure and continuing without it.
-    # 3. Run learn-mcp's `02_mcp_client.py --http-server`, then attach it here
-    #    with {"url": "http://localhost:8000/mcp"} -- same registry, no
+    # 3. Run learn-mcp's `02_transports/http_server.py`, then attach it here
+    #    with {"url": "http://127.0.0.1:8765/mcp"} -- same registry, no
     #    code change.
     # 4. Feed this merged registry into lesson 01's agent_loop() and watch
     #    the mock model call an MCP tool through it.

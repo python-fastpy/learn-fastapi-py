@@ -74,7 +74,7 @@ builds the **orchestrator (client)** side. Lesson 13 combines both into the
 | # | File | What You Learn | Key Concept | Maps To |
 |---|------|----------------|-------------|---------|
 | 01 | `01_hello_mcp_server.py` | Register one greet tool two ways, and reject bad input | `@mcp.tool` vs `mcp.tool(name, meta)(fn)`; `ToolError` | story-drafting/main.py |
-| 02 | `02_mcp_client.py` | The same server reached two ways: **Part A** stdio (the client starts the server), **Part B** HTTP (server runs on its own, health check, per-tenant headers) | `PythonStdioTransport`, handshake, `list_tools()` / `call_tool()`, `raise_on_error=False`; `mcp.run(transport="http")`, `/health`, `StreamableHttpTransport(headers=...)`, `get_http_headers()` | mcp_protocol.py, story-drafting run block |
+| 02 | `02_transports/` | The same server reached two ways: **Part A** `stdio_client.py` (the client starts the server), **Part B** `http_client.py` (server runs on its own, health check, per-tenant headers). One file per job — see the folder's README | `PythonStdioTransport`, handshake, `list_tools()` / `call_tool()`, `raise_on_error=False`; `mcp.run(transport="http")`, `/health`, `StreamableHttpTransport(headers=...)`, `get_http_headers()` | mcp_protocol.py, story-drafting run block |
 | 03 | `03_logging.py` | Debug tools without print statements: server logs vs logs sent to the client | fastmcp `get_logger()`, `ctx.info()` + client `log_handler` | story-drafting/main.py |
 | 04 | `04_resources_and_prompts.py` | Expose data and templates, not just actions | Resources + Prompts (the other 2 MCP primitives) | workflows/routes.py |
 
@@ -144,6 +144,10 @@ builds the **orchestrator (client)** side. Lesson 13 combines both into the
 ```bash
 # Any lesson (no .env needed for 01-07, 09-11, 13-16):
 uv run python 01_hello_mcp_server.py
+
+# Lesson 02 is a folder -- two entry points, no command-line flags:
+uv run python 02_transports/stdio_client.py     # part A
+uv run python 02_transports/http_client.py      # part B
 
 # Lesson 08 needs .env; without it, it prints the tool schema and stops.
 # Lesson 12 runs either way -- .env only enables its LLM-selection step.
