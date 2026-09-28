@@ -85,7 +85,7 @@ builds the **orchestrator (client)** side. Lesson 13 combines both into the
 | # | File | What You Learn | Key Concept | Maps To |
 |---|------|----------------|-------------|---------|
 | 05 | `05_structured_content.py` | One tool result, three parts: text for the LLM, JSON for your code, metadata for logs | `content` vs `structuredContent` vs `_meta`; `status: interrupted` + `continuation_token` | mcp_protocol.py `_call_tool_result_to_dict()` |
-| 06 | `06_hitl_interrupt.py` | Pause a tool to ask the user (pick a language, review a draft), then resume it | Interrupt `type` / `payload` (`extra="forbid"`) / `actions`, `continuation_token`, user answer in request `_meta` (`call_tool(meta=...)`, `ctx.request_context.meta`) | shared/interrupts/, story-drafting/src/interrupts/ |
+| 06 | `06_hitl_interrupt.py` | Pause a tool to ask the user (pick a language, review a draft), then resume it — four calls, one conversation | Question **out** via `status: interrupted` + `interrupt` + `continuation_token`; answer **back** via request `_meta` (`call_tool(meta=...)`, `ctx.request_context.meta`); state in a token-keyed store, never a held connection | shared/interrupts/, story-drafting/src/interrupts/ |
 
 ### Phase 3: Client Resilience (No LLM needed)
 

@@ -1,14 +1,35 @@
-"""Lesson 06 -- Human-in-the-Loop: pause a tool, ask the user, resume
-=====================================================================
+"""Lesson 06 -- Interruption: pause a tool, ask the user, resume
+================================================================
 
-greet() asks the user two things before it finishes -- "which language?",
-then "is this greeting OK?" -- pausing each time and resuming with the answer.
+greet() cannot finish on its own: it needs a language, then an approval. So
+it returns twice with a QUESTION instead of an answer, and gets called again
+with each reply. Four calls, one conversation.
 
-  1. INTERRUPT  return status "interrupted" + an interrupt {type, message, payload, actions}
-                + a continuation_token (a bookmark to the saved state)
-  2. RESUME     the next call sends the answer in the request's _meta:
-                {"continuation_token": ..., "user_response": {"action": ...}}
-  3. ACTIONS    pick language -> draft -> REVIEW:  approve | refine (review again) | reject
+  THE TWO CHANNELS -- this is the whole mechanism:
+
+    OUT   the question rides in the RESULT     structured_content = {
+          (the shape from lesson 05)             "status": "interrupted",
+                                                 "interrupt": {type, message,
+                                                               payload, actions},
+                                                 "continuation_token": "ct_..."}
+
+    BACK  the answer rides in the REQUEST      call_tool("greet", {"name": ...},
+          as _meta -- a SIBLING of the            meta={"continuation_token": ...,
+          arguments, not one of them                    "user_response": {...}})
+          (lesson 14 shows it on the wire)     tool reads ctx.request_context.meta
+
+  NOTHING IS SUSPENDED. Each resume is a brand-new call that enters greet()
+  at the first line. No paused function is waiting to be woken: the token is
+  just a key into SESSIONS, and the tool rebuilds its context from that every
+  time. Read the `if` at the top of greet() as "is this a fresh start, or a
+  reply?" -- that branch IS the resume.
+  (LangGraph's interrupt() in lesson 13 is the other kind: it genuinely does
+  freeze a running graph mid-node and resume inside the same frame.)
+
+  WHY A TOKEN, NOT A HELD CONNECTION: the state lives in a store, so the
+  reply can arrive minutes later, from a different container, over a new HTTP
+  connection (lesson 02's stateless_http=True). A held connection could not
+  survive any of that.
 
   ┌──────────┐  interrupt  ┌──────────────┐  call_tool   ┌──────────────────────────┐
   │ FRONTEND │ ◄────────── │   BACKEND    │ ───────────► │ MCP SERVER  greet()      │
@@ -17,133 +38,145 @@ then "is this greeting OK?" -- pausing each time and resuming with the answer.
   │ buttons  │ ──────────► │ resumes with │  / completed │                          │
   └──────────┘             │ meta={...}   │              └──────────────────────────┘
                            └──────────────┘
-  (here, main() plays backend + frontend: it prints the buttons and "clicks" them)
+  (here main() plays both: it prints the buttons and clicks them)
 
-  first call ─► LANGUAGE_SELECTION ─"fr"─► REVIEW ─approve/reject─► completed
-                                            ▲  │
-                                            └──┘ refine
+  CALL 1  greet("Shubham")        -> interrupted  LANGUAGE_SELECTION
+  CALL 2  + answer "fr"           -> interrupted  REVIEW, revision 1
+  CALL 3  + answer "refine"       -> interrupted  REVIEW, revision 2   <- a loop
+  CALL 4  + answer "approve"      -> completed,   and the token is dropped
 
-Run:  uv run python 06_hitl_interrupt.py
+Run:  uv run python 06_hitl_interrupt.py       (clicks its own buttons)
+  or: uv run python 06_interactive.py         (YOU click them, same tool)
 
-Maps to production (shared/interrupts/models.py, story-drafting/src/interrupts/):
-  SkillInterrupt(type, message, payload, actions)  ~  interrupt() below
-  .block() puts the UI payload in _meta.forwarded_blocks so the agent sees
-  only a summary (lesson 09); the orchestrator checkpoints to DynamoDB and
-  resumes with LangGraph interrupt().
+Maps to production (shared/interrupts/, story-drafting/src/interrupts/):
+  SkillInterrupt(type, message, payload, actions) ~ ask() below. The
+  orchestrator checkpoints to DynamoDB instead of a dict, and .block() keeps
+  the payload out of the agent's context via _meta.forwarded_blocks (L09).
 """
 
 import asyncio
 import uuid
-from pydantic import BaseModel
-from fastmcp import FastMCP, Client, Context
+
+from fastmcp import Client, Context, FastMCP
 from fastmcp.tools import ToolResult
 
 mcp = FastMCP("hitl-greetings")
-SESSIONS: dict[str, dict] = {}                # saved state (production: DynamoDB)
+SESSIONS: dict[str, dict] = {}                # token -> saved state (production: DynamoDB)
 HELLO = {"en": "Hello", "fr": "Bonjour", "de": "Hallo"}
 
 
-class Action(BaseModel):                      # a button: label shown, value sent back
-    label: str
-    value: str
-    style: str = "default"                    # default | primary | danger
-
-
-class LanguagePayload(BaseModel):             # typed payloads: extra="forbid" turns a
-    model_config = {"extra": "forbid"}        # typo'd field into an error
-    candidates: list[str]
-
-
-class ReviewPayload(BaseModel):
-    model_config = {"extra": "forbid"}
-    draft: str
-    revision: int
-
-
-def interrupt(token, type, message, payload, actions) -> ToolResult:
+def ask(token: str, kind: str, question: str, buttons: list[str], **payload) -> ToolResult:
+    """Stop and ask. The question goes out; the token says how to come back."""
     return ToolResult(
-        content=f"[INTERRUPT] {type}: {message}",         # the AGENT sees a short summary
-        structured_content={                              # the UI gets everything
+        content=f"[INTERRUPT] {kind}: {question}",     # the AGENT sees only this line
+        structured_content={                          # the UI gets the whole thing
             "status": "interrupted",
-            "interrupt": {"type": type, "message": message, "payload": payload.model_dump(),
-                          "actions": [a.model_dump() for a in actions]},
-            "continuation_token": token,
+            "interrupt": {"type": kind, "message": question,
+                          "payload": payload, "actions": buttons},
+            "continuation_token": token,              # the bookmark
         },
     )
 
 
-def review(token, state) -> ToolResult:
-    return interrupt(token, "GREETING.REVIEW", "Review the greeting",
-                     ReviewPayload(draft=state["draft"], revision=state["revision"]),
-                     [Action(label="Approve", value="approve", style="primary"),
-                      Action(label="Refine", value="refine"),
-                      Action(label="Reject", value="reject", style="danger")])
+def review(token: str, state: dict) -> ToolResult:
+    """The REVIEW question -- asked once per revision, so it lives in a helper."""
+    return ask(token, "GREETING.REVIEW", "Review the greeting",
+               ["approve", "refine", "reject"],
+               draft=state["draft"], revision=state["revision"])
 
 
 @mcp.tool
 def greet(name: str, ctx: Context) -> ToolResult:
-    """Greet someone -- asks the user for a language, then for approval."""
+    """Greet someone -- asks for a language, then for approval."""
+    # EVERY call lands here, resumes included. Nothing was paused, so the
+    # first job is always: fresh start, or a reply to an earlier question?
     meta = ctx.request_context.meta
     answer = meta.model_dump() if meta else {}
 
-    # 1. INTERRUPT -- first call: save state, ask for a language
+    # --- fresh start: no answer attached ------------------------------------
     if "user_response" not in answer:
         token = f"ct_{uuid.uuid4().hex[:8]}"
         SESSIONS[token] = {"name": name, "step": "language"}
-        return interrupt(token, "GREETING.LANGUAGE_SELECTION", f"Which language for {name}?",
-                         LanguagePayload(candidates=list(HELLO)),
-                         [Action(label=code.upper(), value=code) for code in HELLO])
+        return ask(token, "GREETING.LANGUAGE_SELECTION", f"Which language for {name}?",
+                   buttons=list(HELLO), candidates=list(HELLO))
 
-    # 2. RESUME -- load the saved state
+    # --- a reply: the token says which conversation this belongs to ---------
     token = answer["continuation_token"]
-    state, action = SESSIONS[token], answer["user_response"]["action"]
+    state = SESSIONS[token]                           # everything we knew last time
+    action = answer["user_response"]["action"]
 
-    # 3. ACTIONS
-    if state["step"] == "language":
-        state.update(step="review", language=action, revision=1,
-                     draft=f"{HELLO[action]}, {state['name']}! Welcome to the team.")
-        return review(token, state)
-    if action == "refine":
-        state["draft"] = f"{HELLO[state['language']]}, {state['name']}. A pleasure to welcome you."
+    if state["step"] == "language":                   # they picked a language
+        state["step"] = "review"
+        state["language"] = action
+        state["revision"] = 1
+        state["draft"] = f"{HELLO[action]}, {state['name']}! Welcome to the team."
+        return review(token, state)                   # ask the NEXT question
+
+    if action == "refine":                            # ask the SAME question again
         state["revision"] += 1
+        state["draft"] = f"{HELLO[state['language']]}, {state['name']}. A pleasure to welcome you."
         return review(token, state)
-    del SESSIONS[token]                                   # approve or reject: done
-    return ToolResult(content=state["draft"] if action == "approve" else "Rejected.",
-                      structured_content={"status": "completed", "action_taken": action,
-                                          "greeting": state["draft"] if action == "approve" else None})
+
+    # approve or reject: the conversation is over, so drop the saved state
+    del SESSIONS[token]
+    approved = action == "approve"
+    return ToolResult(
+        content=state["draft"] if approved else "Rejected.",
+        structured_content={"status": "completed", "action_taken": action,
+                            "greeting": state["draft"] if approved else None},
+    )
 
 
 async def main():
     async with Client(mcp) as client:
-
-        async def click(token, action):                   # the user clicks a button
-            meta = {"continuation_token": token, "user_response": {"action": action}}
-            return (await client.call_tool("greet", {"name": "Shubham"}, meta=meta)).structured_content
-
+        # CALL 1 -- no meta, so greet() takes the "fresh start" branch
         r = await client.call_tool("greet", {"name": "Shubham"})
-        sc, token = r.structured_content, r.structured_content["continuation_token"]
-        print("1. agent sees:", r.content[0].text)        # [INTERRUPT] GREETING.LANGUAGE_SELECTION: ...
-        print("   buttons   :", [a["label"] for a in sc["interrupt"]["actions"]])   # ['EN', 'FR', 'DE']
+        sc = r.structured_content
+        token = sc["continuation_token"]
+        print("CALL 1  greet('Shubham') ->", sc["status"])
+        print("  agent sees :", r.content[0].text)
+        print("  buttons    :", sc["interrupt"]["actions"])
+        print("  token      :", token)
+        print("  server kept:", SESSIONS[token])
 
-        i = (await click(token, "fr"))["interrupt"]
-        print("2. click FR  :", i["type"], "rev", i["payload"]["revision"], "|", i["payload"]["draft"])
+        async def click(action: str) -> dict:
+            """One button press = one NEW call, with the answer in _meta."""
+            meta = {"continuation_token": token, "user_response": {"action": action}}
+            r = await client.call_tool("greet", {"name": "Shubham"}, meta=meta)
+            return r.structured_content
 
-        i = (await click(token, "refine"))["interrupt"]
-        print("3. refine    :", i["type"], "rev", i["payload"]["revision"], "|", i["payload"]["draft"])
+        for n, action in enumerate(("fr", "refine", "approve"), start=2):
+            sc = await click(action)
+            print(f"\nCALL {n}  + answer {action!r} ->", sc["status"])
+            if sc["status"] == "interrupted":
+                payload = sc["interrupt"]["payload"]
+                print(f"  asks        : {sc['interrupt']['type']} (revision {payload['revision']})")
+                print(f"  draft       : {payload['draft']}")
+                print(f"  server kept : {SESSIONS[token]}")
+            else:
+                print(f"  greeting    : {sc['greeting']}")
+                print(f"  server kept : {SESSIONS}   <- token dropped, conversation over")
 
-        r = await click(token, "approve")
-        print("4. approve   :", r["status"], "|", r["greeting"], "| state left:", SESSIONS)
-
-    try:                                                  # extra="forbid" catches typos
-        ReviewPayload(draft="Hi", revision=1, revison=2)
-    except Exception as e:
-        print("5. typo      :", type(e).__name__, "- 'revison' is not a field")
+        print("\nFour calls to the same tool. It never paused -- it re-entered")
+        print("three times and reloaded its state from the token each time.")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 
 # Exercises:
-# 1. Click "reject" instead of "approve". What comes back?
-# 2. Add a third type, GREETING.STYLE_SELECTION (formal / casual), before the review.
-# 3. Resume with an unknown token -- return a clear error instead of crashing.
+# 1. Click "reject" instead of "approve". What comes back, and what is left
+#    in SESSIONS?
+# 2. Resume with a token that doesn't exist. Right now SESSIONS[token] raises
+#    KeyError, which reaches the caller as the unhelpful "Error calling tool
+#    'greet': 'ct_...'". Return a clear "unknown or expired token" instead --
+#    a real UI can always send a stale token, because state expires.
+# 3. Delete the `del SESSIONS[token]` line. Nothing breaks visibly -- which
+#    is the point: that is a state leak, and in production it costs money.
+# 4. Add GREETING.STYLE_SELECTION (formal / casual) between language and
+#    review. Notice you add a `step`, not a new tool.
+# 5. Make the payloads typed: a pydantic model per interrupt type with
+#    model_config = {"extra": "forbid"}, so `revison=2` is a startup error
+#    rather than a field the UI silently never receives.
+# 6. Give buttons a label and a style (["Approve" / primary, "Reject" /
+#    danger]) instead of bare strings -- the UI needs both, the tool doesn't.
