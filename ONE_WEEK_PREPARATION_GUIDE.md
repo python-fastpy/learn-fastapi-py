@@ -175,8 +175,8 @@ _Orchestration: the brain that ties MCP skills together._
 | Time | File | Topics | Production Equivalent |
 |------|------|--------|-----------------------|
 | 9:00 - 9:40 | `learn-langgraph/01_state_basics.py` | StateGraph, TypedDict state, nodes, edges, compile | `langgraph_mcp_orchestrator.py` state |
-| 9:40 - 10:20 | `learn-langgraph/02_conditional_routing.py` | `add_conditional_edges`, router functions, branching | Execution strategies: none/single/sequential/parallel |
-| 10:20 - 11:00 | `learn-langgraph/03_tool_calling_agent.py` | Bind tools to LLM, ToolNode, agent loop | Core agent loop that decides which MCP tool to call |
+| 9:40 - 10:20 | `learn-langgraph/03_conditional_edges.py` | `add_conditional_edges`, router functions, two routing stages | Execution strategies: none/single/sequential/parallel |
+| 10:20 - 11:00 | `learn-langgraph/06_tool_calling.py` | Bind tools to LLM, ToolNode, agent loop | Core agent loop that decides which MCP tool to call |
 
 ### Lunch Break (11:00 - 11:30)
 
@@ -184,9 +184,9 @@ _Orchestration: the brain that ties MCP skills together._
 
 | Time | File | Topics | Production Equivalent |
 |------|------|--------|-----------------------|
-| 11:30 - 12:10 | `learn-langgraph/04_human_in_the_loop.py` | `interrupt()`, MemorySaver, resume from checkpoint | DynamoDB checkpointer + interrupt/resume cycle |
-| 12:10 - 12:50 | `learn-langgraph/05_mcp_plus_langgraph.py` | LangGraph agent discovering and calling MCP tools | Full pattern: LangGraph orchestrator -> MCP skills |
-| 12:50 - 13:30 | `learn-langgraph/06_streaming_sse.py` | Stream graph execution via FastAPI SSE endpoint | `/api/v1/chat` SSE streaming response |
+| 11:30 - 12:10 | `learn-langgraph/09_human_in_the_loop.py` | `interrupt()`, MemorySaver, resume from checkpoint | DynamoDB checkpointer + interrupt/resume cycle |
+| 12:10 - 12:50 | `learn-langgraph/14_mcp_plus_langgraph.py` | LangGraph agent discovering and calling MCP tools | Full pattern: LangGraph orchestrator -> MCP skills |
+| 12:50 - 13:30 | `learn-langgraph/15_streaming_sse.py` | Stream graph execution via FastAPI SSE endpoint | `/api/v1/chat` SSE streaming response |
 
 **Bonus files if time permits:** `07_agent_loop.py` through `13_orchestrator.py` for subgraphs, error handling, and full orchestrator patterns.
 

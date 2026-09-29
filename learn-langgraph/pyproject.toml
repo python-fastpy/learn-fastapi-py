@@ -11,9 +11,9 @@ dependencies = [
     "azure-identity>=1.17",
     "python-dotenv>=1.0",
     "pydantic>=2.0",
+    "fastmcp>=3.4.0",          # 14_mcp_plus_langgraph.py imports it
+    "fastapi>=0.115",          # 15_streaming_sse.py imports it
 ]
 
-[tool.uv]
-dev-dependencies = [
-    "pytest>=8.0",
-]
+[dependency-groups]
+dev = ["pytest>=8.0"]

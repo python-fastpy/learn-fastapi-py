@@ -372,3 +372,29 @@ main {
 }
 
 #send:disabled { opacity: 0.5; cursor: default; }
+
+/* --- Permission prompt: the agent is parked, waiting for a click -------- */
+.approval {
+  border: 2px solid #d29922;
+  background: #fffbe6;
+  border-radius: 8px;
+  padding: .7rem .9rem;
+  margin-top: .6rem;
+}
+.approval-q { font-weight: 600; margin-bottom: .4rem; }
+.approval-tool {
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #fff; border: 1px solid #e6d9a8; border-radius: 6px;
+  padding: .45rem .6rem; margin-bottom: .5rem;
+  white-space: pre-wrap; word-break: break-all;
+}
+.approval-actions button {
+  font: inherit; padding: .3rem .8rem; margin-right: .35rem;
+  border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer;
+}
+.approval-actions button.ok { background: #1a7f37; border-color: #1a7f37; color: #fff; }
+.approval-actions button.no { border-color: #cf222e; color: #cf222e; }
+.approval-reason {
+  width: 100%; margin-top: .5rem; padding: .35rem .5rem;
+  font: inherit; border: 1px solid #ccc; border-radius: 6px;
+}

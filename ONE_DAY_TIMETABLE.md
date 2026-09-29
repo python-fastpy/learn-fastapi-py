@@ -24,11 +24,11 @@
 | Time | Lesson | File | What You Learn | Reuters Prod Equivalent |
 |------|--------|------|----------------|------------------------|
 | 13:30 - 14:10 | 7. State Basics | `learn-langgraph/01_state_basics.py` | `StateGraph`, typed state with `TypedDict`, nodes, edges, compile & invoke | Backend's `langgraph_mcp_orchestrator.py` — the state definition |
-| 14:10 - 14:50 | 8. Conditional Routing | `learn-langgraph/02_conditional_routing.py` | `add_conditional_edges`, router functions, branching logic | Backend's execution strategies: none/single/sequential/parallel |
-| 14:50 - 15:30 | 9. Tool-Calling Agent | `learn-langgraph/03_tool_calling_agent.py` | Bind tools to LLM, `ToolNode`, agent loop with tool calls | The core agent loop that decides which MCP tool to call |
-| 15:30 - 16:10 | 10. Human-in-the-Loop | `learn-langgraph/04_human_in_the_loop.py` | `interrupt()`, `MemorySaver` checkpointer, resume from checkpoint | Backend's DynamoDB checkpointer + interrupt/resume cycle |
-| 16:10 - 16:50 | 11. MCP + LangGraph | `learn-langgraph/05_mcp_plus_langgraph.py` | LangGraph agent that discovers and calls MCP tools dynamically | The exact production pattern: LangGraph orchestrator -> MCP skill servers |
-| 16:50 - 17:30 | 12. Streaming SSE | `learn-langgraph/06_streaming_sse.py` | Stream graph execution events via FastAPI SSE endpoint | Backend's `/api/v1/chat` SSE streaming response |
+| 14:10 - 14:50 | 8. Conditional Routing | `learn-langgraph/03_conditional_edges.py` | `add_conditional_edges`, router functions, two routing stages | Backend's execution strategies: none/single/sequential/parallel |
+| 14:50 - 15:30 | 9. Tool-Calling Agent | `learn-langgraph/06_tool_calling.py` | Bind tools to LLM, `ToolNode`, agent loop with tool calls | The core agent loop that decides which MCP tool to call |
+| 15:30 - 16:10 | 10. Human-in-the-Loop | `learn-langgraph/09_human_in_the_loop.py` | `interrupt()`, `MemorySaver` checkpointer, resume from checkpoint | Backend's DynamoDB checkpointer + interrupt/resume cycle |
+| 16:10 - 16:50 | 11. MCP + LangGraph | `learn-langgraph/14_mcp_plus_langgraph.py` | LangGraph agent that discovers and calls MCP tools dynamically | The exact production pattern: LangGraph orchestrator -> MCP skill servers |
+| 16:50 - 17:30 | 12. Streaming SSE | `learn-langgraph/15_streaming_sse.py` | Stream graph execution events via FastAPI SSE endpoint | Backend's `/api/v1/chat` SSE streaming response |
 
 ---
 

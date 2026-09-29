@@ -341,6 +341,20 @@ def get_model(model_name: str = "gpt-4-1"):
     return get_llm(model=model_name, temperature=0.0)
 
 
+async def _decide(approve, tool: "Tool", args: dict):
+    """Ask the permission gate, whichever kind it is.
+
+    approve() may be SYNCHRONOUS -- the CLI blocks on input() because a human
+    is sitting at the terminal -- or a COROUTINE, for a UI that has to send
+    the question somewhere and wait for an answer without freezing its event
+    loop. Returning a string instead of False denies WITH a reason.
+    """
+    import inspect
+
+    decision = approve(tool, args)
+    return await decision if inspect.isawaitable(decision) else decision
+
+
 async def agent_loop(
     model,
     registry: dict[str, Tool],
@@ -381,13 +395,21 @@ async def agent_loop(
 
             if tool is None:
                 result: Any = {"error": f"unknown tool: {name}"}
-            elif not tool.read_only and not approve(tool, args):
-                result = {"error": "permission denied by user"}
+                decision: Any = True
+            else:
+                decision = True if tool.read_only else await _decide(approve, tool, args)
+
+            if tool is not None and decision is not True:
+                # A denial may carry the user's words. "No, and do X instead"
+                # is far more useful to the model than a bare refusal -- it
+                # can act on the reason instead of guessing around it.
+                reason = decision if isinstance(decision, str) else "permission denied by user"
+                result = {"error": reason}
                 # Surface the refusal. Without this a denied tool is
                 # invisible to the UI -- the agent quietly works around
                 # it and the user never learns what it tried to do.
-                on_event("tool_denied", {"name": name, "args": args})
-            else:
+                on_event("tool_denied", {"name": name, "args": args, "reason": reason})
+            elif tool is not None:
                 on_event("tool_call", {"name": name, "args": args})
                 try:
                     result = await tool.fn(**args)

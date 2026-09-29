@@ -192,6 +192,49 @@ document.getElementById('view-prompt').addEventListener('click', async () => {
   dump.hidden = false;
 });
 
+// The agent can stop and ask. /chat starts it and returns immediately; we
+// poll /state, show the proposed call when one is pending, and POST the
+// click to /decide. Nothing is held open while you think.
+function renderApproval(bubble, pending) {
+  let box = bubble.querySelector('.approval');
+  if (pending === null) { if (box) box.remove(); return; }
+  if (box && box.dataset.sig === JSON.stringify(pending)) return;   // already shown
+  if (box) box.remove();
+
+  box = document.createElement('div');
+  box.className = 'approval';
+  box.dataset.sig = JSON.stringify(pending);
+  box.innerHTML =
+    '<div class="approval-q">Allow this tool call?</div>' +
+    '<div class="approval-tool"></div>' +
+    '<div class="approval-actions">' +
+      '<button class="ok">Allow once</button>' +
+      '<button class="always">Allow always</button>' +
+      '<button class="no">Deny</button>' +
+    '</div>' +
+    '<input class="approval-reason" type="text" placeholder="optional: tell it what to do instead">';
+  box.querySelector('.approval-tool').textContent =
+    pending.tool + '(' + JSON.stringify(pending.args) + ')';
+
+  const answer = (decision) => {
+    const reason = box.querySelector('.approval-reason').value || null;
+    box.remove();
+    fetch('/decide', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, decision, reason }),
+    });
+  };
+  box.querySelector('.ok').onclick = () => answer('allow');
+  box.querySelector('.always').onclick = () => answer('always');
+  box.querySelector('.no').onclick = () => answer('deny');
+
+  bubble.appendChild(box);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function send(text) {
   const userBubble = addMessage('user', text);
   const thinking = addMessage('assistant', '…');
@@ -199,7 +242,7 @@ async function send(text) {
   sendBtn.disabled = true;
 
   try {
-    const res = await fetch('/chat', {
+    const started = await (await fetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -207,9 +250,18 @@ async function send(text) {
         session_id: sessionId,
         system_extra: extraEl.value,
       }),
-    });
-    const data = await res.json();
-    sessionId = data.session_id;
+    })).json();
+    sessionId = started.session_id;
+
+    let data;
+    for (;;) {                                  // production: SSE, not polling
+      data = await (await fetch('/state/' + sessionId)).json();
+      if (data.error) throw new Error(data.error);
+      renderApproval(thinking, data.pending);
+      if (!data.running) break;
+      await sleep(350);
+    }
+
     thinking.classList.remove('thinking');
     thinking.textContent = data.reply;
     addSentTokens(userBubble, data.usage);

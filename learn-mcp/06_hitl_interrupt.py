@@ -23,8 +23,11 @@ with each reply. Four calls, one conversation.
   just a key into SESSIONS, and the tool rebuilds its context from that every
   time. Read the `if` at the top of greet() as "is this a fresh start, or a
   reply?" -- that branch IS the resume.
-  (LangGraph's interrupt() in lesson 13 is the other kind: it genuinely does
-  freeze a running graph mid-node and resume inside the same frame.)
+  (LangGraph's interrupt() in lesson 13 does NOT differ here, despite how it
+  reads: ainvoke() returns too, and on resume the node is RE-RUN from its
+  first line, with interrupt() handing back the recorded answer. What the
+  framework owns is the bookkeeping -- the checkpointer and the re-entry --
+  not a frozen stack. Anything before its interrupt() therefore runs twice.)
 
   WHY A TOKEN, NOT A HELD CONNECTION: the state lives in a store, so the
   reply can arrive minutes later, from a different container, over a new HTTP

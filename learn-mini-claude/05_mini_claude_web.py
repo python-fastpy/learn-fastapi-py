@@ -15,8 +15,8 @@ WHAT YOU'LL LEARN:
   1. Wrapping an agent loop in an HTTP endpoint (POST /chat)
   2. Serving a static HTML/CSS front end from FastAPI
   3. Keeping conversation state server-side, keyed by session
-  4. Handling permissions without a terminal -- a UI needs a *policy*,
-     since there's no one to type "y" mid-request
+  4. Asking a human for permission without a terminal -- the agent parks
+     mid-run and the page shows Allow / Always / Deny
   5. Reporting tool calls back to the browser so the user sees what the
      agent did, not just the final answer
 
@@ -25,22 +25,31 @@ Concepts:
   - Session state: conversation lives in a server-side dict keyed by
     session id. Restart the server and it's gone -- fine for a lesson,
     swap for Redis/DynamoDB in production (see fastapi/08-session.py)
-  - Permission policy vs. prompt: the CLI asks a human in real time; the
-    web UI decides up front (here: allow reads + writes, refuse shell).
-    A production UI would stream an approval request to the browser and
-    await the click -- that's learn-mcp lesson 06's interrupt pattern.
+  - Deny rules vs. asking: run_command is refused outright (a rule decided
+    in advance); everything else that can change something asks you. That
+    is how Claude Code's own permissions are shaped.
+  - Parking, not blocking: POST /chat starts the agent as a task and
+    returns immediately, so no HTTP request is held open while you think.
+    approve() awaits an asyncio.Event; /decide sets it. Same shape as
+    learn-mcp lesson 06, with an Event instead of a continuation token.
+  - Deny with a reason: your text becomes the tool result, so the model can
+    act on WHY. Deny "junk.txt" with "use scratch.md instead" and it
+    retries correctly instead of giving up.
   - Event trace: on_event collects tool calls so the response can show
     them as chips under the reply
 
 Flow:
   browser                     FastAPI                      agent_core
   -------                     -------                      ----------
-  type message  --POST /chat-->  look up session
-                                 append HumanMessage
+  type message  --POST /chat-->  start agent as a task
+                <--{session}---  and return AT ONCE
                                  agent_loop(...)  ------->  model + tools
                                                             (MCP + builtin)
-                                 collect events   <-------  tool results
-  render reply  <--JSON--------  {reply, events}
+                                 approve() awaits <-------  wants write_file
+  poll /state   --GET---------->  {"pending": {...}}
+  show buttons  <---------------
+  click         --POST /decide->  set the Event    ------->  loop continues
+  render reply  <--{reply,...}--  when running=false
   + tool chips
 
 REQUIRES CREDENTIALS: same as lesson 04 -- needs .env for a real model.
@@ -54,6 +63,7 @@ EXPECTED STARTUP:
   Open http://127.0.0.1:8100
 """
 
+import asyncio
 import os
 import sys
 import uuid
@@ -106,23 +116,52 @@ SESSION_USAGE: dict[str, Usage] = {}
 
 
 # ============================================================================
-# The permission policy (the interesting difference from the CLI)
+# Permissions in a browser (the interesting difference from the CLI)
 # ============================================================================
 # The CLI can block on input() because a human is watching the terminal.
-# An HTTP handler can't -- it has to answer *now*. So a web UI needs a
-# policy decided in advance, not a prompt.
+# An HTTP handler can't -- it has to answer *now*. Two ways out, and this
+# file uses BOTH, which is also how Claude Code's own permissions work:
 #
-# This one allows file writes (sandboxed to _sandbox/ anyway) but refuses
-# shell commands, since those are the hardest to undo. The grown-up
-# version streams an approval request to the browser and waits for a
-# click -- that's exactly the interrupt/resume pattern from learn-mcp
-# lesson 06 and learn-langgraph lesson 09.
+#   DENY RULES  decided in advance, never asked. run_command is the hardest
+#               thing to undo, so it is simply off in a browser.
+#   ASK         everything else that can change something: send the proposed
+#               call to the page, park the agent, wait for a click.
+#
+# "Park the agent" is the trick. POST /chat does NOT hold the request open
+# while you think -- it starts the agent as a task and returns at once. The
+# agent's approve() then awaits an asyncio.Event, so the server stays free
+# to serve /state and /decide. That is the interrupt/resume shape from
+# learn-mcp lesson 06, with an Event standing in for a continuation token
+# because here the process really does stay alive.
 
-BLOCKED_IN_WEB_UI = {"run_command"}
+BLOCKED_IN_WEB_UI = {"run_command"}          # deny rules: never even offered
 
 
-def web_approve(tool: Tool, args: dict) -> bool:
-    return tool.name not in BLOCKED_IN_WEB_UI
+def make_web_approve(session: dict):
+    """Async, so it can wait for a human without freezing the event loop."""
+    async def web_approve(tool: Tool, args: dict):
+        if tool.name in BLOCKED_IN_WEB_UI:
+            return f"{tool.name} is disabled in the web UI (use the CLI for that)"
+        if tool.name in session["always"]:
+            return True
+
+        # Create the Event BEFORE publishing `pending`: the other order lets
+        # a poll show the buttons while /decide has nothing yet to wake.
+        session["answer"] = asyncio.Event()
+        session["pending"] = {"tool": tool.name, "args": args}
+        await session["answer"].wait()
+        session["pending"] = None
+
+        decision = session.pop("decision", False)
+        if decision == "always":
+            session["always"].add(tool.name)
+        if decision in ("allow", "always"):
+            return True
+        # A reason comes back to the model AS the tool result, so it can act
+        # on why instead of guessing. A bare False cannot say that.
+        return session.pop("reason", None) or False
+
+    return web_approve
 
 
 # ============================================================================
@@ -137,11 +176,55 @@ class ChatRequest(BaseModel):
     system_extra: str | None = None
 
 
+class DecideRequest(BaseModel):
+    session_id: str
+    decision: str                     # "allow" | "always" | "deny"
+    reason: str | None = None
+
+
+# Everything the page needs to know about an in-flight turn, per session.
+TURNS: dict[str, dict] = {}
+
+
 @app.post("/chat")
 async def chat(req: ChatRequest):
+    """Start the turn and return AT ONCE, so the page can be asked."""
+    session_id = req.session_id or str(uuid.uuid4())
+    turn = TURNS.setdefault(session_id, {})
+    turn.update(running=True, pending=None, reply=None, events=[],
+                usage=None, session_usage=None,
+                always=turn.get("always", set()))       # allowlist survives the turn
+    asyncio.create_task(_run_turn(session_id, req))
+    return {"session_id": session_id, "running": True}
+
+
+@app.get("/state/{session_id}")
+async def state(session_id: str):
+    turn = TURNS.get(session_id)
+    if turn is None:
+        return {"error": "unknown session"}
+    return {"session_id": session_id, "running": turn["running"],
+            "pending": turn["pending"], "reply": turn["reply"],
+            "events": turn["events"], "usage": turn["usage"],
+            "session_usage": turn["session_usage"]}
+
+
+@app.post("/decide")
+async def decide(req: DecideRequest):
+    """The click. Hand the answer to the parked approve() and wake it."""
+    turn = TURNS.get(req.session_id)
+    if not turn or not turn.get("answer"):
+        return {"error": "nothing is waiting"}
+    turn["decision"] = req.decision
+    turn["reason"] = req.reason
+    turn["answer"].set()
+    return {"ok": True}
+
+
+async def _run_turn(session_id: str, req: ChatRequest):
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    session_id = req.session_id or str(uuid.uuid4())
+    turn = TURNS[session_id]
     if session_id not in SESSIONS:
         # The system prompt is message[0]. You can't retroactively change
         # instructions the model has already been answering under, so a
@@ -156,13 +239,14 @@ async def chat(req: ChatRequest):
     messages.append(HumanMessage(content=req.message))
 
     # Collect tool activity so the browser can show what happened.
-    events: list[dict] = []
+    events: list[dict] = turn["events"]
 
     def on_event(kind: str, data):
         if kind == "tool_call":
             events.append({"type": "call", "name": data["name"], "args": data["args"]})
         elif kind == "tool_denied":
-            events.append({"type": "denied", "name": data["name"], "args": data["args"]})
+            events.append({"type": "denied", "name": data["name"], "args": data["args"],
+                           "reason": data.get("reason", "")})
         elif kind == "tool_result":
             preview = str(data["result"])
             events.append({
@@ -175,7 +259,7 @@ async def chat(req: ChatRequest):
     try:
         reply = await agent_loop(
             STATE["model"], STATE["registry"], messages,
-            approve=web_approve, on_event=on_event, usage=turn_usage,
+            approve=make_web_approve(turn), on_event=on_event, usage=turn_usage,
         )
     except Exception as e:
         reply = f"Error: {type(e).__name__}: {e}"
@@ -183,13 +267,9 @@ async def chat(req: ChatRequest):
         # A failed turn still cost tokens -- count it either way.
         SESSION_USAGE[session_id].merge(turn_usage)
 
-    return {
-        "session_id": session_id,
-        "reply": reply,
-        "events": events,
-        "usage": turn_usage.as_dict(),
-        "session_usage": SESSION_USAGE[session_id].as_dict(),
-    }
+    turn.update(running=False, pending=None, reply=reply,
+                usage=turn_usage.as_dict(),
+                session_usage=SESSION_USAGE[session_id].as_dict())
 
 
 @app.get("/tools")

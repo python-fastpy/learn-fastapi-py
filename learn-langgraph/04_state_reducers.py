@@ -1,161 +1,119 @@
-"""Lesson 04 — State Reducers
+"""Lesson 04 -- State Reducers
 ==============================
 
-WHY THIS MATTERS
-----------------
-In lessons 02-03, returning {"key": value} REPLACES the old value. But what if
-multiple nodes need to ADD to a list -- like an execution log, error list, or
-message history? Without a reducer, the last node wins and earlier entries are
-lost. Reducers fix this by defining HOW values combine instead of just replacing.
+Returning {"greeting": "..."} REPLACES the old value. That is right for a
+greeting and wrong for a log: if three nodes each return {"log": [...]}, the
+last one wins and the first two entries are gone. A REDUCER says how the old
+and new values COMBINE instead of one replacing the other.
 
-This is how MessagesState works (lesson 05+): messages use the add_messages
-reducer to accumulate. The backend's error tracking and the orchestrator's tool
-results use the same pattern.
+      Annotated[list[str], operator.add]
+                  │             │
+                  │             └── how to combine:  old + new
+                  └── what the key holds
 
-WHAT YOU'LL LEARN
------------------
-1. Annotated[list, operator.add]: a reducer that APPENDS instead of replaces
-2. Without a reducer: last write wins (data loss)
-3. With operator.add: entries accumulate across all nodes
-4. How this powers MessagesState (the reducer behind message history)
-5. How production tracks errors and logs across nodes
+  WITHOUT a reducer                WITH operator.add
+  ─────────────────                ─────────────────
+  greet     log = ["a"]            greet     log = ["a"]
+  decorate  log = ["b"]  ← lost a  decorate  log = ["a", "b"]
+  review    log = ["c"]  ← lost b  review    log = ["a", "b", "c"]
+            only "c" survives                all three survive
 
-Concepts
---------
-- Annotated[list[str], operator.add] -- tells LangGraph to APPEND, not replace
-- Without reducer: node B returns {"log": ["B"]} -> replaces node A's ["A"]
-- With reducer: node B returns {"log": ["B"]} -> result is ["A", "B"]
-- MessagesState uses add_messages reducer (smarter version of operator.add)
-- Only list keys need reducers -- string/int keys replace as expected
+  1. NO REDUCER   a plain str / int / list key -> last write wins.
+  2. REDUCER      Annotated[T, fn] -> LangGraph calls fn(old, new) per write.
+  3. operator.add on lists is concatenation, so a write APPENDS.
+  4. PER KEY      in the SAME state class, `log` accumulates while `greeting`
+                  still replaces. You pick per key, not per graph.
+  5. add_messages is this idea one step smarter: MessagesState uses it to
+                  append messages and de-duplicate by id (lesson 05 onward).
 
-Graph
------
-  +-------+     +-------+     +----------+     +--------+     +-----+
-  | START | --> | greet | --> | decorate | --> | review | --> | END |
-  +-------+     +-------+     +----------+     +--------+     +-----+
-
-  Execution trace (input: {"name": "Alice"}):
-    greet:    returns {"log": ["Greeted 'Alice'"]}      -> log = ["Greeted 'Alice'"]
-    decorate: returns {"log": ["Added decoration"]}     -> log = ["Greeted 'Alice'", "Added decoration"]
-    review:   returns {"log": ["Reviewed and approved"]} -> log = ["Greeted 'Alice'", "Added decoration", "Reviewed and approved"]
-
-  Notice: each node APPENDS its entry. Without the reducer, only the last
-  node's entry would survive.
-
-Maps to
--------
-  MessagesState              -> uses add_messages reducer (lesson 05+)
-  OrchestratorState          -> errors: Annotated[list[str], operator.add]
-  langgraph_mcp_orchestrator -> accumulates tool results and errors across execution nodes
-
-PREREQUISITES: Lesson 02 (edges -- understanding state flow)
-
-No LLM needed -- demonstrates accumulating log entries.
+  Rule of thumb: a list that several nodes contribute to needs a reducer; a
+  value that one node owns at a time does not. This is also what makes
+  parallel branches safe -- two nodes writing one key is a conflict unless a
+  reducer says how to merge them.
 
 Run:  uv run python 04_state_reducers.py
 
-EXPECTED OUTPUT
----------------
-  Final greeting: *** Hello, Alice! *** [APPROVED]
-
-  Execution log:
-    - Greeted 'Alice'
-    - Added decoration
-    - Reviewed and approved
+Maps to: MessagesState (add_messages); OrchestratorState.errors ->
+Annotated[list[str], operator.add], so errors from several tool calls
+accumulate instead of overwriting each other
 """
 
 import operator
 from typing import Annotated, TypedDict
-from langgraph.graph import StateGraph, START, END
+
+from langgraph.graph import END, START, StateGraph
 
 
-# -- Step 1: Define state with a reducer on the `log` key --------------------
-# The key idea: Annotated[list[str], operator.add] tells LangGraph to APPEND
-# new entries to the list instead of replacing it. Without this annotation,
-# returning {"log": ["B"]} would overwrite ["A"] entirely.
-#
-# `greeting` has NO reducer -- it's a plain str, so normal "last write wins"
-# behavior applies (which is what we want for greeting text).
 class State(TypedDict):
     name: str
-    log: Annotated[list[str], operator.add]   # reducer: APPEND, don't replace
-    greeting: str                              # no reducer: last write wins
+    log: Annotated[list[str], operator.add]    # reducer: append
+    greeting: str                              # no reducer: replace
 
 
-# -- Step 2: Each node appends to the log (not replaces) ---------------------
-# Because `log` has the operator.add reducer, returning {"log": ["entry"]}
-# APPENDS "entry" to the existing list. Each node also updates `greeting`
-# (which has no reducer, so the new value replaces the old one as expected).
+# These three are annotated `dict`, not `State`, because both graphs below
+# share them. LangGraph reads a node's type hint to register its channels, so
+# a `State` hint would clash with NoReducerState's plain `log`. The hint is
+# not decoration -- it is schema.
 
-def greet(state: State) -> dict:
-    # log: ["Greeted 'Alice'"] is APPENDED to the (initially empty) log list
-    return {"log": [f"Greeted '{state['name']}'"], "greeting": f"Hello, {state['name']}!"}
-
-
-def decorate(state: State) -> dict:
-    # log: ["Added decoration"] is APPENDED -- log is now 2 entries
-    return {"log": ["Added decoration"], "greeting": f"*** {state['greeting']} ***"}
+def greet(state: dict) -> dict:
+    return {"log": [f"greeted {state['name']}"], "greeting": f"Hello, {state['name']}!"}
 
 
-def review(state: State) -> dict:
-    # log: ["Reviewed and approved"] is APPENDED -- log is now 3 entries
-    return {"log": ["Reviewed and approved"], "greeting": state["greeting"] + " [APPROVED]"}
+def decorate(state: dict) -> dict:
+    return {"log": ["added decoration"], "greeting": f"*** {state['greeting']} ***"}
 
 
-# -- Step 3: Build the pipeline and run it ------------------------------------
-graph = StateGraph(State)
-graph.add_node("greet", greet)
-graph.add_node("decorate", decorate)
-graph.add_node("review", review)
+def review(state: dict) -> dict:
+    return {"log": ["reviewed"], "greeting": state["greeting"] + " [APPROVED]"}
 
-graph.add_edge(START, "greet")
-graph.add_edge("greet", "decorate")
-graph.add_edge("decorate", "review")
-graph.add_edge("review", END)
 
-app = graph.compile()
+def build(state_class) -> object:
+    """Same three nodes, same edges -- only the state class differs."""
+    g = StateGraph(state_class)
+    g.add_node("greet", greet)
+    g.add_node("decorate", decorate)
+    g.add_node("review", review)
+    g.add_edge(START, "greet")
+    g.add_edge("greet", "decorate")
+    g.add_edge("decorate", "review")
+    g.add_edge("review", END)
+    return g.compile()
+
+
+# The same state, with the reducer taken off `log`. Nothing else changes.
+class NoReducerState(TypedDict):
+    name: str
+    log: list[str]
+    greeting: str
 
 
 if __name__ == "__main__":
-    print("=== Graph Diagram (Mermaid) ===")
-    print(app.get_graph().draw_mermaid())
-    print()
+    start = {"name": "Shubham", "log": [], "greeting": ""}
 
-    result = app.invoke({"name": "Alice"})
+    with_reducer = build(State).invoke(start)
+    without = build(NoReducerState).invoke(start)
 
-    print("Final greeting:", result["greeting"])
-    print("\nExecution log:")
-    for entry in result["log"]:
-        print(f"  - {entry}")
+    print("1. with Annotated[list, operator.add]:")
+    for entry in with_reducer["log"]:
+        print(f"     - {entry}")
 
-    # Output:
-    #   Final greeting: *** Hello, Alice! *** [APPROVED]
-    #   Execution log:
-    #     - Greeted 'Alice'
-    #     - Added decoration
-    #     - Reviewed and approved
+    print("\n2. same nodes, reducer removed:")
+    for entry in without["log"]:
+        print(f"     - {entry}")
+    print(f"     ({len(with_reducer['log'])} entries vs {len(without['log'])} "
+          f"-- the first two writes were overwritten, not merged)")
 
-    # ── Key takeaway ─────────────────────────────────────────────────
-    # Without Annotated[list, operator.add], each node would REPLACE
-    # the log list -- only the last node's entry would survive.
-    # With the reducer, entries ACCUMULATE across all nodes.
-    #
-    # This is the same mechanism behind MessagesState's message history
-    # -- the most important state pattern in LangGraph. In lesson 05+,
-    # you'll see MessagesState use the add_messages reducer, which is
-    # a smarter version of operator.add that handles message deduplication
-    # and updates.
-    #
-    # In production, the orchestrator's OrchestratorState uses
-    # Annotated[list[str], operator.add] for error tracking, so errors
-    # from multiple tool executions accumulate instead of overwriting
-    # each other. The same pattern applies to tool results.
-    #
-    # Rule of thumb:
-    #   - List keys that should accumulate -> use a reducer
-    #   - String/int/bool keys that should update -> no reducer needed
-    #
-    # ── Exercise ─────────────────────────────────────────────────────
-    # 1. Add a `farewell` node between review and END
-    # 2. Have it return {"log": ["Said farewell"], "greeting": state["greeting"] + " Goodbye!"}
-    # 3. Run the graph and observe the log growing to four entries
+    print("\n3. `greeting` has no reducer in EITHER, and that is correct:")
+    print("     ", with_reducer["greeting"])
+    print("      each node deliberately replaced it, building on the last value.")
+
+# Exercises:
+# 1. Add a `farewell` node that appends to log and extends greeting. The log
+#    grows to four; you changed no other node.
+# 2. Put a reducer on `greeting` too and run again. The greetings concatenate
+#    into nonsense -- a reducer is not a default, it is a decision.
+# 3. Swap operator.add for a lambda that keeps only the last two entries:
+#    Annotated[list[str], lambda old, new: (old + new)[-2:]]. Any callable
+#    taking (old, new) is a valid reducer.
+# 4. Point greet and decorate both at review (parallel). With the reducer it
+#    merges; on a plain key LangGraph raises an update conflict instead.

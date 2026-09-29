@@ -1,66 +1,47 @@
-"""Lesson 02 — Edges & Flow
-===========================
+"""Lesson 02 -- Edges and Flow
+==============================
 
-WHY THIS MATTERS
-----------------
-In lesson 01 you built a single-node graph. Real workflows have multiple steps
-that must run in order -- greet, then decorate, then summarize. Edges define
-that order. Without them, nodes would be isolated islands with no connection.
+Lesson 01 had one node. Real work is a chain: greet, then decorate, then
+summarise. `add_edge(A, B)` is what makes B run after A -- without edges,
+nodes are islands and nothing runs at all.
 
-This is the foundation of every pipeline: the backend orchestrator chains
-analyze -> route -> execute -> synthesize in exactly this pattern.
+  START ──► greet ──► decorate ──► summarize ──► END
 
-WHAT YOU'LL LEARN
------------------
-1. add_edge(): connect nodes into a sequential pipeline
-2. State accumulation: each node reads output from prior nodes
-3. Partial returns: nodes return only the keys they change
-4. How LangGraph merges partial returns into the full state
-5. The pattern behind every sequential workflow in production
+  and the state grows as it goes, one key per node:
 
-Concepts
---------
-- add_edge(A, B): after node A completes, always run node B
-- State is a TypedDict -- all nodes share the same schema
-- Partial return: {"greeting": "..."} updates only `greeting`, other keys untouched
-- LangGraph merges returns automatically (no manual state management)
+    {"name": "Shubham"}                         <- what you pass in
+      │
+      greet      reads name       sets greeting  = "Hello, Shubham!"
+      │
+      decorate   reads greeting   sets decorated = "*** Hello, Shubham! ***"
+      │
+      summarize  reads name       sets summary   = "Greeting for Shubham: 16 chars"
+      │          + greeting
+      ▼
+    {"name", "greeting", "decorated", "summary"}   <- what comes out
 
-Graph
------
-  +-------+     +-------+     +----------+     +-----------+     +-----+
-  | START | --> | greet | --> | decorate | --> | summarize | --> | END |
-  +-------+     +-------+     +----------+     +-----------+     +-----+
+  1. add_edge(A, B)   after A, ALWAYS run B. Unconditional (lesson 03 branches).
+  2. ACCUMULATION     each node reads keys earlier nodes wrote.
+  3. PARTIAL RETURN   each node returns only its own key.
+  4. THE MERGE        LangGraph applies each partial return to the state, so
+                      no node has to know the full schema.
 
-  Execution trace (input: {"name": "Alice"}):
-    greet     reads `name`                -> sets `greeting`  = "Hello, Alice!"
-    decorate  reads `greeting`            -> sets `decorated` = "*** Hello, Alice! ***"
-    summarize reads `name` + `greeting`   -> sets `summary`   = "Greeting for Alice: 13 chars"
-
-Maps to
--------
-  langgraph_mcp_orchestrator.py -> sequential node chaining (analyze -> route -> execute -> synthesize)
-  story-drafting workflows      -> multi-step tool pipelines (RIC resolve -> fetch -> generate -> refine)
-
-PREREQUISITES: Lesson 01 (basic StateGraph setup)
-
-No LLM needed -- simulates a 3-step greeting pipeline.
+  That last point is what makes nodes reorderable: you can insert or remove a
+  step without touching the others, as long as the keys it reads already exist.
+  Read a key nobody has written yet and you get a KeyError -- the order of your
+  edges IS the contract.
 
 Run:  uv run python 02_edges_and_flow.py
 
-EXPECTED OUTPUT
----------------
-  Greeting:  Hello, Alice!
-  Decorated: *** Hello, Alice! ***
-  Summary:   Greeting for Alice: 13 chars
+Maps to: langgraph_mcp_orchestrator.py -> analyze -> route -> execute ->
+synthesize; story-drafting workflows -> resolve -> fetch -> generate -> refine
 """
 
 from typing import TypedDict
-from langgraph.graph import StateGraph, START, END
+
+from langgraph.graph import END, START, StateGraph
 
 
-# -- Step 1: Define the state schema -----------------------------------------
-# All nodes share this schema. Each node reads what it needs and returns only
-# the keys it changes -- LangGraph merges the partial return into the full state.
 class State(TypedDict):
     name: str
     greeting: str
@@ -68,66 +49,47 @@ class State(TypedDict):
     summary: str
 
 
-# -- Step 2: Define the nodes (one function per pipeline step) ----------------
-# Each node receives the full state but returns ONLY the key(s) it sets.
-# This "partial return" pattern keeps nodes focused and composable --
-# they don't need to know about keys they don't touch.
+# -- The nodes. Each reads what it needs, returns only what it sets ----------
 
 def greet(state: State) -> dict:
-    # Reads: name | Sets: greeting
     return {"greeting": f"Hello, {state['name']}!"}
 
 
 def decorate(state: State) -> dict:
-    # Reads: greeting (set by greet) | Sets: decorated
-    return {"decorated": f"*** {state['greeting']} ***"}
+    return {"decorated": f"*** {state['greeting']} ***"}          # reads greet's output
 
 
 def summarize(state: State) -> dict:
-    # Reads: name + greeting | Sets: summary
     return {"summary": f"Greeting for {state['name']}: {len(state['greeting'])} chars"}
 
 
-# -- Step 3: Build the pipeline (add_node + add_edge) ------------------------
-# add_edge(A, B) means "after A finishes, always run B next."
-# This creates a strict sequential pipeline: greet -> decorate -> summarize.
+# -- The chain: one add_edge per arrow in the diagram ------------------------
+
 graph = StateGraph(State)
 graph.add_node("greet", greet)
 graph.add_node("decorate", decorate)
 graph.add_node("summarize", summarize)
 
-graph.add_edge(START, "greet")        # Entry point: start with greet
-graph.add_edge("greet", "decorate")   # After greet, always decorate
-graph.add_edge("decorate", "summarize")  # After decorate, always summarize
-graph.add_edge("summarize", END)      # After summarize, we're done
+graph.add_edge(START, "greet")
+graph.add_edge("greet", "decorate")
+graph.add_edge("decorate", "summarize")
+graph.add_edge("summarize", END)
 
 app = graph.compile()
 
 
 if __name__ == "__main__":
-    print("=== Graph Diagram (Mermaid) ===")
-    print(app.get_graph().draw_mermaid())
-    print()
+    result = app.invoke({"name": "Shubham"})
 
-    result = app.invoke({"name": "Alice"})
+    print("1. greeting :", result["greeting"])
+    print("2. decorated:", result["decorated"])
+    print("3. summary  :", result["summary"])
+    print("\nOne invoke, three nodes, four keys. Each node wrote exactly one.")
 
-    print(f"Greeting:  {result['greeting']}")
-    print(f"Decorated: {result['decorated']}")
-    print(f"Summary:   {result['summary']}")
-
-    # -- Key takeaway --------------------------------------------------------
-    # Each node returns ONLY the keys it changed -- greet returns {"greeting"},
-    # decorate returns {"decorated"}, summarize returns {"summary"}.
-    # LangGraph merges each partial return into the full state automatically.
-    #
-    # This is why nodes are composable: they don't need to know about the
-    # full state schema. You can reorder, remove, or insert nodes without
-    # rewriting the others -- as long as the keys they read are available.
-    #
-    # This pattern maps directly to the production orchestrator, where
-    # analyze -> route -> execute -> synthesize each update different
-    # parts of the state without touching each other's keys.
-    #
-    # -- Exercise -------------------------------------------------------------
-    # Add a 4th node `farewell` between summarize and END that sets a
-    # new state key `farewell_msg` to "Goodbye, {name}! Hope to see you soon."
+# Exercises:
+# 1. Add a `farewell` node between summarize and END that sets `farewell_msg`.
+#    You add a key to State, a node, and re-point two edges -- that is all.
+# 2. Swap the order of greet and decorate. The KeyError you get names the
+#    contract you just broke.
+# 3. Point both greet AND decorate at summarize. LangGraph runs what it can in
+#    parallel -- lesson 04's reducers are what make that safe.

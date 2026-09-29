@@ -1,168 +1,140 @@
-"""Lesson 03 — Conditional Edges
+"""Lesson 03 -- Conditional Edges
 =================================
 
-WHY THIS MATTERS
-----------------
-Sequential pipelines (lesson 02) always run the same path. But real systems
-need branching: formal greeting for executives, casual for friends. Conditional
-edges let the graph decide at runtime which node to run next, based on the
-current state.
+Lesson 02's chain always ran the same path. Branching needs a ROUTING
+FUNCTION: it reads the state and returns the NAME of the node to run next.
+The graph decides at runtime, so the if/else lives in one place instead of
+being scattered through the nodes.
 
-This is how the production orchestrator routes between different execution
-strategies (none, single, sequential, parallel) and how skills decide between
-different drafting modes.
+  START
+    │
+    ▼
+  classify
+    │   route_by_style(state) -> "formal" | "casual" | "warm"      <- STAGE 1
+    ├────────────────┬─────────────────┐
+    ▼                ▼                 ▼
+  formal_greet   casual_greet      warm_greet
+    │                │                 │
+    │   route_after_greet(state) -> "review" | "send"              <- STAGE 2
+    ├────────────────┴─────────────────┤
+    ▼                                  ▼
+  review                             send
+    │                                  │
+    └────────────────┬─────────────────┘
+                     ▼
+                    END
 
-WHAT YOU'LL LEARN
------------------
-1. add_conditional_edges(): route to different nodes based on state
-2. Routing functions: inspect state, return the NAME of the next node
-3. Literal type hints for valid route targets
-4. How this replaces if/else inside nodes (separation of concerns)
-5. The pattern behind every routing decision in the orchestrator
+  1. ROUTING FN   returns a STRING -- the name of the next node, never data.
+  2. Literal[...] as the return type, so a typo is a type error not a 3am page.
+  3. IMPLICIT MAP add_conditional_edges("classify", fn) -- what fn returns must
+                  BE a node name.
+  4. EXPLICIT MAP add_conditional_edges("classify", fn, {...}) -- a dict from
+                  what fn returns to the node to run. Use it when the two
+                  differ, or to make the branches readable at a glance.
+  5. MULTI-WAY    two branches or ten, it is the same call.
+  6. TWO STAGES   branches can converge and then route AGAIN. Formal greetings
+                  go to review; the friendlier ones skip it.
 
-Concepts
---------
-- add_conditional_edges(source, routing_fn): after source runs, call routing_fn to pick the next node
-- Routing function returns a string -- the NAME of the node to go to
-- Literal["formal_greet", "casual_greet"] -- type-safe route targets
-- Routing logic lives in ONE function, not scattered across nodes
-
-Graph
------
-  +-------+     +----------+
-  | START | --> | classify |
-  +-------+     +----------+
-                     |
-             route_by_style()
-               /            \\
-              v               v
-  +----------------+   +----------------+
-  | formal_greet   |   | casual_greet   |
-  +----------------+   +----------------+
-              \\            /
-               v          v
-              +-----+
-              | END |
-              +-----+
-
-  Execution traces:
-    Input: {"name": "Alice", "style": "formal"}
-      classify -> route_by_style() returns "formal_greet" -> formal_greet -> END
-      Result: "Dear Alice, it is a pleasure to meet you."
-
-    Input: {"name": "Bob", "style": "casual"}
-      classify -> route_by_style() returns "casual_greet" -> casual_greet -> END
-      Result: "Hey Bob! What's up?"
-
-Maps to
--------
-  langgraph_mcp_orchestrator.py -> route_after_analysis() (picks execution strategy)
-  fast_path_matcher.py          -> pattern matching to skip LLM analysis
-  06_tool_calling.py            -> should_use_tool() routing function (same pattern)
-
-PREREQUISITES: Lesson 02 (edges and sequential flow)
-
-No LLM needed -- demonstrates branching based on a "style" field.
+  The routing function must return a registered node name (or END). Return
+  anything else and you get a runtime error naming the value -- which is
+  exactly why 2 and 4 are worth the extra typing.
 
 Run:  uv run python 03_conditional_edges.py
 
-EXPECTED OUTPUT
----------------
-  Dear Alice, it is a pleasure to meet you.
-  Hey Bob! What's up?
+Maps to: langgraph_mcp_orchestrator.py -> route_after_analysis() picking an
+execution strategy; fast_path_matcher.py -> the regex shortcut before it
 """
 
-from typing import TypedDict, Literal
-from langgraph.graph import StateGraph, START, END
+from typing import Literal, TypedDict
+
+from langgraph.graph import END, START, StateGraph
 
 
-# -- Step 1: Define the state (name, style, greeting) ------------------------
-# `style` is the input that drives branching -- the graph reads it at runtime
-# to decide which greeting node to execute.
 class State(TypedDict):
     name: str
-    style: str        # "formal" | "casual"
+    style: str          # "formal" | "casual" | "warm" -- drives stage 1
     greeting: str
+    status: str
 
-
-# -- Step 2: Define the nodes (classify, formal_greet, casual_greet) ----------
-# classify is the entry node -- it passes the style through so the routing
-# function can inspect it. The two greet nodes are the branch targets.
 
 def classify(state: State) -> dict:
-    # Pass style through so the routing function can read it from state
-    return {"style": state["style"]}
+    return {"status": f"style={state['style']}"}
 
 
 def formal_greet(state: State) -> dict:
-    # Only runs when route_by_style returns "formal_greet"
     return {"greeting": f"Dear {state['name']}, it is a pleasure to meet you."}
 
 
 def casual_greet(state: State) -> dict:
-    # Only runs when route_by_style returns "casual_greet"
     return {"greeting": f"Hey {state['name']}! What's up?"}
 
 
-# -- Step 3: The routing function -- returns the node NAME to go to next ------
-# This is the key idea: instead of putting if/else inside nodes, you put
-# the branching logic in a dedicated function. It inspects state and returns
-# a string matching one of the registered node names.
-# Literal[] type hints ensure only valid node names are returned.
-def route_by_style(state: State) -> Literal["formal_greet", "casual_greet"]:
-    return "formal_greet" if state["style"] == "formal" else "casual_greet"
+def warm_greet(state: State) -> dict:
+    return {"greeting": f"So lovely to see you, {state['name']}!"}
 
 
-# -- Step 4: Wire the graph (START -> classify -> conditional -> branches -> END)
+def review(state: State) -> dict:
+    return {"status": "reviewed before sending"}
+
+
+def send(state: State) -> dict:
+    return {"status": "sent straight away"}
+
+
+# -- STAGE 1: pick a greeting style -----------------------------------------
+# Returns a short label, NOT a node name -- the explicit map below translates.
+
+def route_by_style(state: State) -> Literal["formal", "casual", "warm"]:
+    if state["style"] == "formal":
+        return "formal"
+    return "casual" if state["style"] == "casual" else "warm"
+
+
+# -- STAGE 2: does this greeting need a human first? ------------------------
+# Returns the node name itself, so no map is needed.
+
+def route_after_greet(state: State) -> Literal["review", "send"]:
+    return "review" if state["greeting"].startswith("Dear") else "send"
+
+
 graph = StateGraph(State)
-graph.add_node("classify", classify)
-graph.add_node("formal_greet", formal_greet)
-graph.add_node("casual_greet", casual_greet)
+for name, fn in [("classify", classify), ("formal_greet", formal_greet),
+                 ("casual_greet", casual_greet), ("warm_greet", warm_greet),
+                 ("review", review), ("send", send)]:
+    graph.add_node(name, fn)
 
 graph.add_edge(START, "classify")
 
-# After classify, call route_by_style to decide the next node.
-# This replaces a manual if/else -- the graph handles the branching.
-graph.add_conditional_edges("classify", route_by_style)
+# 4 + 5. EXPLICIT map: label -> node. Three branches from one call.
+graph.add_conditional_edges("classify", route_by_style, {
+    "formal": "formal_greet",
+    "casual": "casual_greet",
+    "warm": "warm_greet",
+})
 
-# Both branches converge to END
-graph.add_edge("formal_greet", END)
-graph.add_edge("casual_greet", END)
+# 3 + 6. IMPLICIT map, applied to every branch: they converge, then split again.
+for branch in ("formal_greet", "casual_greet", "warm_greet"):
+    graph.add_conditional_edges(branch, route_after_greet)
+
+graph.add_edge("review", END)
+graph.add_edge("send", END)
 
 app = graph.compile()
 
 
 if __name__ == "__main__":
-    print("=== Graph Diagram (Mermaid) ===")
-    print(app.get_graph().draw_mermaid())
-    print()
+    for style in ("formal", "casual", "warm"):
+        r = app.invoke({"name": "Shubham", "style": style, "greeting": "", "status": ""})
+        print(f"{style:<7} -> {r['greeting']}")
+        print(f"{'':<7}    {r['status']}")
 
-    # Test with formal style
-    r1 = app.invoke({"name": "Alice", "style": "formal"})
-    print(r1["greeting"])
-    # Dear Alice, it is a pleasure to meet you.
+    print("\nOne graph, three paths in, two paths out. No node contains an if.")
 
-    # Test with casual style
-    r2 = app.invoke({"name": "Bob", "style": "casual"})
-    print(r2["greeting"])
-    # Hey Bob! What's up?
-
-    # ── Key takeaway ─────────────────────────────────────────────────
-    # Routing logic lives in ONE function (route_by_style), not scattered
-    # across nodes. This separation of concerns makes graphs maintainable:
-    # - Nodes focus on WHAT to do (generate a greeting)
-    # - The routing function focuses on WHERE to go next
-    # - The graph definition focuses on HOW they connect
-    #
-    # This is the same pattern used in lesson 06 (tool calling), where
-    # should_use_tool() routes between calling a tool and returning a
-    # direct response -- conditional edges are the backbone of agent loops.
-    #
-    # In production, route_after_analysis() in the orchestrator uses this
-    # exact pattern to pick between execution strategies (none, single,
-    # sequential, parallel) based on the LLM's analysis of the user query.
-    #
-    # ── Exercise ─────────────────────────────────────────────────────
-    # 1. Add a third style: "warm"
-    # 2. Add a warm_greet node: "So lovely to see you, {name}!"
-    # 3. Update route_by_style to return Literal["formal_greet", "casual_greet", "warm_greet"]
+# Exercises:
+# 1. Add a "brief" style and a brief_greet node -- one label in the dict, one
+#    entry in the Literal, one node. No existing node changes.
+# 2. Make route_by_style return "formal_greet" directly and drop the dict.
+#    Same behaviour; which version would you rather debug in six months?
+# 3. Return "frmal" from route_by_style (a typo) and read the error.
+# 4. Route warm_greet to review as well, by giving route_after_greet a second
+#    condition -- a branch can rejoin either path.
