@@ -139,19 +139,21 @@ graph.add_edge("synthesize", END)
 app = graph.compile()
 
 
+def ask(message: str) -> None:
+    """One trip through the orchestrator, showing the plan it chose."""
+    r = app.invoke({"user_message": message, "execution_plan": {}, "tool_results": {},
+                    "errors": [], "response": ""})
+    plan = r["execution_plan"]
+    print(f"{message!r}")
+    print(f"   plan     : {plan['strategy']} {[t['tool'] for t in plan['tools']]}")
+    print(f"   response : {r['response']}\n")
+
+
 if __name__ == "__main__":
-    for message in (
-        "Greet Shubham and say goodbye",          # two tools, sequential
-        "Greet Shubham and translate it",         # the chain: translate reads greet
-        "What can you help with?",                # strategy "none" -- skips the tools
-        "Greet Shubham and do everything",        # one tool is missing: partial answer
-    ):
-        r = app.invoke({"user_message": message, "execution_plan": {}, "tool_results": {},
-                        "errors": [], "response": ""})
-        plan = r["execution_plan"]
-        print(f"{message!r}")
-        print(f"   plan     : {plan['strategy']} {[t['tool'] for t in plan['tools']]}")
-        print(f"   response : {r['response']}\n")
+    ask("Greet Shubham and say goodbye")       # two tools, sequential
+    ask("Greet Shubham and translate it")      # the chain: translate reads greet
+    ask("What can you help with?")             # strategy "none" -- skips the tools
+    ask("Greet Shubham and do everything")     # one tool is missing: partial answer
 
     print("Four very different runs. One graph, and only `analyze` ever decided.")
 

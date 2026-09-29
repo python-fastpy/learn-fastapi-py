@@ -133,9 +133,10 @@ if __name__ == "__main__":
     print(f"   the node ran {attempts} times; the graph ran once\n")
 
     print("B. permanent failure + error routing")
-    for name in ("Shubham", "Nobody"):
-        r = app_b.invoke({"name": name, "greeting": "", "source": ""})
-        print(f"   {name:<8} -> {r['greeting']}")
+    known = app_b.invoke({"name": "Shubham", "greeting": "", "source": ""})
+    print(f"   {'Shubham':<8} -> {known['greeting']}")
+    unknown = app_b.invoke({"name": "Nobody", "greeting": "", "source": ""})
+    print(f"   {'Nobody':<8} -> {unknown['greeting']}")
 
     print("\nRetrying 'Nobody' would have failed five times and still crashed;")
     print("routing gave an answer on the first try. Match the tool to the fault.")

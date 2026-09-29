@@ -98,10 +98,12 @@ def route_after_greet(state: State) -> Literal["review", "send"]:
 
 
 graph = StateGraph(State)
-for name, fn in [("classify", classify), ("formal_greet", formal_greet),
-                 ("casual_greet", casual_greet), ("warm_greet", warm_greet),
-                 ("review", review), ("send", send)]:
-    graph.add_node(name, fn)
+graph.add_node("classify", classify)
+graph.add_node("formal_greet", formal_greet)
+graph.add_node("casual_greet", casual_greet)
+graph.add_node("warm_greet", warm_greet)
+graph.add_node("review", review)
+graph.add_node("send", send)
 
 graph.add_edge(START, "classify")
 
@@ -112,9 +114,11 @@ graph.add_conditional_edges("classify", route_by_style, {
     "warm": "warm_greet",
 })
 
-# 3 + 6. IMPLICIT map, applied to every branch: they converge, then split again.
-for branch in ("formal_greet", "casual_greet", "warm_greet"):
-    graph.add_conditional_edges(branch, route_after_greet)
+# 3 + 6. IMPLICIT map: route_after_greet returns a node NAME, so no dict.
+#        All three branches converge on the same decision, then split again.
+graph.add_conditional_edges("formal_greet", route_after_greet)
+graph.add_conditional_edges("casual_greet", route_after_greet)
+graph.add_conditional_edges("warm_greet", route_after_greet)
 
 graph.add_edge("review", END)
 graph.add_edge("send", END)
@@ -122,11 +126,17 @@ graph.add_edge("send", END)
 app = graph.compile()
 
 
+def show(style: str) -> None:
+    """Run one style through the graph and print which path it took."""
+    r = app.invoke({"name": "Shubham", "style": style, "greeting": "", "status": ""})
+    print(f"{style:<7} -> {r['greeting']}")
+    print(f"{'':<7}    {r['status']}")
+
+
 if __name__ == "__main__":
-    for style in ("formal", "casual", "warm"):
-        r = app.invoke({"name": "Shubham", "style": style, "greeting": "", "status": ""})
-        print(f"{style:<7} -> {r['greeting']}")
-        print(f"{'':<7}    {r['status']}")
+    show("formal")
+    show("casual")
+    show("warm")
 
     print("\nOne graph, three paths in, two paths out. No node contains an if.")
 
