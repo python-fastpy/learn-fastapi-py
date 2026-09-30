@@ -1,0 +1,34 @@
+﻿uv : [09/30/26 17:37:35] WARNING  Error during get_tool('greet')    aggregate.py:172
+At line:1 char:302
++ ... tch {} } }; uv run python 20_tasks_versioning_extensions.py 2>err.txt ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([09/30/26 17:37...ggregate.py:172:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+                             from provider LocalProvider():                    
+                             'str' object has no attribute                     
+                             'matches'                                         
+Traceback (most recent call last):
+  File "C:\new-assistant-v6\learn-fastapi-py\learn-fastmcp-server\20_tasks_versioning_extensions.py", line 313, in 
+<module>
+    asyncio.run(main())
+    ~~~~~~~~~~~^^^^^^^^
+  File "C:\Users\6127854\AppData\Roaming\uv\python\cpython-3.13.6-windows-x86_64-none\Lib\asyncio\runners.py", line 
+195, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Users\6127854\AppData\Roaming\uv\python\cpython-3.13.6-windows-x86_64-none\Lib\asyncio\runners.py", line 
+118, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Users\6127854\AppData\Roaming\uv\python\cpython-3.13.6-windows-x86_64-none\Lib\asyncio\base_events.py", 
+line 725, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "C:\new-assistant-v6\learn-fastapi-py\learn-fastmcp-server\20_tasks_versioning_extensions.py", line 307, in main
+    await demo_versioning()
+  File "C:\new-assistant-v6\learn-fastapi-py\learn-fastmcp-server\20_tasks_versioning_extensions.py", line 92, in 
+demo_versioning
+    (await mcp.get_tool("greet", version="1.0")).version)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'version'

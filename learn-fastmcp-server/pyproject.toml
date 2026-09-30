@@ -1,0 +1,15 @@
+[project]
+name = "learn-fastmcp-server"
+version = "0.1.0"
+description = "The FastMCP server, consolidated -- every section of gofastmcp.com/servers/server in 5 runnable files"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp[tasks]>=4.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
