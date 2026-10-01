@@ -1,13 +1,15 @@
 # Learn OpenTelemetry
 
-Ten small files covering all three OTel pillars. Lessons 01-07 build one
-real trace pipeline from scratch: a span, a processor, two different
-exporters (console, then real network), how a trace survives crossing a
-network call to another service, the low-level `Context` mechanism all of
-that is actually built on, and the standard attribute names for tracing an
-LLM call. Lessons 08-10 cover the other two pillars (**metrics**, **logs**)
-and **baggage** -- propagation's other half, for your own business data
-instead of trace identity.
+Fifteen small files covering all three OTel pillars, end to end. Lessons
+01-07 build one real trace pipeline from scratch: a span, a processor, two
+different exporters (console, then real network), how a trace survives
+crossing a network call to another service, the low-level `Context`
+mechanism all of that is actually built on, and the standard attribute
+names for tracing an LLM call. Lessons 08-10 cover the other two pillars
+(**metrics**, **logs**) and **baggage** -- propagation's other half, for
+your own business data instead of trace identity. Lessons 11-15 fill in
+the span fields and production concerns the first ten never touched:
+status/exceptions, events/links, sampling, testing, and zero-code config.
 
 ## What OpenTelemetry is, in short
 
@@ -93,6 +95,11 @@ uv sync
 | 08 | [08_metrics.py](08_metrics.py) | The second pillar: `Counter`, `Histogram`, `UpDownCounter`, `MeterProvider`, and why metrics AGGREGATE in memory instead of exporting the instant you call `.add()` |
 | 09 | [09_logs.py](09_logs.py) | The third pillar: bridging Python's own `logging` module via `LoggingHandler`, and why a log emitted inside a span automatically carries that span's `trace_id`/`span_id` |
 | 10 | [10_baggage.py](10_baggage.py) | `opentelemetry.baggage` -- `inject`/`extract`'s OTHER use: carrying your own business data (not trace identity) across a network call, composing with lesson 05 in one `inject()` call |
+| 11 | [11_span_status_and_exceptions.py](11_span_status_and_exceptions.py) | `span.set_status(Status(StatusCode...))`, `span.record_exception(e)`, and the surprise: `start_as_current_span` auto-records an UNCAUGHT exception's event + ERROR status for you |
+| 12 | [12_span_events_and_links.py](12_span_events_and_links.py) | `span.add_event(...)` (a timestamped moment inside a span) and `Link(...)` (relating a span to a DIFFERENT, unrelated trace) -- the two fields every earlier lesson printed empty |
+| 13 | [13_samplers.py](13_samplers.py) | `ALWAYS_ON`/`ALWAYS_OFF`, `TraceIdRatioBased`, `ParentBased` -- deciding which traces get recorded at all, and why children inherit the root's decision |
+| 14 | [14_testing_with_in_memory_exporter.py](14_testing_with_in_memory_exporter.py) | `InMemorySpanExporter` -- asserting on real span data in a unit test, no console/network involved |
+| 15 | [15_env_config_and_grpc_exporter.py](15_env_config_and_grpc_exporter.py) | `OTEL_SERVICE_NAME` and friends -- configuring lessons 01-04 with zero code changes -- plus (reference only) the gRPC `OTLPSpanExporter` variant |
 
 ## Running
 
@@ -106,6 +113,11 @@ uv run python 07_genai_semantic_conventions.py
 uv run python 08_metrics.py
 uv run python 09_logs.py
 uv run python 10_baggage.py
+uv run python 11_span_status_and_exceptions.py
+uv run python 12_span_events_and_links.py
+uv run python 13_samplers.py
+uv run python 14_testing_with_in_memory_exporter.py
+uv run python 15_env_config_and_grpc_exporter.py
 
 # 02 and 03 are a pair -- start the receiver first and leave it running:
 uv run python 02_otlp_receiver.py       # terminal 1
@@ -145,3 +157,18 @@ uv run python 03_otlp_http_exporter.py  # terminal 2
   no value hard-coded on "service B"'s side -- it only has `carrier`. Part
   2's carrier must contain BOTH `traceparent` and `baggage` from one
   `inject()` call.
+- **Lesson 11**: spans 3 and 4 should print near-identical `"exception"`
+  events and ERROR status -- even though span 4 never called
+  `record_exception()`/`set_status()` itself.
+- **Lesson 12**: `batch-summary`'s own `trace_id` must differ from BOTH
+  linked items' `trace_id`s -- links relate traces, they don't merge them
+  (compare against lesson 01, where nesting DOES share one trace_id).
+- **Lesson 13**: part 3's `child is_recording` must match `root
+  is_recording` exactly, even though both use the same `ALWAYS_OFF`
+  sampler lesson's part 1 already showed drops everything.
+- **Lesson 14**: no console-formatted span JSON appears anywhere in the
+  output -- only your own `print()` calls and the assertions, which must
+  not raise.
+- **Lesson 15**: the two subprocess runs must print different
+  `service.name` values despite running the exact same `CHECK_SCRIPT` --
+  only the environment differs.
