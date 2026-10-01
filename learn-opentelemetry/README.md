@@ -1,9 +1,10 @@
 # Learn OpenTelemetry — Tracing Basics
 
-Six small files that build one real OTLP trace pipeline from scratch: a
+Seven small files that build one real OTLP trace pipeline from scratch: a
 span, a processor, two different exporters (console, then real network),
-how a trace survives crossing a network call to another service, and the
-low-level `Context` mechanism all of that is actually built on.
+how a trace survives crossing a network call to another service, the
+low-level `Context` mechanism all of that is actually built on, and the
+standard attribute names for tracing an LLM call.
 
 ## What OpenTelemetry is, in short
 
@@ -85,6 +86,7 @@ uv sync
 | 04 | [04_resource_and_id_generator.py](04_resource_and_id_generator.py) | `Resource` / `SERVICE_NAME` (who's emitting this?), a custom `IdGenerator` (how are trace/span IDs made?), and the trace_id/span_id nesting rule |
 | 05 | [05_explicit_tracer_and_propagation.py](05_explicit_tracer_and_propagation.py) | Using a `TracerProvider` without a global (`provider.get_tracer(...)` passed explicitly), `span.is_recording()` / `get_span_context()`, and `inject()`/`extract()` -- carrying one trace across a network call |
 | 06 | [06_context.py](06_context.py) | `opentelemetry.context` -- the primitive underneath `start_as_current_span` AND `inject`/`extract`: `set_value`, `attach`, `get_value`, `detach` |
+| 07 | [07_genai_semantic_conventions.py](07_genai_semantic_conventions.py) | The `gen_ai.*` standard attributes for an LLM call, and (reference section) how Braintrust auto-maps them onto its own fields |
 
 ## Running
 
@@ -94,6 +96,7 @@ uv run python 01_console_exporter.py
 uv run python 04_resource_and_id_generator.py
 uv run python 05_explicit_tracer_and_propagation.py
 uv run python 06_context.py
+uv run python 07_genai_semantic_conventions.py
 
 # 02 and 03 are a pair -- start the receiver first and leave it running:
 uv run python 02_otlp_receiver.py       # terminal 1
