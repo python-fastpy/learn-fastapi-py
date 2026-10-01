@@ -1,0 +1,17 @@
+[project]
+name = "learn-opentelemetry"
+version = "0.1.0"
+description = "OpenTelemetry tracing basics: spans, processors, and two exporters (console + OTLP)"
+requires-python = ">=3.11"
+dependencies = [
+    "opentelemetry-api>=1.45.0",
+    "opentelemetry-sdk>=1.45.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
