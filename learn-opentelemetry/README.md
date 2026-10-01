@@ -1,10 +1,13 @@
-# Learn OpenTelemetry — Tracing Basics
+# Learn OpenTelemetry
 
-Seven small files that build one real OTLP trace pipeline from scratch: a
-span, a processor, two different exporters (console, then real network),
-how a trace survives crossing a network call to another service, the
-low-level `Context` mechanism all of that is actually built on, and the
-standard attribute names for tracing an LLM call.
+Ten small files covering all three OTel pillars. Lessons 01-07 build one
+real trace pipeline from scratch: a span, a processor, two different
+exporters (console, then real network), how a trace survives crossing a
+network call to another service, the low-level `Context` mechanism all of
+that is actually built on, and the standard attribute names for tracing an
+LLM call. Lessons 08-10 cover the other two pillars (**metrics**, **logs**)
+and **baggage** -- propagation's other half, for your own business data
+instead of trace identity.
 
 ## What OpenTelemetry is, in short
 
@@ -87,16 +90,22 @@ uv sync
 | 05 | [05_explicit_tracer_and_propagation.py](05_explicit_tracer_and_propagation.py) | Using a `TracerProvider` without a global (`provider.get_tracer(...)` passed explicitly), `span.is_recording()` / `get_span_context()`, and `inject()`/`extract()` -- carrying one trace across a network call |
 | 06 | [06_context.py](06_context.py) | `opentelemetry.context` -- the primitive underneath `start_as_current_span` AND `inject`/`extract`: `set_value`, `attach`, `get_value`, `detach` |
 | 07 | [07_genai_semantic_conventions.py](07_genai_semantic_conventions.py) | The `gen_ai.*` standard attributes for an LLM call, and (reference section) how Braintrust auto-maps them onto its own fields |
+| 08 | [08_metrics.py](08_metrics.py) | The second pillar: `Counter`, `Histogram`, `UpDownCounter`, `MeterProvider`, and why metrics AGGREGATE in memory instead of exporting the instant you call `.add()` |
+| 09 | [09_logs.py](09_logs.py) | The third pillar: bridging Python's own `logging` module via `LoggingHandler`, and why a log emitted inside a span automatically carries that span's `trace_id`/`span_id` |
+| 10 | [10_baggage.py](10_baggage.py) | `opentelemetry.baggage` -- `inject`/`extract`'s OTHER use: carrying your own business data (not trace identity) across a network call, composing with lesson 05 in one `inject()` call |
 
 ## Running
 
 ```bash
-# 01, 04, 05 and 06 are fully standalone:
+# everything except 02/03 is fully standalone:
 uv run python 01_console_exporter.py
 uv run python 04_resource_and_id_generator.py
 uv run python 05_explicit_tracer_and_propagation.py
 uv run python 06_context.py
 uv run python 07_genai_semantic_conventions.py
+uv run python 08_metrics.py
+uv run python 09_logs.py
+uv run python 10_baggage.py
 
 # 02 and 03 are a pair -- start the receiver first and leave it running:
 uv run python 02_otlp_receiver.py       # terminal 1
@@ -126,3 +135,13 @@ uv run python 03_otlp_http_exporter.py  # terminal 2
   span starts and AFTER it ends, with exactly one key while it's open --
   proof that `start_as_current_span` is just an `attach`/`detach` pair
   around your code, not some separate span-only mechanism.
+- **Lesson 08**: `greetings.count{'language': 'en'}` must print `3`, not
+  two separate lines of `1` and `2` -- that's the aggregation. Nothing
+  prints at all until `provider.shutdown()` runs.
+- **Lesson 09**: the first log's `trace_id`/`span_id` must be all zeros;
+  the second log's must be non-zero AND match the `do-work` span printed
+  right after it.
+- **Lesson 10**: part 3's `tenant.id` must come back as `acme-corp` with
+  no value hard-coded on "service B"'s side -- it only has `carrier`. Part
+  2's carrier must contain BOTH `traceparent` and `baggage` from one
+  `inject()` call.
