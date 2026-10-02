@@ -1,0 +1,19 @@
+[project]
+name = "learn-agents"
+version = "0.1.0"
+description = "Agents and sub-agents from scratch: the loop, tools, memory, planning, guardrails, evals, and tracing -- no framework required"
+requires-python = ">=3.11"
+dependencies = [
+    "opentelemetry-api>=1.45.0",
+    "opentelemetry-sdk>=1.45.0",
+    "azure-identity>=1.17",
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
