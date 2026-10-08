@@ -43,55 +43,26 @@ Maps to: shared/workflows/loader.py (parse), shared/workflows/routes.py
 import asyncio
 import tempfile
 import textwrap
-from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
 from fastmcp import FastMCP, Client
 from starlette.responses import JSONResponse
+
+from greeting_tools import greet, farewell, translate
+from workflow_def import WorkflowDef
 
 mcp = FastMCP(name="workflow-greetings")
 
 
 # -- The three tools the workflows choose between -----------------------------
-
-@mcp.tool
-def greet(name: str) -> dict:
-    """Say hello to someone."""
-    return {"message": f"Hello, {name}!"}
-
-
-@mcp.tool
-def farewell(name: str) -> dict:
-    """Say goodbye to someone."""
-    return {"message": f"Goodbye, {name}!"}
-
-
-@mcp.tool
-def translate(text: str, language: str) -> dict:
-    """Translate text into another language (simulated)."""
-    return {"translated": f"[{language}] {text}"}
+# Imperative registration (same style as lesson 01's Style 2) -- these are
+# plain functions shared with lessons 11 and 12, not redefined here.
+mcp.tool(greet)
+mcp.tool(farewell)
+mcp.tool(translate)
 
 
 # -- Workflow loader (simplified shared/workflows/loader.py) ------------------
-
-@dataclass
-class WorkflowDef:
-    name: str
-    description: str
-    tools: list[str] = field(default_factory=list)
-    trigger_patterns: list[str] = field(default_factory=list)
-    content: str = ""
-
-    @classmethod
-    def from_markdown(cls, text: str) -> "WorkflowDef":
-        """Split '---\\nYAML\\n---\\nmarkdown' into the contract and the steps."""
-        if not text.startswith("---"):
-            raise ValueError("workflow must start with YAML frontmatter (---)")
-        _, frontmatter, content = text.split("---", 2)
-        meta = yaml.safe_load(frontmatter)
-        return cls(content=content.strip(), **meta)
-
 
 def load_workflows(directory: str) -> list[WorkflowDef]:
     """Parse every *.md in a directory into a WorkflowDef."""

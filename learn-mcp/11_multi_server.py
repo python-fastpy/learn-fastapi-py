@@ -32,35 +32,32 @@ Run:  uv run python 11_multi_server.py
 
 Maps to: mcp_server_registry.py (registration + capability cache),
 mcp_client_manager.py (per-server clients), mcp_protocol.py (routing)
+
+NOTE ON A SECOND WAY TO DO THIS: FastMCP itself has a built-in answer to
+"which server owns this tool" -- mount() and create_proxy() (see
+learn-fastmcp-server lesson 14), which combine multiple servers into ONE
+that a client talks to directly, with namespacing handled for you. The
+hand-rolled ServerRegistry here is what this codebase's production
+backend actually runs (it also does per-server health/capability caching
+mount() doesn't), but if you're building a new server from scratch and
+don't need that, mount() is less code for the same routing problem.
 """
 
 import asyncio
 from fastmcp import FastMCP, Client
 
+from greeting_tools import greet, farewell, translate
+
 # -- Two servers, each owning part of the greeting job ------------------------
+# Same three functions as lessons 10 and 12 (greeting_tools.py), just split
+# across two servers here instead of registered on one.
 
 greeting_server = FastMCP(name="greeting-server")
-
-
-@greeting_server.tool
-def greet(name: str) -> dict:
-    """Say hello to someone."""
-    return {"source": "greeting-server", "message": f"Hello, {name}!"}
-
-
-@greeting_server.tool
-def farewell(name: str) -> dict:
-    """Say goodbye to someone."""
-    return {"source": "greeting-server", "message": f"Goodbye, {name}!"}
-
+greeting_server.tool(greet)
+greeting_server.tool(farewell)
 
 translate_server = FastMCP(name="translate-server")
-
-
-@translate_server.tool
-def translate(text: str, language: str) -> dict:
-    """Translate text into another language (simulated)."""
-    return {"source": "translate-server", "translated": f"[{language}] {text}"}
+translate_server.tool(translate)
 
 
 # -- The registry (simplified mcp_server_registry.py) ------------------------

@@ -23,6 +23,13 @@ COST: every parent-level list_tools() call fans out to every child. A local
 child is fast; a remote, HTTP-proxied child is much slower and that delay
 lands on the parent. Keep the tree shallow, or cache.
 
+NOTE ON A SECOND WAY TO DO THIS: learn-mcp lesson 11 solves the same
+"which server owns this tool" problem by hand-rolling a ServerRegistry
+instead of mount()ing. That's the pattern a real production backend
+tends to reach for once it also needs per-server health checks and a
+capability cache that mount() doesn't give you -- mount() here is less
+code when you don't need that.
+
 Run:  uv run python 14_composition.py
 """
 

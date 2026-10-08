@@ -16,7 +16,7 @@ LangGraph, deployment) is mapped in the roadmap:
 | # | Topic | Priority | Status | Lesson folder |
 |---|---|---|---|---|
 | 1 | Advanced RAG and retrieval evals | High | ⬜ Not started | — |
-| 2 | Agent design patterns and agent evals | High | ⬜ Not started | — |
+| 2 | Agent design patterns and agent evals | High | 🟨 In progress | [`learn-agents`](learn-agents/) |
 | 3 | LLMOps: the loop after launch | High | ⬜ Not started | — |
 | 4 | Real-API lab (see the concepts on a real model) | High | ⬜ Not started | — |
 | 5 | Multimodal (images, PDFs) | Medium | ⬜ Not started | — |
@@ -63,19 +63,25 @@ one thing (chunking, hybrid, reranker), and show the number moved.
 `learn-langgraph`) but not the named patterns interviewers and teams
 use, or how to test an agent beyond its final answer.
 
-- [ ] ReAct (reason → act → observe loop), the pattern behind most agents
-- [ ] Plan-and-execute: write a plan first, then execute the steps
+`learn-agents` now covers the named-pattern half from scratch (mock
+decision function, then a real model in lesson 08) — the eval and
+"when not to" half is still open:
+
+- [x] ReAct (reason → act → observe loop), the pattern behind most agents → [`learn-agents/01`](learn-agents/01_agent_loop_from_scratch.py), [`06`](learn-agents/06_planning_strategies.py)
+- [x] Plan-and-execute: write a plan first, then execute the steps → [`learn-agents/06`](learn-agents/06_planning_strategies.py) (a concrete case where it loses to ReAct)
 - [ ] Reflection / self-critique: generate → critique → revise
 - [ ] Router: classify the request, send it to a specialised prompt/agent
-- [ ] Multi-agent: supervisor/worker, handoffs, debate (partly in `learn-mcp/16`)
+- [x] Multi-agent: supervisor/worker, handoffs, debate (partly in `learn-mcp/16`) → [`learn-agents/03`](learn-agents/03_subagents_as_tools.py) (subagent-as-tool), [`04`](learn-agents/04_delegation_vs_handoff.py) (delegation vs. handoff, call-stack depth measured both ways)
 - [ ] When NOT to use an agent: a fixed workflow is cheaper and more reliable
-- [ ] Agent memory design: short-term (messages) vs long-term (stored facts), what to save, when to forget
-- [ ] Stopping conditions, budgets, and loop detection
+- [x] Agent memory design: short-term (messages) vs long-term (stored facts), what to save, when to forget → [`learn-agents/05`](learn-agents/05_memory.py), plus context-window truncation/summarization at [`07`](learn-agents/07_context_window_management.py)
+- [ ] Stopping conditions, budgets, and loop detection (lesson 08 has a bare `max_steps`; no loop-detection demo yet)
 - [ ] **Trajectory evals:** did it call the right tools, in a sensible order, without wasted steps?
 - [ ] **Task-success evals:** end-state checks (file exists, test passes, ticket updated)
 
 **Done when:** you can build the same task as a workflow and as an
-agent, then compare success rate, cost and steps on an eval set.
+agent, then compare success rate, cost and steps on an eval set. (The
+eval half can likely reuse `learn-ai-advanced/02`'s judge/scoring
+machinery against `learn-agents`' loops instead of building a new harness.)
 
 ---
 

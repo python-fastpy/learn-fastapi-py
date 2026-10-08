@@ -28,9 +28,16 @@ live account -- it documents what Braintrust's own docs say): how one
 real backend, Braintrust, maps these standard names onto its own fields.
 
 DOCUMENTATION
-    OTel GenAI attribute registry (the gen_ai.* names themselves):
-        https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/
-    OTel GenAI spans spec (the "inference span" shape, naming convention):
+    OTel GenAI attribute registry -- EVERY gen_ai.* field, with type,
+    description and examples (request/response/usage/agent/tool/workflow/
+    embeddings/retrieval/evaluation/...). The registry moved out of the
+    main semantic-conventions repo into its own; the old opentelemetry.io
+    URL below is now a deprecated stub that just redirects -- use the
+    GitHub one, it's the current source of truth:
+        https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/registry/attributes/gen-ai.md
+        (deprecated redirect: https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/)
+    OTel GenAI spans spec (which fields are REQUIRED/RECOMMENDED per span
+    type -- "inference", "execute_tool", "invoke_agent", ...):
         https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md
     Braintrust's OpenTelemetry integration (the mapping table in Part 2):
         https://www.braintrust.dev/docs/integrations/sdk-integrations/opentelemetry

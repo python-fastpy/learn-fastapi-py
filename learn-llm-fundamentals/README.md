@@ -931,6 +931,7 @@ models from scratch. Each stage maps to where this repo teaches it.
 | 3 | Embeddings, chunking, vector store, grounding | `learn-ai-advanced/01` | ✅ |
 | 4 | Agent loop, tools, sandbox, permissions | `learn-mini-claude/01–05` | ✅ |
 | 4 | LLM vs agent vs subagent | `learn-mini-claude/06` | ✅ |
+| 4 | Agent design patterns: ReAct, Plan-and-Execute, memory, delegation vs. handoff (stack depth measured) | `learn-agents/01–08` | ✅ |
 | 4 | MCP servers, clients, multi-server | `learn-mcp/01–16` | ✅ |
 | 4 | Graph orchestration, checkpoints, HITL, subgraphs | `learn-langgraph/01–13` | ✅ |
 | 4 | Agent UIs, generative UI | `learn-copilotkit/` | ✅ |
@@ -943,8 +944,10 @@ models from scratch. Each stage maps to where this repo teaches it.
 | 7 | Deploy to AWS (Lambda, Fargate, IaC) | `project-book-store/`, `aws/` | ✅ |
 | 7 | System design for scale | `system-design/` | ✅ |
 
-**Not in this repo yet: learn these next.** The full checklist, with
-subtopics and progress tracking, is in
+**Not in this repo yet: learn these next.** The one-page version of this
+whole table plus the missing half is
+[`AI_ENGINEER_ROADMAP.md`](../AI_ENGINEER_ROADMAP.md); the full checklist,
+with subtopics and progress tracking, is in
 [`AI_ENGINEER_LEARNING_BACKLOG.md`](../AI_ENGINEER_LEARNING_BACKLOG.md).
 
 | Topic | Why it matters | Start with |

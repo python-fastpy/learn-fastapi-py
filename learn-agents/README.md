@@ -79,26 +79,37 @@ Lessons 01–07 need no `.env` at all.
 
 ## Beyond this folder: the rest of "AI engineer"
 
-Agents are one topic among many. Here's where the other big ones already
-live in this workspace, and what's still a genuine gap:
+**Correction, found after this folder was built:** this workspace already
+has a much bigger existing curriculum than this README originally
+accounted for — `learn-mini-claude`, `learn-llm-fundamentals`,
+`learn-ai-advanced`, `learn-langgraph`, `learn-copilotkit`. The honest
+picture, not the guess:
 
-**Already covered elsewhere**
-- Building tools themselves (MCP) → [`learn-fastmcp-server`](../learn-fastmcp-server/), [`learn-fastmcp-client`](../learn-fastmcp-client/)
-- Multi-agent orchestration, workflows, human-in-the-loop, LangGraph → [`learn-mcp`](../learn-mcp/) (lessons 06, 10, 12, 13, 16)
-- Observability/tracing for LLM calls (the `gen_ai.*` conventions) → [`learn-opentelemetry`](../learn-opentelemetry/) (lesson 07), and could be wired directly onto this folder's lesson 01/08 loops
-- Cost control via a fast-path before falling back to a model → `learn-mcp/12_workflow_orchestration.py`
+**This folder's real relationship to `learn-mini-claude`**
+[`learn-mini-claude`](../learn-mini-claude/) already has its own agent
+loop (lesson 01), its own subagents (lessons 06, 11, with real
+measurements), hooks, parallel tool calls, and todo planning — built
+around actual file/shell tools with a sandbox, not a mock greet/translate
+domain. This folder doesn't replace that; it teaches the SAME core ideas
+(the loop, subagent-as-tool, delegation vs. handoff) from a from-scratch,
+no-file-system angle, plus three things `learn-mini-claude` doesn't cover:
+delegation-vs-handoff with the call-stack depth actually measured (04),
+ReAct vs. Plan-and-Execute as named, contrasted strategies (06), and
+context-window truncation vs. summarization (07).
 
-**Real gaps — not covered anywhere in this workspace yet**
-- **Guardrails** — input/output validation, scoping what an agent may touch, beyond the tool-gating `learn-mcp/10` already shows
-- **Evaluation** — systematically measuring whether an agent did a good job, not just whether it ran
-- **RAG / embeddings / vector databases** — grounding an agent in your own documents
-- **Fine-tuning** — training vs. prompting a model for a specific task
-- **Prompt engineering as its own discipline** — beyond "write a reasonable system prompt"
-- **Deployment/serving** — running an agent as a production service (latency, concurrency, cost at scale)
+**Already covered elsewhere in this workspace** (not gaps — corrected
+from an earlier, wrong version of this section)
+- RAG / embeddings / vector search → [`learn-ai-advanced/01`](../learn-ai-advanced/01_rag_embeddings_and_retrieval.py)
+- Evals, golden datasets, LLM-as-judge → [`learn-ai-advanced/02`](../learn-ai-advanced/02_evals_and_llm_judge.py)
+- Observability/tracing, token/cost tracking → [`learn-ai-advanced/03`](../learn-ai-advanced/03_observability_and_tracing.py), [`learn-opentelemetry`](../learn-opentelemetry/) (the `gen_ai.*` wire conventions)
+- Guardrails, PII redaction, prompt injection defence → [`learn-ai-advanced/04`](../learn-ai-advanced/04_guardrails_and_prompt_injection.py)
+- Prompt engineering, context engineering, sampling, tool-calling fundamentals → [`learn-llm-fundamentals`](../learn-llm-fundamentals/) (all 8 lessons)
+- Multi-agent orchestration, checkpointers, human-in-the-loop, streaming → [`learn-langgraph`](../learn-langgraph/), [`learn-mcp`](../learn-mcp/) (lessons 06, 10, 12, 13, 16)
+- Agent-facing UIs, generative UI → [`learn-copilotkit`](../learn-copilotkit/)
 
-Agents, subagents, and the surrounding loop mechanics are the part you
-explicitly asked for, and they're the part this folder covers deeply. Say
-the word if you want any of the gaps above as their own project next —
-guardrails and evaluation are the most natural follow-ons to this folder
-specifically, since they slot directly onto the loop lessons 01-08 already
-built.
+**The single master map**: [`../AI_ENGINEER_ROADMAP.md`](../AI_ENGINEER_ROADMAP.md)
+covers every folder in this workspace, not just this one — start there,
+not here, for "what's covered vs. missing" across the whole repo. The
+real remaining gaps (agent trajectory/task-success evals, reflection,
+router pattern, "when not to use an agent," fine-tuning, multimodal,
+local models) are tracked in [`../AI_ENGINEER_LEARNING_BACKLOG.md`](../AI_ENGINEER_LEARNING_BACKLOG.md).

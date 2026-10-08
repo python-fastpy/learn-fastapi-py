@@ -45,46 +45,27 @@ Maps to: langgraph_mcp_orchestrator.py (the loop), fast_path_matcher.py
 import asyncio
 import os
 import re
-from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP, Client
 
+from greeting_tools import greet, farewell, translate
+from workflow_def import WorkflowDef
+
 load_dotenv()
 
 # -- The servers (lesson 11) --------------------------------------------------
+# Same shared functions as lessons 10 and 11 -- no local redefinitions.
 
 greeting_server = FastMCP(name="greeting-server")
+greeting_server.tool(greet)
+greeting_server.tool(farewell)
+
 translate_server = FastMCP(name="translate-server")
+translate_server.tool(translate)
 
 
-@greeting_server.tool
-def greet(name: str) -> dict:
-    """Say hello to someone."""
-    return {"message": f"Hello, {name}!"}
-
-
-@greeting_server.tool
-def farewell(name: str) -> dict:
-    """Say goodbye to someone."""
-    return {"message": f"Goodbye, {name}!"}
-
-
-@translate_server.tool
-def translate(text: str, language: str = "French") -> dict:
-    """Translate text into another language (simulated)."""
-    return {"translated": f"[{language}] {text}"}
-
-
-# -- The workflows (lesson 10, inlined) ---------------------------------------
-
-@dataclass
-class WorkflowDef:
-    name: str
-    description: str
-    tools: list[str] = field(default_factory=list)
-    trigger_patterns: list[str] = field(default_factory=list)
-
+# -- The workflows (lesson 10's WorkflowDef, these as plain literals) --------
 
 WORKFLOWS = [
     WorkflowDef(

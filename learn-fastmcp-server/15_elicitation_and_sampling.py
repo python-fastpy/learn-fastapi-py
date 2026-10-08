@@ -24,6 +24,15 @@ between rounds by itself. To carry a value (like a name) from round 1 to
 round 3, stash it in ctx.request_state, a string FastMCP seals so the
 client can't read or tamper with it.
 
+NOTE ON A SECOND WAY TO DO THIS: learn-mcp lesson 06 solves the exact same
+problem -- pause a tool, ask, resume -- with a hand-rolled convention
+(a continuation_token carried in _meta) that predates this spec-level
+mechanism and is NOT wire-compatible with it. That convention is what a
+real production codebase (this repo's own Reuters backend) actually runs
+today; InputRequiredResult here is what the MCP spec itself now
+standardizes. Worth knowing both, but don't mix the two approaches in one
+server.
+
 Run:  uv run python 15_elicitation_and_sampling.py
 """
 

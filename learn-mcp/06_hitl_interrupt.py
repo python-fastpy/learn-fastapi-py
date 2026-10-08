@@ -55,6 +55,16 @@ Maps to production (shared/interrupts/, story-drafting/src/interrupts/):
   SkillInterrupt(type, message, payload, actions) ~ ask() below. The
   orchestrator checkpoints to DynamoDB instead of a dict, and .block() keeps
   the payload out of the agent's context via _meta.forwarded_blocks (L09).
+
+NOTE ON A SECOND WAY TO DO THIS: FastMCP itself now ships an official,
+spec-level version of the same "ask, then resume" idea --
+`InputRequiredResult` (see learn-fastmcp-server lesson 15). The mechanism
+here predates that and is NOT the same wire shape (this uses a hand-rolled
+continuation_token in _meta; FastMCP's uses input_requests/input_responses
+on the result itself). Both solve "pause a tool, ask, resume" -- this one
+is the production convention this codebase actually runs; lesson 15 is
+what the MCP spec itself now standardizes. Know both; don't mix them in
+one server.
 """
 
 import asyncio
