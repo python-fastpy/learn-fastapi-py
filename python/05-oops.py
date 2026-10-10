@@ -282,10 +282,28 @@ class Color:
     r: int; g: int; b: int
 # Color(255,0,0).r = 100  # FrozenInstanceError!
 
+# ---- WITH @dataclass (2 lines) ----
 @dataclass(order=True)    # enables <, >, sorted()
 class Score:
     value: int; player: str = ""
 print(sorted([Score(85,"A"), Score(92,"B"), Score(78,"C")]))  # [78, 85, 92]
+
+# ---- WITHOUT @dataclass — same behavior, written by hand (~10 lines) ----
+class ScoreManual:
+    def __init__(self, value, player=""):
+        self.value, self.player = value, player
+    def __repr__(self):
+        return f"ScoreManual(value={self.value!r}, player={self.player!r})"
+    def __eq__(self, other):
+        return NotImplemented if other.__class__ is not self.__class__ \
+            else (self.value, self.player) == (other.value, other.player)
+    def __lt__(self, other):   # order=True also needs le/gt/ge (same pattern)
+        return NotImplemented if other.__class__ is not self.__class__ \
+            else (self.value, self.player) < (other.value, other.player)
+print(sorted([ScoreManual(85,"A"), ScoreManual(92,"B"), ScoreManual(78,"C")]))
+# [ScoreManual(value=78, player='C'), ScoreManual(value=85, player='A'), ScoreManual(value=92, player='B')]
+# same sort result as Score above — @dataclass just writes ScoreManual's
+# methods for you, from the `value: int; player: str = ""` field list.
 
 # ── 13. __slots__ — Memory Optimization ──────────────────────────────
 class WithSlots:

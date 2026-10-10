@@ -150,7 +150,33 @@ def greet_strict(name: str) -> str:
 # ------------------------------------------------------- 7. annotations
 # Behavioural hints for the CLIENT UI -- they cost no prompt tokens and
 # enforce nothing. readOnlyHint is the one clients actually act on (skipping
-# confirmation prompts for safe calls).
+# confirmation prompts for safe calls). Five fields total: title,
+# readOnlyHint, destructiveHint, idempotentHint, openWorldHint.
+#
+# A server can set these to whatever it wants -- nothing checks that a
+# "destructiveHint=False" tool actually IS safe. Per the MCP spec itself:
+# never make a trust/security decision from annotations on an untrusted
+# server. Fine as a UX nicety for servers you already trust; not a
+# substitute for real auth (lesson 05) or a permission gate.
+#
+# WHEN TO USE: set these on every tool in a server you trust and expect to
+# be used by a client with a UI or an autonomous agent loop -- cost is one
+# keyword argument per tool, and clients that don't understand them just
+# ignore them.
+#
+#   readOnlyHint=True    -> client can skip the "allow this tool?" prompt
+#                           (e.g. a search/lookup tool runs silently;
+#                           delete_greeting below still always asks)
+#   idempotentHint=True  -> safe for a client to auto-retry after a
+#                           flaky/ambiguous network timeout, since calling
+#                           it twice has the same effect as once (do NOT
+#                           set this on something like send_email --
+#                           retrying would send it twice)
+#   openWorldHint=False  -> tells a UI "internal data only", useful for a
+#                           privacy/data-exfiltration warning on tools that
+#                           reach the open internet (openWorldHint=True)
+#   title                -> a human-readable label for a tool-picker menu,
+#                           instead of showing the raw function name
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Greet Someone",
