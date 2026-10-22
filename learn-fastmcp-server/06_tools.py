@@ -204,6 +204,17 @@ def farewell(name: str) -> str:
 
 mcp.add_tool(Tool.from_function(farewell, name="say_goodbye"))
 
+# Same idea as lesson 07's mcp.resource("uri")(fn) pattern: call the
+# decorator with no `@`, then apply it to an existing function yourself --
+# useful for registering ONE function under several tool names.
+def greet_formal_or_casual(name: str) -> str:
+    """One function, reachable under two different tool names."""
+    return f"Greetings, {name}."
+
+
+mcp.tool(name="greet_formally_alt")(greet_formal_or_casual)
+mcp.tool(name="greet_casually_alt")(greet_formal_or_casual)
+
 
 async def main():
     async with Client(mcp) as client:

@@ -42,6 +42,7 @@ find, cross-referenced against every folder as it stood after
 | 4 | MCP servers, clients, multi-server routing | `learn-fastmcp-server/`, `learn-fastmcp-client/`, `learn-mcp/01-16` | ✅ |
 | 4 | Graph orchestration, checkpoints, HITL, subgraphs, streaming | `learn-langgraph/01-15` | ✅ |
 | 4 | Agent-facing UIs, generative UI | `learn-copilotkit/` | ✅ |
+| 4 | **Minimal "app + AI assistant + MCP" walkthrough, 3 files, hardcoded tools -> discovered tools** | **`learn-ai-assistant-and-mcp/`** | ✅ |
 | 5 | Evals, golden datasets, LLM-as-judge | `learn-ai-advanced/02` | ✅ |
 | 5 | Guardrails, PII redaction, prompt injection | `learn-ai-advanced/04` | ✅ |
 | 6 | Tracing, token/cost tracking, `gen_ai.*` OTEL conventions | `learn-ai-advanced/03`, `learn-opentelemetry/` | ✅ |
@@ -49,14 +50,16 @@ find, cross-referenced against every folder as it stood after
 | 6 | Retries, error handling, streaming | `learn-langgraph/10,12`, `learn-mcp/06` | ✅ |
 | 7 | Deploy to AWS, system design for scale | `project-book-store/`, `aws/`, `system-design/` | ✅ |
 
-**Row in bold** = added by `learn-agents`, the newest folder. Everything
-else predates it — `learn-agents` fills specific named gaps (agent design
-*patterns*, call-stack mechanics of delegation vs. handoff) rather than
-re-teaching stage 4 from zero; see `learn-agents/README.md`'s own
-"Beyond this folder" section for exactly how it relates to
-`learn-mini-claude`, which covers the same stage in more operational depth
-(real file tools, a sandbox, hooks) but without naming ReAct/Plan-and-Execute
-or measuring the delegation-vs-handoff stack difference.
+**Rows in bold** = added most recently. `learn-agents` fills specific
+named gaps (agent design *patterns*, call-stack mechanics of delegation
+vs. handoff) rather than re-teaching stage 4 from zero; see
+`learn-agents/README.md`'s own "Beyond this folder" section for how it
+relates to `learn-mini-claude`. `learn-ai-assistant-and-mcp` is the
+"smallest possible" on-ramp — three files, one app, one MCP server, no
+config file or CLI loop — for someone who wants the "add AI + MCP to an
+app" question answered in the fewest moving parts before going to
+`learn-mini-claude` for the fuller version (`.mcp.json`, multiple servers,
+permission gates, hooks).
 
 ## Missing
 

@@ -1,0 +1,18 @@
+[project]
+name = "learn-ai-assistant-and-mcp"
+version = "0.1.0"
+description = "A simple reading-list app, grown in 3 steps: plain app -> AI assistant -> MCP (works like Claude Code)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=4.0.0",
+    "azure-identity>=1.17",
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
