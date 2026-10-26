@@ -49,6 +49,21 @@ Example: many traditional               Example: DNS, many NoSQL
   relational/banking systems              databases (Cassandra, DynamoDB)
 ```
 
+```
+PARTITION SCENARIO — the same write under CP vs AP
+  ① network link between Node A and Node B is cut:   A ──╳── B
+        │
+        ▼
+  ② client sends write "x=2" to Node A   (both nodes currently "x=1")
+        │
+        ├─ CP ─▶ ③ A can't confirm with B ──▶ ✗ error, write refused
+        │          ④ partition heals ──▶ client retries ──▶ ✓ both "x=2"
+        │
+        └─ AP ─▶ ③ A accepts "x=2" ──▶ ✓ 200 OK
+                   a reader on B still gets "x=1"  (answered, but stale)
+                   ④ partition heals ──▶ replicate/reconcile ──▶ both "x=2"
+```
+
 ### Strong vs. Eventual Consistency (the practical version of this)
 
 ```
@@ -61,6 +76,20 @@ Requires coordination between          for a short window, until the
 Slower writes (must sync first)        Fast writes, fast everywhere-reads
 Example: a bank balance                Example: a "like" count, or a
                                           social media follower count
+```
+
+```
+STRONG-CONSISTENCY WRITE — sync before confirming
+  ① Client ──write "balance=90"──▶ Node A
+        │
+        ▼
+  ② Node A ──replicate──▶ Node B, Node C   (client is still waiting)
+        │
+        ▼
+  ③ replicas confirmed? ── no / timeout ──▶ ✗ write fails, not visible
+        │ yes
+        ▼
+  ④ ✓ ack to client ──▶ any later read, on ANY node, sees "balance=90"
 ```
 
 ```
@@ -81,6 +110,21 @@ just not instantly.
   (even if others might not yet) — a common middle ground.
 - **Causal consistency**: if event B happened because of event A,
   everyone sees A before B (but unrelated events can appear in any order).
+
+```
+READ-YOUR-WRITES — routing one user's read
+  ① User U writes post #7 ──▶ Leader ──▶ ✓ saved as version v42
+        │
+        ▼
+  ② U reloads feed; request carries "my last write = v42"
+        │
+        ▼
+  ③ replica has applied ≥ v42 ? ── no ──▶ read from the Leader instead
+        │ yes                                    │
+        ▼                                        ▼
+  ④ ✓ U sees post #7 (from replica)        ✓ U sees post #7 (from Leader)
+     other users may briefly not see it yet — that's still allowed
+```
 
 ---
 

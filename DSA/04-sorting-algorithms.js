@@ -79,6 +79,11 @@ function bubbleSort(arr) {
     } while (swapped);
     return arr;
 }
+// TRACE bubbleSort([5, 1, 4, 2])
+//   pass 1  [1, 4, 2, 5]   swaps 5<->1, 5<->4, 5<->2   (5 bubbled to the end)
+//   pass 2  [1, 2, 4, 5]   swap 4<->2                  swapped = true
+//   pass 3  [1, 2, 4, 5]   no swaps -> swapped = false -> exit loop
+//   return [1, 2, 4, 5]
 
 const bArr = [8, 20, -2, 4, -6];
 bubbleSort(bArr);
@@ -118,6 +123,11 @@ function selectionSort(arr) {
     }
     return arr;
 }
+// TRACE selectionSort([5, 1, 4, 2])
+//   i=0  minIdx=1 (1)  swap idx 0<->1   [1, 5, 4, 2]
+//   i=1  minIdx=3 (2)  swap idx 1<->3   [1, 2, 4, 5]
+//   i=2  minIdx=2 (4)  minIdx === i, no swap   [1, 2, 4, 5]
+//   return [1, 2, 4, 5]
 
 const sArr = [8, 20, -2, 4, -6];
 selectionSort(sArr);
@@ -159,6 +169,11 @@ function insertionSort(arr) {
     }
     return arr;
 }
+// TRACE insertionSort([5, 1, 4, 2])
+//   i=1  key=1  shift 5          -> arr[0] = 1   [1, 5, 4, 2]
+//   i=2  key=4  shift 5          -> arr[1] = 4   [1, 4, 5, 2]
+//   i=3  key=2  shift 5, shift 4 -> arr[1] = 2   [1, 2, 4, 5]
+//   return [1, 2, 4, 5]
 
 const iArr = [8, 20, -2, 4, -6];
 insertionSort(iArr);
@@ -208,6 +223,12 @@ function quickSort(arr) {
     }
     return [...quickSort(left), pivot, ...quickSort(right)];
 }
+// TRACE quickSort([5, 1, 4, 2])
+//   [5, 1, 4, 2]  pivot=(2)  left=[1]  right=[5, 4]
+//     quickSort([1])     -> [1]          (length < 2)
+//     quickSort([5, 4])  pivot=(4)  left=[]  right=[5]
+//       -> [...[], 4, ...[5]] = [4, 5]
+//   -> [...[1], 2, ...[4, 5]] = [1, 2, 4, 5]
 
 console.log("quick sort:", quickSort([8, 20, -2, 4, -6])); // [-6, -2, 4, 8, 20]
 
@@ -252,6 +273,11 @@ function mergeSort(arr) {
     const right = mergeSort(arr.slice(mid));
     return merge(left, right);
 }
+// TRACE mergeSort([5, 1, 4, 2])
+//   split [5, 1, 4, 2]  mid=2  -> [5, 1] | [4, 2]
+//     split [5, 1] -> [5] | [1]   merge -> [1, 5]
+//     split [4, 2] -> [4] | [2]   merge -> [2, 4]
+//   merge([1, 5], [2, 4]) -> [1, 2, 4, 5]
 
 function merge(left, right) {
     const sorted = [];
@@ -261,6 +287,11 @@ function merge(left, right) {
     }
     return [...sorted, ...left, ...right];
 }
+// TRACE merge([1, 5], [2, 4])
+//   1 <= 2  push 1   sorted=[1]        left=[5]  right=[2, 4]
+//   5 >  2  push 2   sorted=[1, 2]     left=[5]  right=[4]
+//   5 >  4  push 4   sorted=[1, 2, 4]  left=[5]  right=[]
+//   right empty -> [...[1, 2, 4], ...[5], ...[]] = [1, 2, 4, 5]
 
 console.log("merge sort:", mergeSort([8, 20, -2, 4, -6])); // [-6, -2, 4, 8, 20]
 
@@ -306,6 +337,13 @@ function countingSort(arr) {
     }
     return sorted;
 }
+// TRACE countingSort([3, 1, 3, 0, 2])
+//   max = 3   count = [0, 0, 0, 0]
+//   count each num  -> count = [1, 1, 1, 2]   (idx 0..3)
+//   i=0  push 0 x1   sorted = [0]
+//   i=1  push 1 x1   sorted = [0, 1]
+//   i=2  push 2 x1   sorted = [0, 1, 2]
+//   i=3  push 3 x2   sorted = [0, 1, 2, 3, 3]
 
 console.log("counting sort:", countingSort([4, 2, 2, 8, 3, 3, 1])); // [1, 2, 2, 3, 3, 4, 8]
 

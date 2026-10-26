@@ -94,6 +94,15 @@ class Stack {
     isEmpty() { return this.items.length === 0; }
     size() { return this.items.length; }
     print() { console.log(this.items.toString()); }
+    // TRACE push(1) -> push(20) -> push(30) -> size() -> pop() -> print() -> peek()
+    //   isEmpty()  items = []            returns true
+    //   push(1)    items = [1]           top -> 1   (returns undefined)
+    //   push(20)   items = [1, 20]       top -> 20
+    //   push(30)   items = [1, 20, 30]   top -> 30
+    //   size()     length 3              returns 3
+    //   pop()      items = [1, 20]       returns 30
+    //   print()    logs "1,20"
+    //   peek()     items[2 - 1]          returns 20
 }
 let stack = new Stack();
 console.log(stack.isEmpty());
@@ -120,6 +129,10 @@ class StackObj {
         this.items[this.head] = element;
         this.head++;
     }
+    // TRACE push(1) -> push(2)
+    //   start     items = {}                 head = 0
+    //   push(1)   items[0] = 1  -> { 0: 1 }        head = 1
+    //   push(2)   items[1] = 2  -> { 0: 1, 1: 2 }  head = 2
     pop() {
         if (this.head === 0) return undefined;
         const item = this.items[this.head - 1];
@@ -127,10 +140,20 @@ class StackObj {
         this.head--;
         return item;
     }
+    // TRACE pop() x3   start items = { 0: 1, 1: 2 }  head = 2
+    //   pop()  item = items[1] = 2, delete key 1  -> { 0: 1 }  head = 1  returns 2
+    //   pop()  item = items[0] = 1, delete key 0  -> {}        head = 0  returns 1
+    //   pop()  head === 0                                                returns undefined
     peek() { return this.items[this.head - 1]; }
     size() { return this.head; }
     isEmpty() { return this.head === 0; }
     print() { console.log(this.items); }
+    // TRACE (demo) after push(1), push(2): items = { 0: 1, 1: 2 }  head = 2
+    //   print()    logs { '0': 1, '1': 2 }
+    //   pop()      returns 2       items = { 0: 1 }  head = 1
+    //   peek()     items[1 - 1]    returns 1
+    //   size()     returns head    1
+    //   isEmpty()  head === 0      false
 }
 const stackObj = new StackObj();
 stackObj.push(1);
@@ -154,10 +177,18 @@ function StackIndex() {
   this.push = function (element) {
     items[top++] = element; // assign at current top, THEN increment
   };
+  // TRACE push(100) -> push(200) -> push(300)
+  //   push(100)  items[0] = 100, top 0 -> 1   items = [100]
+  //   push(200)  items[1] = 200, top 1 -> 2   items = [100, 200]
+  //   push(300)  items[2] = 300, top 2 -> 3   items = [100, 200, 300]
 
   this.pop = function () {
     return items[--top]; // decrement FIRST, then read that slot
   };
+  // TRACE pop()   start items = [100, 200, 300]  top = 3
+  //   --top      top 3 -> 2
+  //   items[2]   returns 300
+  //   items is STILL [100, 200, 300] — slot 2 is just "free" now (top = 2)
 
   this.peek = function () {
     return items[top - 1];
@@ -174,6 +205,13 @@ function StackIndex() {
   this.size = function () {
     return top;
   };
+  // TRACE (demo) after pop():  items = [100, 200, 300]  top = 2
+  //   peek()     items[2 - 1]   returns 200
+  //   isEmpty()  2 === 0        false
+  //   size()     returns top    2
+  //   clear()    top = 0        items still [100, 200, 300] (old slots ignored)
+  //   isEmpty()  0 === 0        true
+  //   push(999)  items[0] = 999 -> [999, 200, 300]  top = 1  (overwrites old slot)
 }
 
 const stackIndex = new StackIndex();
@@ -223,6 +261,13 @@ const StackIIFE = (function () {
     this.clear = function () {
       items.length = 0;
     };
+    // TRACE push(100) -> push(200) -> push(300) -> pop() -> ... -> clear()
+    //   (items lives in the closure — the instance only holds the methods)
+    //   push x3    items = [100, 200, 300]
+    //   pop()      items = [100, 200]   returns 300
+    //   peek()     returns 200    isEmpty() false    size() 2
+    //   clear()    items.length = 0 -> items = []    isEmpty() true
+    //   stackIIFE.items -> undefined (no such property on the instance)
   };
 })();
 
@@ -282,6 +327,13 @@ class StackWeakMap {
   size() {
     return stackPrivateData.get(this).length;
   }
+  // TRACE push(100) -> push(200) -> push(300) -> pop() -> ... -> clear()
+  //   new        WeakMap: { stackWeakMap => [] }
+  //   push x3    WeakMap: { stackWeakMap => [100, 200, 300] }
+  //   pop()      WeakMap: { stackWeakMap => [100, 200] }   returns 300
+  //   peek()     returns 200    isEmpty() false    size() 2
+  //   clear()    WeakMap.set(this, [])  -> { stackWeakMap => [] }  (NEW array)
+  //   isEmpty()  true
 }
 
 const stackWeakMap = new StackWeakMap();
@@ -328,6 +380,11 @@ class StackLinkedList {
     this.top = new StackNode(value, this.top); // new node becomes head
     this.length++;
   }
+  // TRACE push(10) -> push(20) -> push(30)
+  //   start     top -> null                              length 0
+  //   push(10)  top -> [10] -> null                      length 1
+  //   push(20)  top -> [20] -> [10] -> null              length 2
+  //   push(30)  top -> [30] -> [20] -> [10] -> null      length 3
 
   pop() {
     if (this.isEmpty()) return undefined;
@@ -336,6 +393,10 @@ class StackLinkedList {
     this.length--;
     return value;
   }
+  // TRACE pop()   start top -> [30] -> [20] -> [10] -> null  length 3
+  //   value = top.value = 30
+  //   top = top.next     top -> [20] -> [10] -> null  length 2
+  //   returns 30         ([30] is now unreferenced -> garbage collected)
 
   peek() {
     return this.top ? this.top.value : undefined;
@@ -353,6 +414,12 @@ class StackLinkedList {
     this.top = null;
     this.length = 0;
   }
+  // TRACE after pop():  top -> [20] -> [10] -> null  length 2
+  //   peek()     top.value      returns 20
+  //   isEmpty()  top === null   false
+  //   size()     returns 2
+  //   clear()    top -> null    length 0
+  //   peek() -> undefined   isEmpty() -> true   pop() -> undefined
 
   toArray() {
     // returns top -> bottom order
@@ -364,6 +431,11 @@ class StackLinkedList {
     }
     return out;
   }
+  // TRACE toArray()   top -> [30] -> [20] -> [10] -> null
+  //   node=[30]  out = [30]
+  //   node=[20]  out = [30, 20]
+  //   node=[10]  out = [30, 20, 10]
+  //   node=null  loop ends  -> returns [30, 20, 10]
 }
 
 const stackLinkedList = new StackLinkedList();
@@ -402,11 +474,20 @@ class MinStack {
         : Math.min(value, this.minTrack[this.minTrack.length - 1]);
     this.minTrack.push(currentMin);
   }
+  // TRACE push(5) -> push(3) -> push(7) -> push(2)
+  //   value | currentMin        | main          | minTrack
+  //   5     | (empty) -> 5      | [5]           | [5]
+  //   3     | min(3, 5) = 3     | [5, 3]        | [5, 3]
+  //   7     | min(7, 3) = 3     | [5, 3, 7]     | [5, 3, 3]
+  //   2     | min(2, 3) = 2     | [5, 3, 7, 2]  | [5, 3, 3, 2]
 
   pop() {
     this.minTrack.pop(); // keep both stacks in lockstep
     return this.main.pop();
   }
+  // TRACE pop() -> pop()   start main = [5, 3, 7, 2]  minTrack = [5, 3, 3, 2]
+  //   pop()  main = [5, 3, 7]  minTrack = [5, 3, 3]  returns 2  (min now 3)
+  //   pop()  main = [5, 3]     minTrack = [5, 3]     returns 7  (min still 3)
 
   top() {
     return this.main[this.main.length - 1];
@@ -419,6 +500,12 @@ class MinStack {
   isEmpty() {
     return this.main.length === 0;
   }
+  // TRACE (demo)  main = [5, 3, 7, 2]  minTrack = [5, 3, 3, 2]
+  //   getMin()  minTrack top   returns 2
+  //   pop()     main = [5, 3, 7]  minTrack = [5, 3, 3]
+  //   getMin()  minTrack top   returns 3
+  //   top()     main top       returns 7
+  //   isEmpty() length 3       false
 }
 
 const minStack = new MinStack();
@@ -470,6 +557,18 @@ function isBalanced(expression) {
   }
   return stack.length === 0; // GOTCHA: must also check nothing is left over
 }
+// TRACE isBalanced("{[(])}")
+//   char | action                     | stack
+//   {    | opener -> push             | {
+//   [    | opener -> push             | { [
+//   (    | opener -> push             | { [ (
+//   ]    | pop '(' !== '[' -> mismatch | { [
+//   -> returns false (stops early)
+// TRACE isBalanced("(()")
+//   (    | push                       | (
+//   (    | push                       | ( (
+//   )    | pop '(' === '(' ok         | (
+//   end  | stack.length 1 !== 0  -> returns false
 
 console.log('isBalanced "{[()]}":', isBalanced('{[()]}')); // true
 console.log('isBalanced "{[(])}":', isBalanced('{[(])}')); // false
@@ -527,6 +626,17 @@ function infixToPostfix(expression) {
 
   return output.join(' ');
 }
+// TRACE infixToPostfix("(3+4)*2")   tokens: ( 3 + 4 ) * 2
+//   token | action                          | opStack | output
+//   (     | push                            | (       |
+//   3     | operand -> output               | (       | 3
+//   +     | top is '(' -> no pop; push      | ( +     | 3
+//   4     | operand -> output               | ( +     | 3 4
+//   )     | pop until '(' ; discard '('     |         | 3 4 +
+//   *     | stack empty -> push             | *       | 3 4 +
+//   2     | operand -> output               | *       | 3 4 + 2
+//   end   | pop all                         |         | 3 4 + 2 *
+//   -> returns "3 4 + 2 *"
 
 console.log('infixToPostfix "A+B*C":', infixToPostfix('A+B*C'));       // "A B C * +"
 console.log('infixToPostfix "3+4*2":', infixToPostfix('3+4*2'));       // "3 4 2 * +"
@@ -569,6 +679,18 @@ function evaluatePostfix(postfix) {
   }
   return stack.pop();
 }
+// TRACE evaluatePostfix("5 1 2 + 4 * + 3 -")
+//   token | action                   | stack
+//   5     | push                     | [5]
+//   1     | push                     | [5, 1]
+//   2     | push                     | [5, 1, 2]
+//   +     | b=2, a=1 -> 1 + 2 = 3    | [5, 3]
+//   4     | push                     | [5, 3, 4]
+//   *     | b=4, a=3 -> 3 * 4 = 12   | [5, 12]
+//   +     | b=12, a=5 -> 5 + 12 = 17 | [17]
+//   3     | push                     | [17, 3]
+//   -     | b=3, a=17 -> 17 - 3 = 14 | [14]
+//   -> returns 14
 
 console.log('evaluatePostfix "3 4 2 * +":', evaluatePostfix('3 4 2 * +'));                 // 11
 console.log('evaluatePostfix "5 1 2 + 4 * + 3 -":', evaluatePostfix('5 1 2 + 4 * + 3 -'));  // 14
@@ -603,6 +725,14 @@ function nextGreaterElement(nums) {
   }
   return result;
 }
+// TRACE nextGreaterElement([4, 5, 2, 10, 8])   (stack holds INDICES)
+//   i | nums[i] | popped idx | stack (idx) | result
+//   4 | 8       | -          | [4]         | [-1, -1, -1, -1, -1]
+//   3 | 10      | 4 (8<=10)  | [3]         | [-1, -1, -1, -1, -1]
+//   2 | 2       | -          | [3, 2]      | [-1, -1, 10, -1, -1]
+//   1 | 5       | 2 (2<=5)   | [3, 1]      | [-1, 10, 10, -1, -1]
+//   0 | 4       | -          | [3, 1, 0]   | [5, 10, 10, -1, -1]
+//   -> returns [5, 10, 10, -1, -1]
 
 console.log('nextGreaterElement [4,5,2,10,8]:', nextGreaterElement([4, 5, 2, 10, 8])); // [5,10,10,-1,-1]
 
@@ -639,6 +769,11 @@ class UndoRedoManager {
     this.redoStack.length = 0; // new action invalidates redo history
     return this.state;
   }
+  // TRACE new UndoRedoManager('') -> do('Hello') -> do('Hello World') -> do('Hello World!')
+  //   call                | undoStack                         | state          | redo
+  //   do('Hello')         | ['']                              | 'Hello'        | []
+  //   do('Hello World')   | ['', 'Hello']                     | 'Hello World'  | []
+  //   do('Hello World!')  | ['', 'Hello', 'Hello World']      | 'Hello World!' | []
 
   undo() {
     if (this.undoStack.length === 0) return this.state;
@@ -646,6 +781,9 @@ class UndoRedoManager {
     this.state = this.undoStack.pop();
     return this.state;
   }
+  // TRACE undo() -> undo()   start undo = ['', 'Hello', 'Hello World']  state = 'Hello World!'
+  //   undo()  redo = ['Hello World!']                 undo = ['', 'Hello']  returns 'Hello World'
+  //   undo()  redo = ['Hello World!', 'Hello World']  undo = ['']           returns 'Hello'
 
   redo() {
     if (this.redoStack.length === 0) return this.state;
@@ -653,10 +791,15 @@ class UndoRedoManager {
     this.state = this.redoStack.pop();
     return this.state;
   }
+  // TRACE redo()   start undo = ['']  state = 'Hello'  redo = ['Hello World!', 'Hello World']
+  //   push 'Hello' onto undo     undo = ['', 'Hello']
+  //   pop redo -> state          redo = ['Hello World!']  returns 'Hello World'
+  //   (a do('Hi') now would push 'Hello World' to undo and empty redo -> [])
 
   current() {
     return this.state;
   }
+  // TRACE current()  after the 3 do() calls  -> returns 'Hello World!' (no stack change)
 }
 
 const editor = new UndoRedoManager('');
@@ -682,6 +825,9 @@ class BrowserHistory {
     this.currentUrl = url;
     this.forwardStack.length = 0; // visiting a new page kills "forward"
   }
+  // TRACE new BrowserHistory('home.com') -> visit('news.com') -> visit('sports.com')
+  //   visit('news.com')    back = ['home.com']               current = 'news.com'    fwd = []
+  //   visit('sports.com')  back = ['home.com', 'news.com']   current = 'sports.com'  fwd = []
 
   back() {
     if (this.backStack.length === 0) return this.currentUrl;
@@ -689,6 +835,10 @@ class BrowserHistory {
     this.currentUrl = this.backStack.pop();
     return this.currentUrl;
   }
+  // TRACE back() x3   start back = ['home.com', 'news.com']  current = 'sports.com'
+  //   back()  back = ['home.com']  fwd = ['sports.com']              returns 'news.com'
+  //   back()  back = []            fwd = ['sports.com', 'news.com']  returns 'home.com'
+  //   back()  back is empty -> nothing changes                       returns 'home.com'
 
   forward() {
     if (this.forwardStack.length === 0) return this.currentUrl;
@@ -696,6 +846,9 @@ class BrowserHistory {
     this.currentUrl = this.forwardStack.pop();
     return this.currentUrl;
   }
+  // TRACE forward()   start back = []  current = 'home.com'  fwd = ['sports.com', 'news.com']
+  //   push 'home.com' onto back   back = ['home.com']
+  //   pop fwd -> current          fwd = ['sports.com']   returns 'news.com'
 }
 
 const browser = new BrowserHistory('home.com');
@@ -717,7 +870,7 @@ console.log('Browser forward:', browser.forward()); // "news.com"
 //       call factorial(1)       stack: [f(3), f(2), f(1)]
 //       return 1                stack: [f(3), f(2)]      (f(1) popped)
 //     return 2*1=2              stack: [f(3)]             (f(2) popped)
-//   return 3*2=3                stack: []                 (f(3) popped)
+//   return 3*2=6                stack: []                 (f(3) popped)
 //
 // INTERVIEW: explain WHY recursion needs a base case — without
 // one, you push forever until you exhaust the (finite!) real call
@@ -734,6 +887,14 @@ function factorialWithTrace(n, callStack = []) {
   callStack.pop();
   return result;
 }
+// TRACE factorialWithTrace(4)
+//   push f(4)   callStack = [f(4)]
+//   push f(3)   callStack = [f(4), f(3)]
+//   push f(2)   callStack = [f(4), f(3), f(2)]
+//   push f(1)   callStack = [f(4), f(3), f(2), f(1)]   n <= 1 -> pop, return 1
+//   f(2): 2 * 1 = 2    pop  callStack = [f(4), f(3)]
+//   f(3): 3 * 2 = 6    pop  callStack = [f(4)]
+//   f(4): 4 * 6 = 24   pop  callStack = []          -> returns 24
 
 console.log('factorialWithTrace(4):', factorialWithTrace(4)); // 24
 

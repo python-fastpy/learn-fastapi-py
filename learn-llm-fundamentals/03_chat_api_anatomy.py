@@ -52,6 +52,16 @@ def est_tokens(text: str) -> int:
 # ============================================================================
 # PART 1: Roles
 # ============================================================================
+# THE FOUR ROLES -- WHO WRITES EACH MESSAGE
+#   ┌───────────────────┐  system     ┌──────────────────────────────┐
+#   │ you (developer)   │────────────▶│                              │
+#   ├───────────────────┤  user       │  messages[] -- the WHOLE     │
+#   │ end user          │────────────▶│  list is sent on EVERY call  │
+#   ├───────────────────┤  assistant  │                              │
+#   │ the model         │────────────▶│  (its old replies come back  │
+#   ├───────────────────┤  tool       │   to it only because you     │
+#   │ your code (tools) │────────────▶│   resend them)               │
+#   └───────────────────┘             └──────────────────────────────┘
 
 ROLES = [
     ("system", "You (the developer/operator)",
@@ -81,6 +91,13 @@ def part1_roles():
 # Illustrative format. Every model family has its own special tokens, but
 # they all do this: wrap each message in role markers, then leave the
 # assistant marker open so the model "continues" as the assistant.
+#
+# PART 2 DEMO AS ONE FLAT STREAM (4 messages -> 135 chars, ~34 tokens)
+#   ┌───┬──────┬───┬────┬──────┬───┬────┬─┬───┬────┬──────┬───┬────┐
+#   │sys│terse…│end│user│2+2?  │end│asst│4│end│user│×3?   │end│asst│▶ next?
+#   └───┴──────┴───┴────┴──────┴───┴────┴─┴───┴────┴──────┴───┴────┘
+#    ▲ role marker tokens    ▲ content tokens                   ▲ left OPEN
+#   Any text anywhere (even a tool result) lands in this SAME single row.
 
 def apply_chat_template(messages: list[dict], tools: list[dict] | None = None) -> str:
     parts = []
@@ -122,6 +139,15 @@ def part2_template():
 # ============================================================================
 # PART 3: Statelessness -- every call resends everything
 # ============================================================================
+# STATELESS: EACH TURN RESENDS ALL OF HISTORY (1 char ≈ 3 tokens)
+#   turn 1 │███████████████░░                           │  51 in (sys 46 + q 5)
+#   turn 2 │███████████████████████░                    │  73 in
+#   turn 3 │█████████████████████████████░              │  91 in
+#   turn 4 │███████████████████████████████████░░       │ 112 in
+#   turn 5 │███████████████████████████████████████████░│ 131 in
+#          █ resent: system + every earlier q/a    ░ the new question
+#   turn 3 request = [sys 46][q1 5][a1 18][q2 4][a2 16][q3 2] = 91
+#   cumulative input: 51 ▶ 124 ▶ 215 ▶ 327 ▶ 458   vs output total: 84
 
 def part3_stateless():
     print("######## PART 3 -- The API is stateless ########\n")
@@ -159,6 +185,18 @@ def part3_stateless():
 # ============================================================================
 # PART 4: Tool calling is text the model writes
 # ============================================================================
+# TOOL CALL ROUND TRIP -- TWO API CALLS, ALL OF IT TEXT
+#   you   ─▶ call 1: messages + tools=[get_weather(city)]
+#                 │
+#                 ▼
+#   model ─▶ writes: {"name": "get_weather", "arguments": {"city": "Rome"}}
+#                 │  API parses it ─▶ tool_calls=[...], stop_reason='tool_use'
+#                 ▼
+#   you   ─▶ run get_weather('Rome') ─▶ {'temp_c': 24, 'sky': 'clear'}
+#                 │  append tool_use + tool_result (same id) ─▶ call 2
+#                 ▼
+#   model ─▶ reads the result, writes the answer, stop_reason='end_turn'
+#   Only YOUR code executes anything (step 3). The model only writes text.
 
 def part4_tools():
     print("######## PART 4 -- Tool calling, unmasked ########\n")
@@ -189,6 +227,16 @@ def part4_tools():
 # ============================================================================
 # PART 5: Structured output -- validate and retry
 # ============================================================================
+# STRUCTURED OUTPUT: VALIDATE ▶ RETRY LOOP (the demo's 3 attempts)
+#   ┌────────────┐  text  ┌─────────────────┐  ok   ┌──────────────┐
+#   │ call model │───────▶│ validate_ticket │──────▶│ use the dict │
+#   └────────────┘        └─────────────────┘       └──────────────┘
+#         ▲                        │ error string
+#         └── send error back ◀────┘
+#   validate_ticket: json.loads ─▶ title+priority? ─▶ priority in low|med|high?
+#   attempt 1  'Sure! Here is the ticket: {…}'  ✗ not valid JSON
+#   attempt 2  "priority": "urgent"             ✗ priority not low|medium|high
+#   attempt 3  "priority": "high"               ✓ VALID ─▶ break
 
 def validate_ticket(text: str) -> tuple[dict | None, str | None]:
     try:
@@ -228,6 +276,17 @@ def part5_structured():
 # ============================================================================
 # PART 6: Reading the response
 # ============================================================================
+# RESPONSE ANATOMY -- CHECK stop_reason BEFORE TRUSTING content
+#   response
+#   ├── content      [{type: text, text: "Rome in October is mild, ..."}]
+#   ├── stop_reason  "end_turn"
+#   └── usage        input 1240 · output 14 · cache_read_input 1024
+#
+#   stop_reason ─┬─ end_turn       ─▶ use content
+#                ├─ max_tokens     ─▶ TRUNCATED: raise the cap or continue
+#                ├─ tool_use       ─▶ run tool, send result, call again
+#                ├─ stop_sequence  ─▶ expected; trim if needed
+#                └─ refusal        ─▶ handle it; don't read content blindly
 
 def part6_response():
     print("######## PART 6 -- The response: content + stop_reason + usage ########\n")
@@ -253,6 +312,14 @@ def part6_response():
 # ============================================================================
 # PART 7: Cost math
 # ============================================================================
+# WHO PAYS THE BILL: █ input $ vs ░ output $ (bar = share of each request)
+#   Chat reply         │██████████░░░░░░░░░░│ $0.0045 + $0.0045 = $0.0090
+#   RAG answer         │███████████████░░░░░│ $0.0180 + $0.0060 = $0.0240
+#   Agent turn 10      │████████████████████│ $0.1200 + $0.0030 = $0.1230
+#   Agent t10 + cache  │██████████████████░░│ $0.0228 + $0.0030 = $0.0258
+#   Summarize PDF      │██████████████████░░│ $0.1800 + $0.0225 = $0.2025
+#   cache: 4,000 × $3 + 36,000 × $0.30 per 1M = $0.0228 input (was $0.1200)
+#   output costs 5x per token, but input VOLUME wins ─▶ input dominates
 
 def part7_cost():
     print("######## PART 7 -- Cost math ########\n")

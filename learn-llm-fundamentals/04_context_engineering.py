@@ -67,6 +67,18 @@ RESERVED_OUTPUT = 300 # keep room for the answer: window = input + output
 # ============================================================================
 # The raw material -- everything we COULD send
 # ============================================================================
+# THE CONTEXT WINDOW IS A BUDGET (naive_context() sections, 1 █ ≈ 20 tokens)
+#   window = BUDGET 600 input + RESERVED_OUTPUT 300 for the answer
+#   system      52  ███
+#   tools      175  █████████
+#   memory      19  █
+#   docs       285  ██████████████
+#   history    166  ████████
+#   account    412  █████████████████████
+#   question    30  ██
+#   ──────────────────────────────────────────────────────────────────────
+#   ALL       1141  ██████████████████████████████│███████████████████████████
+#                   ◀─────── BUDGET 600 ─────────▶│ over by 541
 
 SYSTEM = (
     "You are the support assistant for Acme Cloud. Answer only from the "
@@ -156,6 +168,13 @@ MEMORY = {  # long-term memory from PREVIOUS sessions (WRITE strategy output)
 # ============================================================================
 # PART 1: Naive context -- stuff everything, then truncate
 # ============================================================================
+# BLIND TRUNCATION CUTS A NEEDED FACT (1 col ≈ 20 tokens, 1141 total)
+#   layout  SSSTTTTTTTTTMDDDDDDDDDDDDDDHHHHHHHHAAAAAAAAAAAAAAAAAAAAAQQ
+#   facts                ▲E403           ▲CLI   ▲region             ▲question
+#   B start ██████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 2/4
+#   C end   ░░░░░░░░░░░░░░░░░░░░░░░░░░░░██████████████████████████████ 3/4
+#   S=system T=tools M=memory D=docs H=history A=account Q=question
+#   █ kept (600 tokens)  ░ cut     B loses region + question, C loses E403
 
 def render_history(turns) -> str:
     return "\n".join(f"{r}: {t}" for r, t in turns)
@@ -206,6 +225,17 @@ def part1_naive():
 # ============================================================================
 # PART 2: Engineered context -- the four strategies
 # ============================================================================
+# THE FOUR STRATEGIES AS MINI FLOWS (this demo's numbers)
+#   WRITE    past session ─▶ save fact to DB/file ─▶ MEMORY (3) ─▶ re-inject
+#   SELECT   12 tools ─▶ 4  │  10 docs ─▶ top-2  │  3 memories ─▶ 1
+#   COMPRESS 14 turns ─▶ summary + last 4 (164▶66) │ 40 fields ─▶ 4 (410▶33)
+#   ISOLATE  big search ─▶ subagent, own context ─▶ short summary ─▶ here
+#
+# RESULT VS BUDGET (1 █ ≈ 20 tokens)
+#   raw         ██████████████████████████████████████████████████████ 1089
+#   budget      ══════════════════════════════│                         600
+#   engineered  ██████████████████░░░░░░░░░░░░│                         353
+#               ░ = headroom left inside the 600 budget (32% of raw size)
 
 STOPWORDS = set("a an the to my i is are of on in and or for with since what should do "
                 "keep yesterday".split())
@@ -222,6 +252,17 @@ def relevance(query: str, text: str) -> int:
 
 
 # ---- SELECT: only what this question needs ---------------------------------
+# SELECT: SCORE EVERY CANDIDATE, KEEP THE TOP-K
+#   question keywords: deploys e403 error eu-west failing plan pro upgraded
+#   docs, relevance():  errors/E403 ██ 2 ─▶ kept
+#                       plans/pro   ██ 2 ─▶ kept       (k = 2)
+#                       errors/E500 █  1   plans/free █ 1   team/sso █ 1
+#                       5 others       0                ✗ all dropped
+#   tools (k=3, query + "key deploy region"):
+#     enable_region 3, get_account 2, list_deploys 2 ─▶ kept
+#     regenerate_deploy_key 2 (tie, cut), the rest ≤1 ✗
+#     + ALWAYS_ON create_support_ticket  ─▶ 4 tools
+#   memory: tone always kept; timezone/company miss ─▶ 1 of 3
 
 def select_docs(query: str, k: int = 2) -> list[tuple[str, str]]:
     ranked = sorted(KNOWLEDGE_BASE.items(), key=lambda kv: -relevance(query, kv[1]))
@@ -239,6 +280,13 @@ def select_memory(query: str) -> list[str]:
 
 
 # ---- COMPRESS: same information, fewer tokens ------------------------------
+# HISTORY COMPACTION: OLD TURNS ─▶ SUMMARY + LAST 4 (164 ▶ 66 tokens)
+#   HISTORY (14 turns)
+#   ├ turns 1-10 (old) ─▶ keep durable user lines only ─▶ 1 summary line:
+#   │    "Earlier in this conversation: Hi, I'm setting up Acme for my team
+#   │     at Globex. user prefers the CLI over the dashboard."
+#   └ turns 11-14 ─────────────────────────────────────▶ kept verbatim
+#   The CLI preference (turn 3) survives; small talk and FAQs do not.
 
 def compact_history(turns, keep_last: int = 4) -> str:
     """Old turns -> a short summary; recent turns kept verbatim.
@@ -256,12 +304,29 @@ def compact_history(turns, keep_last: int = 4) -> str:
     return summary + "\n" + render_history(recent)
 
 
+# TOOL-RESULT TRIMMING: 40 FIELDS ─▶ THE 4 THE ANSWER NEEDS (410 ▶ 31 tokens)
+#   ACCOUNT from get_account()        trimmed JSON sent to the model
+#   ├ id, org, plan_changed_at    ✗
+#   ├ plan                ──────────▶ "plan": "pro"
+#   ├ regions_enabled     ──────────▶ "regions_enabled": ["us-east"]
+#   ├ deploy_key_scopes   ──────────▶ "deploy_key_scopes": ["region:us-east"]
+#   ├ last_deploy_error           ✗
+#   ├ last_deploy_region  ──────────▶ "last_deploy_region": "eu-west"
+#   └ setting_0 … setting_31      ✗  (32 junk fields)
 def trim_tool_result(data: dict, fields: list[str]) -> str:
     """Tool output is often the biggest context hog. Keep what matters."""
     return json.dumps({k: data[k] for k in fields if k in data})
 
 
 # ---- ORDER: stable first (cache), question last (attention) ----------------
+# FINAL ORDER OF engineered_sections() (tokens, priority)
+#   ┌ system    52  p100  stable ─▶ cacheable prefix
+#   ├ tools     68  p90   ┐
+#   ├ memory     9  p40   │ volatile: changes per question
+#   ├ docs      96  p80   │ (tools too, because they are SELECTed)
+#   ├ history   66  p60   │
+#   ├ account   33  p85   ┘
+#   └ question  30  p100  LAST ─▶ the model ends on the task
 
 @dataclass
 class Section:
@@ -291,6 +356,11 @@ def engineered_sections(query: str) -> list[Section]:
     ]
 
 
+# FIT_TO_BUDGET: DROP WHOLE SECTIONS, LOWEST PRIORITY FIRST (p100 = never)
+#   drops: memory p40 ─▶ history p60 ─▶ docs p80 ─▶ account p85 ─▶ tools p90
+#   BUDGET 600: sections sum to 354 ≤ 600 ─▶ nothing dropped
+#   BUDGET 300: 354 ─▶ drop memory (9) ─▶ 345 ─▶ drop history (66) ─▶ 279 ✓
+#               ...but history held the CLI preference (exercise 1)
 def fit_to_budget(sections: list[Section], budget: int) -> tuple[list[Section], list[str]]:
     """Drop whole low-priority sections until we fit -- never cut mid-section."""
     kept, dropped = list(sections), []
@@ -350,6 +420,15 @@ def part2_engineered():
 # Providers cache the longest IDENTICAL PREFIX between requests and bill
 # it at a large discount. One changed byte early on invalidates
 # everything after it.
+#
+# CACHE HIT VS MISS: SAME CONTENT, DIFFERENT ORDER (part 3 demo)
+#   stable FIRST
+#   req 1 │SYSTEM + all 12 TOOLS (910 chars)  │time│Q1│
+#   req 2 │SYSTEM + all 12 TOOLS  ✓ cache HIT │time│Q2│ 928/973 chars = 95%
+#   req 3 │SYSTEM + all 12 TOOLS  ✓ cache HIT │time│Q3│ 928/971 chars = 96%
+#   volatile FIRST
+#   req 2 │time│Q2│SYSTEM + all 12 TOOLS          │ 18/973 chars = 2%
+#               ▲ "Current time: 09:0" then the bytes differ ─▶ ✗ MISS after
 
 def common_prefix(a: str, b: str) -> int:
     n = 0
@@ -392,6 +471,16 @@ def part3_caching():
 # ============================================================================
 # PART 4: How contexts go wrong
 # ============================================================================
+# FAILURE MODES: CAUSE ─▶ SYMPTOM
+#   Poisoning    wrong fact enters context ─▶ reused turn after turn
+#   Distraction  far too much material     ─▶ follows noise / copies history
+#   Confusion    many similar tools/docs   ─▶ picks the wrong one
+#   Clash        two parts disagree        ─▶ answer follows the wrong one
+#   Truncation   fact or answer cut off    ─▶ missing info / partial answer
+#
+#   poisoning loop:  bad tool result ─▶ context ─▶ answer repeats it
+#                         ▲                            │ saved to memory
+#                         └────────────────────────────┘
 
 def part4_failure_modes():
     print("######## PART 4 -- Context failure modes ########\n")
@@ -422,6 +511,11 @@ def part4_failure_modes():
 # ============================================================================
 # PART 5: The checklist
 # ============================================================================
+# THE CHECKLIST AS A PIPELINE (run it for every LLM call)
+#   facts needed ─▶ source of each ─▶ cut extras ─▶ budget + reserve output
+#        │
+#        ▼
+#   stable first, question last ─▶ mark untrusted as data ─▶ LOG what was sent
 
 def part5_checklist():
     print("######## PART 5 -- Context engineering checklist ########\n")

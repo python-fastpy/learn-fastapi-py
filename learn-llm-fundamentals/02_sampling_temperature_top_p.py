@@ -60,6 +60,16 @@ LOGITS = {
 # ============================================================================
 # The sampling pipeline -- each function is one real API knob
 # ============================================================================
+# THE PIPELINE WITH REAL NUMBERS  (T=0.5, top_p=0.9 -- a case from part 5)
+#   token    logit ─▶ ÷T=0.5 ─▶ softmax ─▶ cumulative ─▶ top_p=0.9 ─▶ final
+#   sunny    +3.2      6.4      68.7%      68.7%         keep         70.8%
+#   cloudy   +2.6      5.2      20.7%      89.4%         keep         21.3%
+#   rainy    +2.1      4.2       7.6%      97.0% ◀ ≥0.9  keep (last)   7.8%
+#   cold     +1.5      3.0       2.3%      99.3%         cut           ─
+#   perfect  +0.9      1.8       0.7%     100.0%         cut           ─
+#   purple   -1.0     -2.0       0.0%     100.0%         cut           ─
+#   banana   -2.5     -5.0       0.0%     100.0%         cut           ─
+#                                                    renormalize ─▶ sample()
 
 def softmax(logits: dict[str, float], temperature: float = 1.0) -> dict[str, float]:
     """Logits -> probabilities. Temperature divides the logits first.
@@ -123,6 +133,15 @@ def show(probs: dict[str, float], all_tokens=LOGITS):
 # ============================================================================
 # PART 1: Logits -> softmax
 # ============================================================================
+# SOFTMAX BY HAND  (T=1.0):  p = exp(logit - max) / Σ exp(logit - max)
+#   sunny    +3.2 ─▶ e^ 0.0 = 1.000 ─▶ ÷ 2.183 ─▶ 45.8% █████████░░░░░░░░░░░
+#   cloudy   +2.6 ─▶ e^-0.6 = 0.549 ─▶ ÷ 2.183 ─▶ 25.1% █████░░░░░░░░░░░░░░░
+#   rainy    +2.1 ─▶ e^-1.1 = 0.333 ─▶ ÷ 2.183 ─▶ 15.2% ███░░░░░░░░░░░░░░░░░
+#   cold     +1.5 ─▶ e^-1.7 = 0.183 ─▶ ÷ 2.183 ─▶  8.4% ██░░░░░░░░░░░░░░░░░░
+#   perfect  +0.9 ─▶ e^-2.3 = 0.100 ─▶ ÷ 2.183 ─▶  4.6% █░░░░░░░░░░░░░░░░░░░
+#   purple   -1.0 ─▶ e^-4.2 = 0.015 ─▶ ÷ 2.183 ─▶  0.7% ░░░░░░░░░░░░░░░░░░░░
+#   banana   -2.5 ─▶ e^-5.7 = 0.003 ─▶ ÷ 2.183 ─▶  0.2% ░░░░░░░░░░░░░░░░░░░░
+#                          Σ = 2.183                100%  exp() is never 0
 
 def part1_softmax():
     print("######## PART 1 -- Logits become probabilities ########\n")
@@ -138,6 +157,16 @@ def part1_softmax():
 # ============================================================================
 # PART 2: Temperature -- every case
 # ============================================================================
+# ONE SET OF LOGITS, THREE TEMPERATURES  (softmax(LOGITS, T), bar = 14 chars)
+#            T=0.2 (sharp)          T=1.0 (raw model)      T=2.0 (flat)
+#  sunny   █████████████░ 94.9%  ██████░░░░░░░░ 45.8%  ████░░░░░░░░░░ 30.8%
+#  cloudy  █░░░░░░░░░░░░░  4.7%  ████░░░░░░░░░░ 25.1%  ███░░░░░░░░░░░ 22.8%
+#  rainy   ░░░░░░░░░░░░░░  0.4%  ██░░░░░░░░░░░░ 15.2%  ██░░░░░░░░░░░░ 17.8%
+#  cold    ░░░░░░░░░░░░░░  0.0%  █░░░░░░░░░░░░░  8.4%  ██░░░░░░░░░░░░ 13.2%
+#  perfect ░░░░░░░░░░░░░░  0.0%  █░░░░░░░░░░░░░  4.6%  █░░░░░░░░░░░░░  9.8%
+#  purple  ░░░░░░░░░░░░░░  0.0%  ░░░░░░░░░░░░░░  0.7%  █░░░░░░░░░░░░░  3.8%
+#  banana  ░░░░░░░░░░░░░░  0.0%  ░░░░░░░░░░░░░░  0.2%  ░░░░░░░░░░░░░░  1.8%
+#  sunny-banana gap: 5.7÷0.2 = 28.5 (huge) │ 5.7 │ 5.7÷2 = 2.85 (small)
 
 def part2_temperature():
     print("######## PART 2 -- Temperature sweep ########\n")
@@ -175,6 +204,17 @@ def part2_temperature():
 # ============================================================================
 # PART 3: top_k
 # ============================================================================
+# TOP_K CUTS AFTER A FIXED NUMBER OF TOKENS  (T=1.0, sorted by probability)
+#   1 sunny    45.8% █████████░░░░░░░░░░░
+#   ─────────────────────────────── k=1 cut ─▶ sunny 100%
+#   2 cloudy   25.1% █████░░░░░░░░░░░░░░░
+#   ─────────────────────────────── k=2 cut ─▶ 64.6 / 35.4
+#   3 rainy    15.2% ███░░░░░░░░░░░░░░░░░
+#   ─────────────────────────────── k=3 cut ─▶ 53.1 / 29.2 / 17.7
+#   4 cold      8.4% ██░░░░░░░░░░░░░░░░░░
+#   5 perfect   4.6% █░░░░░░░░░░░░░░░░░░░   below the cut: removed;
+#   6 purple    0.7% ░░░░░░░░░░░░░░░░░░░░   survivors renormalized
+#   7 banana    0.2% ░░░░░░░░░░░░░░░░░░░░   to sum to 100%
 
 def part3_top_k():
     print("######## PART 3 -- top_k: keep the k best tokens ########\n")
@@ -191,6 +231,20 @@ def part3_top_k():
 # ============================================================================
 # PART 4: top_p (nucleus sampling)
 # ============================================================================
+# TOP_P CUTS WHERE THE RUNNING TOTAL FIRST REACHES p  (T=1.0, bar = cumulative)
+#   token       p    cumul.
+#   sunny    45.8%   45.8% █████████░░░░░░░░░░░
+#   cloudy   25.1%   70.9% ██████████████░░░░░░ ◀ top_p=0.5  stops: keeps 2
+#   rainy    15.2%   86.2% █████████████████░░░ ◀ top_p=0.8  stops: keeps 3
+#   cold      8.4%   94.6% ███████████████████░ ◀ top_p=0.9  stops: keeps 4
+#   perfect   4.6%   99.2% ████████████████████ ◀ top_p=0.95 stops: keeps 5
+#   purple    0.7%   99.8% ████████████████████
+#   banana    0.2%  100.0% ████████████████████   top_p=1.0 = no filter: 7
+#
+# SAME top_p=0.9, DIFFERENT SHAPES  (cumulative %, the adaptive part)
+#   confident: Paris 98.7 ◀ already ≥ 90                      ─▶ keeps 1
+#   unsure:    red 22.0 ─ blue 43.0 ─ green 63.0 ─ black 81.9 ─ white 100.0 ◀
+#                                                             ─▶ keeps 5
 
 def part4_top_p():
     print("######## PART 4 -- top_p: keep the top X% of probability mass ########\n")
@@ -220,6 +274,13 @@ def part4_top_p():
 # ============================================================================
 # PART 5: Combining them -- order matters
 # ============================================================================
+# TEMPERATURE RUNS FIRST, THEN THE SAME top_p=0.9 CUTS  (cumulative %)
+#            sunny  cloudy  rainy   cold  perfect
+#   T=0.5     68.7    89.4   97.0 │                     ─▶ keeps 3
+#   T=1.0     45.8    70.9   86.2   94.6 │              ─▶ keeps 4
+#   T=1.5     36.1    60.3   77.6   89.2   97.0 │       ─▶ keeps 5
+#                                         └ │ = first total ≥ 90
+#   hotter T ─▶ flatter curve ─▶ the nucleus lets in MORE tokens
 
 def part5_combinations():
     print("######## PART 5 -- Combining temperature + top_p + top_k ########\n")
@@ -246,6 +307,12 @@ def part5_combinations():
 # ============================================================================
 # PART 6: Seeds and determinism
 # ============================================================================
+# SEED ─▶ RNG STREAM ─▶ PICKS  (probs identical in every row)
+#   seed 7 ─▶ Random(700..711) ─▶ s r r s r r c s s c s c
+#   seed 7 ─▶ Random(700..711) ─▶ s r r s r r c s s c s c   identical
+#   seed 8 ─▶ Random(800..811) ─▶ c s c s c c c s s s r s   different
+#   T=0    ─▶ {sunny: 1.0}     ─▶ s s s s s s s s s s s s   no dice left
+#   real GPUs: a near-tie in logits can still flip at T=0
 
 def part6_determinism():
     print("######## PART 6 -- Seeds and determinism ########\n")
@@ -284,6 +351,19 @@ LOOP_LOGITS = {  # a model that loves repeating itself
 }
 
 
+# THE PENALTY FEEDBACK LOOP  (generate_with_penalties)
+#   ┌─▶ logits = LOOP_LOGITS[last word]
+#   │     ▼
+#   │   each token already in output: logit -= presence + frequency × uses
+#   │     ▼
+#   │   pick max (greedy) ─▶ append ─▶ "." ? ──yes──▶ STOP
+#   │                                   │ no
+#   └───────────────────────────────────┘
+#   logits after "very":          very   good    ─▶ pick
+#     no penalty                   2.0    1.5    ─▶ very (until steps run out)
+#     presence=0.6                 1.4    1.5    ─▶ good ─▶ .
+#     frequency=0.4 (very 1x)      1.6    1.5    ─▶ very
+#     frequency=0.4 (very 2x)      1.2    1.5    ─▶ good ─▶ .
 def generate_with_penalties(freq: float, pres: float, steps: int = 10) -> str:
     out = ["very"]
     for _ in range(steps):
@@ -311,6 +391,20 @@ def part7_penalties():
 # ============================================================================
 # PART 8: How generation stops -- max_tokens and stop sequences
 # ============================================================================
+# HOW THE LOOP ENDS  (run(): checked for every token, first hit wins)
+#   next token
+#     ▼
+#   tok == "<eos>" ? ──────────────yes──▶ end_turn   (model chose to end)
+#     │ no
+#     ▼
+#   n >= max_tokens ? ─────────────yes──▶ max_tokens (cut off mid-thought!)
+#     │ no
+#     ▼
+#   text+tok contains a stop seq? ──yes──▶ stop_sequence (seq trimmed off)
+#     │ no
+#     ▼
+#   append, n += 1, next token
+#   max_tokens=8: Step│ 1│:│ boil│ water│.│\n│Step ─▶ 9th token refused
 
 def part8_stopping():
     print("######## PART 8 -- max_tokens and stop sequences ########\n")
@@ -345,6 +439,17 @@ def part8_stopping():
 # ============================================================================
 # PART 9: What to set, by task
 # ============================================================================
+# WHAT TO SET: DECISION FLOW  (same values as the table printed below)
+#   Model rejects sampling params? ──yes──▶ steer with prompt + effort
+#     │ no
+#     ▼
+#   ONE right answer? (JSON, extraction, code, RAG, tools)
+#     ├─ yes ─▶ temperature 0-0.3 (0-0.2 for extraction), top_p 1.0
+#     └─ no ──▶ how much variety?
+#               ├─ natural chat     ─▶ temperature 0.5-0.8, top_p 1.0
+#               ├─ creative writing ─▶ temperature 0.8-1.2, top_p 0.9-1
+#               └─ many candidates  ─▶ 0.9-1.2, top_p 0.95, then judge/test
+#   Answers WRONG rather than random? ─▶ fix the context, not the sampling
 
 def part9_recommendations():
     print("######## PART 9 -- Settings by task ########\n")

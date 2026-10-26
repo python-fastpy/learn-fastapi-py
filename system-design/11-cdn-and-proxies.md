@@ -40,6 +40,21 @@ Origin server (Virginia)               User (Sydney) ──▶ CDN edge (Sydney)
 - Massively cuts latency (physics — light/data takes real time to
   travel long distances) AND cuts load on your origin server.
 
+```
+CDN REQUEST — edge cache hit vs. miss
+  ① User (Tokyo) ── GET /logo.png ──▶ nearest edge (Tokyo)
+        │
+        ▼
+  ② edge has it & TTL not expired ? ── yes ──▶ ✓ serve from edge (fast)
+        │ no (miss or expired)
+        ▼
+  ③ edge ── fetch ──▶ Origin (Virginia) ── response ──▶ edge
+        │
+        ▼
+  ④ edge stores a copy with a TTL ──▶ ✓ serve user
+     (next Tokyo user asking for /logo.png → hit at step ②)
+```
+
 ### Forward Proxy vs. Reverse Proxy
 
 ```
@@ -65,12 +80,56 @@ bypassing geo-restrictions              SSL termination,
 The load balancer from ch.03 and the API Gateway from ch.09 are BOTH,
 technically, reverse proxies with extra responsibilities layered on.
 
+```
+FORWARD PROXY — request path (proxy acts for the CLIENT)
+  ① Client ── GET news.com ──▶ Forward proxy
+        │
+        ▼
+  ② allowed by policy ? ──── no ───▶ ✗ blocked (content filtering)
+        │ yes
+        ▼
+  ③ proxy ── request from the PROXY's IP ──▶ news.com
+        │
+        ▼
+  ④ news.com ── response ──▶ proxy ──▶ Client
+     ✓ news.com only ever saw the proxy, never the client
+```
+
+```
+REVERSE PROXY — request path (proxy acts for the SERVERS)
+  ① Client ── GET api.myapp.com ──▶ Reverse proxy (the one public address)
+        │
+        ▼
+  ② terminate TLS; cached? ── yes ──▶ ✓ respond directly
+        │ no
+        ▼
+  ③ pick a backend (load balancing) ──▶ Server2  (Server1/3 not exposed)
+        │
+        ▼
+  ④ Server2 ── response ──▶ proxy ──▶ Client
+     ✓ client thinks it talked to ONE server
+```
+
 ### Geo-Routing (a CDN/DNS-level trick)
 
 DNS can be configured to return a DIFFERENT server IP depending on
 WHERE the request is coming from — so a user in Japan gets routed to
 the nearest edge/data center automatically, without the client needing
 to know anything about geography.
+
+```
+GEO-ROUTING — DNS picks the server by where the request comes from
+  ① User (Japan) ── "IP for cdn.myapp.com?" ──▶ DNS
+        │
+        ▼
+  ② DNS maps the requester's IP/resolver ──▶ location = Japan
+        │
+        ▼
+  ③ returns the Tokyo edge's IP  (a London user would get London's)
+        │
+        ▼
+  ④ User ── HTTP request ──▶ Tokyo edge   ✓ short hop, low latency
+```
 
 ---
 

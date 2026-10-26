@@ -25,6 +25,10 @@ class LRUCache {
         this.cache.set(key, value);
         return value;
     }
+    // TRACE get()   capacity = 2   cache order LRU -> MRU
+    //   start           [a:1, b:2]
+    //   get("a")  hit   delete a, set a   [b:2, a:1]   returns 1
+    //   get("z")  miss  no change         [b:2, a:1]   returns -1
 
     put(key, value) {
         if (this.cache.has(key)) this.cache.delete(key); // refresh position
@@ -34,6 +38,11 @@ class LRUCache {
         }
         this.cache.set(key, value);
     }
+    // TRACE put()   capacity = 2   cache order LRU -> MRU
+    //   put("a", 1)   new, size 0 < 2          [a:1]
+    //   put("b", 2)   new, size 1 < 2          [a:1, b:2]
+    //   put("b", 20)  exists -> delete, re-set [a:1, b:20]
+    //   put("c", 3)   new, size 2 >= 2 -> evict lruKey "a"   [b:20, c:3]
 
     print() { console.log([...this.cache.entries()]); }
 }

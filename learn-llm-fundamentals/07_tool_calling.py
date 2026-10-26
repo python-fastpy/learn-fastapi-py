@@ -121,10 +121,34 @@ def cancel_order(order_id: str) -> dict:
 # sync with the code, so frameworks generate them from type hints and
 # docstrings (Pydantic, LangChain's @tool, FastMCP's @mcp.tool, the
 # Anthropic SDK's @beta_tool). Here's the mechanism, in ~30 lines.
+#
+# FUNCTION ─▶ JSON SCHEMA ─▶ THREE WIRE FORMATS
+#   def search_orders(customer_email: str, ─┐ inspect.signature()
+#       status: Literal[...] = "any",       ├ get_type_hints()
+#       limit: int = 5)  + docstring Args: ─┘ regex over "    name: text"
+#                       │ function_to_tool()
+#                       ▼
+#   {name, description, parameters: {type: "object", properties,
+#    required: ["customer_email"], additionalProperties: false}}
+#         ┌─────────────┼──────────────────┐
+#         ▼             ▼                  ▼
+#   to_openai()     to_anthropic()      to_mcp()
+#   {type:function, {name, description, {name, description,
+#    function:{..}}  input_schema}       inputSchema}
+#   cost per call: get_weather 99 + search_orders 151 + cancel_order 80 = 330
 
 PY_TO_JSON = {str: "string", int: "integer", float: "number", bool: "boolean"}
 
 
+# TYPE MAPPING: json_type() + function_to_tool()
+#   Python hint          ─▶ JSON Schema
+#   str / int / float    ─▶ "string" / "integer" / "number"
+#   bool                 ─▶ "boolean"
+#   Literal["c", "f"]    ─▶ {"type": "string", "enum": ["c", "f"]}
+#   list[str]            ─▶ {"type": "array", "items": {"type": "string"}}
+#   no default           ─▶ name added to "required"
+#   default = 5          ─▶ "default": 5   (optional argument)
+#   docstring "Args:"    ─▶ per-property "description"
 def json_type(py_type) -> dict:
     if get_origin(py_type) is Literal:
         return {"type": "string", "enum": list(get_args(py_type))}
@@ -207,6 +231,17 @@ def part1_definitions():
 # schema is supported natively by MCP (outputSchema + structuredContent,
 # see learn-mcp 04); errors and examples usually go into the description
 # text, because that's what the model reads.
+#
+# COMPLETE DEFINITION: 4 PARTS ─▶ WHERE EACH ONE GOES
+#   CANCEL_ORDER_SPEC                             sent to the model as
+#   ├─ 1 name ──────────────────────────────────▶ name
+#   ├─ 1 description ──┐
+#   ├─ 3 errors (3) ───┼─ render_description() ─▶ description (one text)
+#   ├─ 4 examples (2) ─┘
+#   ├─ 2 input_schema ──────────────────────────▶ input schema (JSON)
+#   └─ 2 output_schema ─▶ stays in YOUR code: check_output(result)
+#        good  {"order_id", "cancelled"}  ✓ OK
+#        buggy {"order_id"}               ✗ missing field 'cancelled'
 
 CANCEL_ORDER_SPEC = {
     "name": "cancel_order",
@@ -280,6 +315,20 @@ def part1b_complete_definition():
 # The model generates arguments as TEXT. They can be missing, mistyped,
 # out of the enum, or invented. Validate before running, and send
 # problems back as a tool result -- the model reads it and retries.
+#
+# VALIDATION FAILURE ─▶ ERROR RESULT ─▶ MODEL SELF-CORRECTS (part 3 demo)
+#   model #1: search_orders({email, status: "open", limit: "five"})
+#        │ validate(args, schema)
+#        ▼
+#   ✗ missing required argument 'customer_email'
+#   ✗ unknown argument 'email' (allowed: customer_email, limit, status)
+#   ✗ 'limit' must be integer, got str 'five'
+#        │ sent back as a tool RESULT (is_error), not raised
+#        ▼
+#   model #2: search_orders({customer_email, status: "open", limit: 5})
+#        │ validate ✓ ─▶ run
+#        ▼
+#   {"count": 10, "orders": [5 rows, first ORD-1000]}
 
 def validate(args: dict, schema: dict) -> list[str]:
     errors = []
@@ -303,6 +352,18 @@ def validate(args: dict, schema: dict) -> list[str]:
 # ============================================================================
 # PART 3: The round trip -- exact messages
 # ============================================================================
+# ROUND TRIP: EXACT MESSAGE SEQUENCE (the call id links call ▶ result)
+#   YOUR CODE                                              MODEL
+#   system + user "Cancel my open order ... sam@example.com" ──▶
+#        ◀── assistant tool_calls [id=call_1 search_orders, bad args]
+#   tool tool_call_id=call_1 {"error": "invalid arguments"} ──▶
+#        ◀── assistant tool_calls [id=call_2 search_orders, fixed]
+#   tool tool_call_id=call_2 {"count": 10, ... "ORD-1000" ...} ──▶
+#        ◀── assistant tool_calls [id=call_3 cancel_order ORD-1000]
+#   [gate: approve()] tool tool_call_id=call_3 {"cancelled": true} ──▶
+#        ◀── assistant TEXT "Done -- order ORD-1000 is cancelled."
+#   messages: 2 ─▶ 9  (4 assistant + 3 tool appended, all resent each turn)
+#   Anthropic: tool_use id=toolu_02 ─▶ USER msg tool_result tool_use_id=toolu_02
 
 class ScriptedModel:
     """Stand-in model: replays what a real model typically does in this
@@ -340,6 +401,13 @@ def approve(name: str, args: dict) -> bool:
     return True
 
 
+# execute(): EVERY EXIT IS A RESULT (content, is_error) -- NEVER AN EXCEPTION
+#   call {id, name, arguments}
+#     ├ name in REGISTRY?          ✗ ─▶ ({"error": "unknown tool ..."}, True)
+#     ├ validate(arguments)        ✗ ─▶ ({"error": "invalid arguments"}, True)
+#     ├ in SIDE_EFFECT_TOOLS?  yes ─▶ approve()  ✗ ─▶ ("user declined", True)
+#     ├ fn(**arguments) raises     ✗ ─▶ ({"error": "Type: msg"}, True)
+#     └ ✓ ─▶ (json.dumps(result), False)
 def execute(call: dict) -> tuple[str, bool]:
     """Returns (content, is_error). Errors are RESULTS, not exceptions."""
     fn = REGISTRY.get(call["name"])
@@ -396,6 +464,13 @@ def part3_round_trip():
 # ============================================================================
 # PART 4: tool_choice
 # ============================================================================
+# TOOL_CHOICE: WHAT THE MODEL MAY DO THIS TURN
+#   tool_choice     │ text? │ tool call?     │ use for
+#   ────────────────┼───────┼────────────────┼───────────────────────────
+#   auto (default)  │ ✓ may │ ✓ may, any     │ almost always
+#   none            │ ✓ yes │ ✗ never        │ final summarize-only turn
+#   required / any  │ ✗     │ ✓ must, any    │ pipelines needing a lookup
+#   specific X      │ ✗     │ ✓ must, only X │ old JSON-extraction trick
 
 def part4_tool_choice():
     print("######## PART 4 -- tool_choice ########\n")
@@ -425,6 +500,13 @@ def part4_tool_choice():
 # ============================================================================
 # PART 5: Parallel tool calls
 # ============================================================================
+# PARALLEL CALLS: FAN-OUT / FAN-IN (each slow_weather sleeps 0.3s)
+#   one by one: call_Rome[0.3s] ─▶ call_Dublin[0.3s] ─▶ call_Tokyo[0.3s] = 0.9s
+#
+#   asyncio.gather:   ┌─▶ call_Rome   [0.3s] ─┐
+#   ONE model turn ───┼─▶ call_Dublin [0.3s] ─┼─▶ 3 tool_results     = 0.3s
+#   (3 tool calls)    └─▶ call_Tokyo  [0.3s] ─┘   in ONE user message
+#                         0s ────────────▶ 0.3s
 
 async def slow_weather(city: str) -> dict:
     await asyncio.sleep(0.3)            # simulated network latency
@@ -464,6 +546,15 @@ async def part5_parallel():
 # description best overlaps the request. Real models are far smarter,
 # but they have the same information bottleneck -- measured effect,
 # same direction.
+#
+# DESCRIPTION QUALITY ─▶ WHICH TOOL GETS PICKED (pick_tool, 8 REQUESTS)
+#   requests (2 each)          VAGUE_TOOLS            CLEAR_TOOLS
+#   find / look up orders  ─▶  tool_a  ✓              search_orders  ✓
+#   cancel order           ─▶  tool_b  ✓              cancel_order   ✓
+#   temperature / weather  ─▶  tool_a  ✗ want tool_c  get_weather    ✓
+#   refund / money back    ─▶  tool_b  ✗ want tool_d  refund_order   ✓
+#                              score 4/8              score 8/8
+#   ✗ weather: 0 word overlap, tie ─▶ first tool;  refund: "order" ─▶ tool_b
 
 VAGUE_TOOLS = {
     "tool_a": "Handles orders.",
@@ -518,6 +609,12 @@ def part6_design():
 # ============================================================================
 # PART 7: Tool results are context -- size them
 # ============================================================================
+# RESULT SIZE: WHAT SITS IN THE CONTEXT FOR EVERY LATER CALL
+#   lazy: all 200 ORDERS x 7 fields (items, warehouse, internal_notes, ...)
+#   ├────────────────────────────────────────────────────────┤ 13093 tokens
+#   shaped: search_orders(email, "any", 5) ─▶ count + 5 rows x 3 fields
+#   ├┤ 88 tokens                                         (~149x smaller)
+#   turn N ─▶ N+1 ─▶ N+2 ...  whichever you returned is resent every time
 
 def part7_result_size():
     print("######## PART 7 -- Sizing tool results ########\n")
@@ -538,6 +635,17 @@ def part7_result_size():
 # ============================================================================
 # PART 8: Safety
 # ============================================================================
+# SAFETY GATE: FROM "REQUESTED" TO "RAN"
+#   model requests cancel_order({"order_id": "ORD-1000"})
+#     ▼
+#   ├ known tool?             ✗ ─▶ error result "unknown tool"
+#   ├ validate(args)          ✗ ─▶ error result "invalid arguments"
+#   ├ scope to the CALLER     (from the session, never from model args)
+#   ├ side effect? ─ yes ─▶ confirm with user  ✗ ─▶ "user declined"
+#   ├ idempotency key seen?   yes ─▶ return the earlier result, no 2nd effect
+#   ├ calls this request < cap?  ✗ ─▶ stop the loop
+#   └ ✓ run ─▶ result (trimmed, UNTRUSTED) ─▶ log ─▶ back to the model
+#   execute() above implements the first two + confirm; the rest is checklist
 
 def part8_safety():
     print("######## PART 8 -- Safety ########\n")
@@ -558,6 +666,16 @@ def part8_safety():
 # ============================================================================
 # PART 9: Tools vs MCP vs agents
 # ============================================================================
+# LAYERING: TOOL CALL inside AGENT LOOP; MCP = HOW TOOLS ARE SERVED
+#   ┌─ AGENT: loop until the model stops asking ──────────────┐
+#   │  model ─▶ tool call ─▶ YOUR CODE ─▶ result ─▶ model ... │
+#   │           └─── one TOOL CALL round trip ───┘            │
+#   └──────────────────────────┬──────────────────────────────┘
+#              your code = MCP CLIENT   (tools/list, tools/call)
+#                              ▼
+#              MCP SERVER: separate process, definitions + execution
+#   SERVER TOOLS: the PROVIDER runs them -- no hop through your code
+#   SUBAGENT:     a whole agent wrapped as ONE tool of another agent
 
 def part9_vocabulary():
     print("######## PART 9 -- Tools vs MCP vs agents ########\n")

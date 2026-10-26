@@ -26,6 +26,13 @@ class HashTable {
         for (let i = 0; i < key.length; i++) total += key.charCodeAt(i);
         return total % this.size;
     }
+    // TRACE hash("name")   size = 50
+    //   i=0  'n' 110   total = 110
+    //   i=1  'a'  97   total = 207
+    //   i=2  'm' 109   total = 316
+    //   i=3  'e' 101   total = 417
+    //   417 % 50 = 17  -> index 17
+    //   hash("mane") -> same letters, same total 417 -> ALSO 17 (collision!)
 
     set(key, value) { // chaining handles collisions (e.g. "name" & "mane" -> same index)
         const index = this.hash(key);
@@ -38,6 +45,14 @@ class HashTable {
             else bucket.push([key, value]);
         }
     }
+    // TRACE set("name","shubham") -> set("age",25) -> set("mane","vinayak")
+    //   step 1  hash("name") = 17   table[17] empty -> create bucket
+    //           table[17] = [ ["name","shubham"] ]
+    //   step 2  hash("age")  = 1    table[1] empty  -> create bucket
+    //           table[1]  = [ ["age",25] ]
+    //   step 3  hash("mane") = 17   table[17] exists, no "mane" inside -> push
+    //           table[17] = [ ["name","shubham"], ["mane","vinayak"] ]   <- chaining
+    //   (same key again, e.g. set("name","x") -> found -> value overwritten in place)
 
     get(key) {
         const index = this.hash(key);
@@ -48,6 +63,12 @@ class HashTable {
         }
         return undefined;
     }
+    // TRACE get("mane")
+    //   step 1  hash("mane") = 17
+    //   step 2  bucket = [ ["name","shubham"], ["mane","vinayak"] ]
+    //   step 3  scan: "name" != "mane" -> next; "mane" == "mane" -> found
+    //   return "vinayak"
+    //   get("zzz") -> its bucket is empty -> return undefined
 
     remove(key) {
         const index = this.hash(key);
@@ -57,12 +78,22 @@ class HashTable {
             if (sameKeyItem) bucket.splice(bucket.indexOf(sameKeyItem), 1);
         }
     }
+    // TRACE remove("name")
+    //   step 1  hash("name") = 17
+    //   step 2  bucket = [ ["name","shubham"], ["mane","vinayak"] ]
+    //   step 3  found ["name","shubham"] at position 0 -> splice(0, 1)
+    //           table[17] = [ ["mane","vinayak"] ]   <- "mane" survives
 
     display() {
         for (let i = 0; i < this.table.length; i++) {
             if (this.table[i]) console.log(i, this.table[i]);
         }
     }
+    // TRACE display()   (after the sets above)
+    //   i=0  empty -> skip
+    //   i=1  prints: 1 [ [ 'age', 25 ] ]
+    //   i=2..16  empty -> skip
+    //   i=17 prints: 17 [ [ 'name', 'shubham' ], [ 'mane', 'vinayak' ] ]
 }
 
 const table = new HashTable(50);

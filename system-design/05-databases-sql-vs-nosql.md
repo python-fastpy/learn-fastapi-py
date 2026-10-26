@@ -38,6 +38,23 @@ transactions (Atomicity, Consistency, Isolation, Durability) guarantee
 a multi-step operation (like "transfer money between two accounts")
 either fully happens or fully doesn't — never half-way.
 
+```
+ACID TRANSFER — $50 from Alice to Bob
+  ① BEGIN
+        │
+        ▼
+  ② UPDATE accounts SET balance = balance - 50 WHERE id = 'alice'
+        │
+        ▼
+  ③ UPDATE accounts SET balance = balance + 50 WHERE id = 'bob'
+        │
+        ▼
+  ④ both steps OK ? ── yes ──▶ COMMIT  ✓ both changes saved together
+        │ no (crash / error between ② and ③)
+        ▼
+  ⑤ ROLLBACK ──▶ ✓ Alice keeps her $50 — money never "vanishes"
+```
+
 ### NoSQL — Four Common Shapes
 
 | Type | Shape | Example use | Example DB |
@@ -58,6 +75,17 @@ Document example (MongoDB-style):
   ]
 }
 ← the whole "user + their orders" is ONE document, no JOIN needed
+```
+
+```
+"SHOW ALICE + HER ORDERS" — SQL vs. document
+  READ
+  SQL:      ① SELECT … FROM users JOIN orders ON orders.user_id = users.id
+            ② DB matches rows across 2 tables ──▶ ③ ✓ combined result
+  DOCUMENT: ① get("user_1") ──▶ ② ✓ one doc, orders already nested
+  WRITE a new order
+  SQL:      INSERT order ──▶ FK: user exists? ── no ──▶ ✗ rejected by DB
+  DOCUMENT: push into user_1.orders ──▶ ✓ (app must keep data consistent)
 ```
 
 ### The Real Trade-off
@@ -94,6 +122,22 @@ or wide-column store well — they're mostly independent, high write
 volume, don't need cross-message transactions. But user accounts and
 billing probably still want SQL, for the consistency guarantees." Many
 real systems use BOTH — this is called **polyglot persistence**.
+
+```
+SQL OR NOSQL? — decision flow
+  ① state the access pattern: how is this data read / written?
+        │
+        ▼
+  ② needs multi-step transactions or JOINs across entities?
+        │ yes ──▶ SQL  (accounts, billing, ledgers)
+        │ no
+        ▼
+  ③ mostly independent records, huge write volume, flexible shape?
+        │ yes ──▶ NoSQL (document / wide-column / key-value)
+        │ no
+        ▼
+  ④ either can work ──▶ many systems mix both (polyglot persistence)
+```
 
 ---
 

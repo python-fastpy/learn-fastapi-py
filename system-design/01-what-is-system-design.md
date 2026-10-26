@@ -47,6 +47,18 @@ latency, and consistency requirements decide the entire architecture** —
 a system for 100 users and a system for 100 million users are not the
 same system with "more servers," they're different designs entirely.
 
+```
+NON-FUNCTIONAL REQUIREMENT → DESIGN DECISION
+  ① "99.99% uptime" ──────▶ no single point of failure
+                              ──▶ redundant servers + load balancer
+  ② "feed < 200ms" ───────▶ no slow DB hit on every read ──▶ add cache
+  ③ "reads >>> writes" ───▶ optimize read path ──▶ cache + read replicas
+  ④ "eventual consistency OK" ──▶ replicas may lag ──▶ ✓ acceptable
+        │
+        ▼
+  ⑤ these answers — not the feature list — decide the boxes you draw
+```
+
 ### Back-of-the-Envelope Estimation
 
 You don't need exact numbers — you need to know which order of magnitude
@@ -74,6 +86,20 @@ Example: "design a URL shortener"
 
 That one estimate already tells you: cache aggressively, optimize for
 fast reads, don't over-engineer the write path.
+
+```
+ESTIMATE → DECISION (URL shortener numbers)
+  ① reads/writes ≈ 100x ? ──── yes ───▶ read-heavy ──▶ cache aggressively
+        │
+        ▼
+  ② storage ≈ 1 TB / 5 yrs ── small ──▶ ✓ one DB is fine, no sharding
+        │
+        ▼
+  ③ peak ≈ 5,000 reads/sec ──▶ serve most from cache, DB sees misses
+        │
+        ▼
+  ④ writes = 1M/day ≈ 12/sec ──▶ ✓ keep the write path simple
+```
 
 ### The Standard Interview Flow
 
@@ -122,3 +148,17 @@ This single sentence signals seniority more than anything you draw.
 4. Trying to design for infinite scale from day one — real systems
    start simple and evolve; say so explicitly ("start with one DB, add
    read replicas when reads become the bottleneck").
+
+```
+EVOLVE THE DESIGN — add pieces only when a bottleneck appears
+  ① start: App ──▶ one DB
+        │
+        ▼
+  ② reads are the bottleneck? ── no ──▶ ✓ stay simple, keep shipping
+        │ yes
+        ▼
+  ③ add cache + read replicas: App ──▶ Cache ──miss──▶ Replica(s)
+        │
+        ▼
+  ④ writes / storage outgrow one DB? ── yes ──▶ sharding (ch.06)
+```

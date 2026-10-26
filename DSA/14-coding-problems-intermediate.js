@@ -19,6 +19,8 @@ function twoSumBrute(arr, target) {
     }
     return null;
 }
+// TRACE twoSumBrute([2, 7, 11, 15], 9)
+//   i=0 j=1   2 + 7 = 9  === target  -> return [0, 1]
 
 // Approach 2: Hash map (optimal)  -- Time: O(n)  |  Space: O(n)
 function twoSum(arr, target) {
@@ -30,6 +32,9 @@ function twoSum(arr, target) {
     }
     return null;
 }
+// TRACE twoSum([2, 7, 11, 15], 9)
+//   i=0  arr[i]=2  complement=7  map {}       miss -> map {2:0}
+//   i=1  arr[i]=7  complement=2  map {2:0}    HIT  -> return [0, 1]
 
 console.log(twoSum([2, 7, 11, 15], 9)); // [0, 1]
 
@@ -63,6 +68,14 @@ function threeSum(nums) {
     }
     return result;
 }
+// TRACE threeSum([-1, 0, 1, 2, -1, -4])
+//   sorted: [-4, -1, -1, 0, 1, 2]
+//   i=0 (-4)  L=1 R=5  sum=-3 <0 L++ ; L=2 -3 L++ ; L=3 -2 L++ ; L=4 -1 L++ ; stop
+//   i=1 (-1)  L=2 R=5  -1 + -1 + 2 = 0  push [-1,-1,2]  L=3 R=4
+//             L=3 R=4  -1 +  0 + 1 = 0  push [-1,0,1]   L=4 R=3 stop
+//   i=2 (-1)  same as nums[1] -> skip
+//   i=3 ( 0)  L=4 R=5  0 + 1 + 2 = 3 >0 R--  stop
+//   return [[-1,-1,2], [-1,0,1]]
 
 console.log(threeSum([-1, 0, 1, 2, -1, -4])); // [[-1,-1,2],[-1,0,1]]
 
@@ -164,6 +177,12 @@ function maxSumK(arr, k) {
     }
     return maxSum;
 }
+// TRACE maxSumK([2, 1, 5, 1, 3, 2], 3)
+//   [2 1 5] 1 3 2        windowSum = 8               maxSum = 8
+//   2 [1 5 1] 3 2        +1 -2  windowSum = 7        maxSum = 8
+//   2 1 [5 1 3] 2        +3 -1  windowSum = 9        maxSum = 9
+//   2 1 5 [1 3 2]        +2 -5  windowSum = 6        maxSum = 9
+//   return 9
 
 console.log(maxSumK([2, 1, 5, 1, 3, 2], 3)); // 9
 
@@ -181,6 +200,16 @@ function lengthOfLongestSubstring(s) {
     }
     return maxLen;
 }
+// TRACE lengthOfLongestSubstring("abcabcbb")
+//   end=0 'a'  start=0  window "a"     maxLen=1
+//   end=1 'b'  start=0  window "ab"    maxLen=2
+//   end=2 'c'  start=0  window "abc"   maxLen=3
+//   end=3 'a'  seen a@0 -> start=1  window "bca"   maxLen=3
+//   end=4 'b'  seen b@1 -> start=2  window "cab"   maxLen=3
+//   end=5 'c'  seen c@2 -> start=3  window "abc"   maxLen=3
+//   end=6 'b'  seen b@4 -> start=5  window "cb"    maxLen=3
+//   end=7 'b'  seen b@6 -> start=7  window "b"     maxLen=3
+//   return 3
 
 console.log(lengthOfLongestSubstring("abcabcbb")); // 3
 
@@ -217,6 +246,14 @@ function maxArea(height) {
     }
     return max;
 }
+// TRACE maxArea([1, 8, 6, 2, 5, 4, 8, 3, 7])
+//   L=0 R=8  min(1,7)*8 = 8    max=8    1<7  L++
+//   L=1 R=8  min(8,7)*7 = 49   max=49   8>=7 R--
+//   L=1 R=7  min(8,3)*6 = 18   max=49   R--
+//   L=1 R=6  min(8,8)*5 = 40   max=49   R--
+//   ...
+//   L=1 R=2  min(8,6)*1 = 6    max=49   R--  -> L=R stop
+//   return 49
 
 console.log(maxArea([1, 8, 6, 2, 5, 4, 8, 3, 7])); // 49
 
@@ -234,6 +271,13 @@ function moveZeroes(arr) {
     }
     return arr;
 }
+// TRACE moveZeroes([0, 1, 0, 3, 12])
+//   i=0  0   skip            [0, 1, 0, 3, 12]   insertPos=0
+//   i=1  1   swap 0<->1      [1, 0, 0, 3, 12]   insertPos=1
+//   i=2  0   skip            [1, 0, 0, 3, 12]   insertPos=1
+//   i=3  3   swap 1<->3      [1, 3, 0, 0, 12]   insertPos=2
+//   i=4  12  swap 2<->4      [1, 3, 12, 0, 0]   insertPos=3
+//   return [1, 3, 12, 0, 0]
 
 console.log(moveZeroes([0, 1, 0, 3, 12])); // [1, 3, 12, 0, 0]
 
@@ -258,10 +302,17 @@ class MinStack {
             : Math.min(val, this.minStack[this.minStack.length - 1]);
         this.minStack.push(min);
     }
+    // TRACE push(3) push(5) push(2) push(1)
+    //   push 3  stack [3]          minStack [3]
+    //   push 5  stack [3,5]        minStack [3,3]       min(5,3)=3
+    //   push 2  stack [3,5,2]      minStack [3,3,2]     min(2,3)=2
+    //   push 1  stack [3,5,2,1]    minStack [3,3,2,1]   getMin() -> 1
     pop() {
         this.stack.pop();
         this.minStack.pop();
     }
+    // TRACE pop()   stack [3,5,2,1]  minStack [3,3,2,1]
+    //   -> stack [3,5,2]  minStack [3,3,2]   getMin() -> 2
     top() { return this.stack[this.stack.length - 1]; }
     getMin() { return this.minStack[this.minStack.length - 1]; }
 }
@@ -290,6 +341,16 @@ function dailyTemperatures(temps) {
     }
     return result;
 }
+// TRACE dailyTemperatures([73, 74, 75, 71, 69, 72, 76, 73])   (stack = indices)
+//   i=0 73                         stack [0]
+//   i=1 74  pop 0 -> res[0]=1      stack [1]
+//   i=2 75  pop 1 -> res[1]=1      stack [2]
+//   i=3 71                         stack [2,3]
+//   i=4 69                         stack [2,3,4]
+//   i=5 72  pop 4 -> res[4]=1, pop 3 -> res[3]=2      stack [2,5]
+//   i=6 76  pop 5 -> res[5]=1, pop 2 -> res[2]=4      stack [6]
+//   i=7 73                         stack [6,7]
+//   return [1, 1, 4, 2, 1, 1, 0, 0]
 
 console.log(dailyTemperatures([73, 74, 75, 71, 69, 72, 76, 73]));
 // [1, 1, 4, 2, 1, 1, 0, 0]
@@ -309,6 +370,14 @@ function isSubsequence(s, t) {
     }
     return si === s.length;
 }
+// TRACE isSubsequence("ace", "abcde")
+//   ti=0 'a'  s[0]='a' match  si=1
+//   ti=1 'b'  s[1]='c'        si=1
+//   ti=2 'c'  s[1]='c' match  si=2
+//   ti=3 'd'  s[2]='e'        si=2
+//   ti=4 'e'  s[2]='e' match  si=3
+//   si === 3 -> true
+//   ("aec": only 'a','e' match -> si=2 -> false)
 
 console.log(isSubsequence("ace", "abcde")); // true
 console.log(isSubsequence("aec", "abcde")); // false
@@ -325,5 +394,13 @@ function countSubStringsWithChar(str, char) {
     }
     return count;
 }
+// TRACE countSubStringsWithChar('abb', 'b')
+//   i=0 j=1 "a"    no    count=0
+//   i=0 j=2 "ab"   yes   count=1
+//   i=0 j=3 "abb"  yes   count=2
+//   i=1 j=2 "b"    yes   count=3
+//   i=1 j=3 "bb"   yes   count=4
+//   i=2 j=3 "b"    yes   count=5
+//   return 5
 
 console.log(countSubStringsWithChar('abb', 'b')); // 5

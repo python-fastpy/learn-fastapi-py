@@ -59,6 +59,23 @@ Enforcing at the **API Gateway**, not inside each individual service,
 means every service gets rate limiting for free without duplicating
 the logic (this is exactly the API Gateway's job from ch.09).
 
+```
+ONE API REQUEST — through the gateway, step by step
+  ① Client (api-key-42) ──GET /orders──▶ API Gateway
+        │
+        ▼
+  ② Rate Limiter check: key = "ratelimit:api-key-42"
+        │
+        ▼
+  ③ Redis: GET key  (absent? initialize to max capacity)
+        │
+        ▼
+  ④ tokens_left > 0 ? ──── no ───▶ ✗ 429 Too Many Requests (+Retry-After)
+        │ yes
+        ▼
+  ⑤ Redis: DECR key (+ EXPIRE if not set) ──▶ App Server ──▶ ✓ 200 OK
+```
+
 ## 4. Deep Dive: The Algorithm & the Storage
 
 **Algorithm choice (from ch.10): Token Bucket.** It's the standard
@@ -87,6 +104,16 @@ instances → solves the exact multi-server counter problem from ch.02
 and ch.10, (3) it supports atomic `INCR`/`DECR` → no race condition
 between two servers checking the same client at the same instant.
 
+```
+TWO SERVERS, SAME CLIENT, SAME INSTANT — why atomic DECR matters
+  Redis: ratelimit:api-key-42 = 1 token left
+  Server A ──① DECR key──▶ Redis ──▶ returns 0   ──▶ ✓ ALLOW
+  Server B ──② DECR key──▶ Redis ──▶ returns -1  ──▶ ✗ 429 REJECT
+  (Redis executes commands one at a time → exactly ONE request wins)
+
+  ✗ local/non-atomic version: A reads 1, B reads 1, both ALLOW → over limit
+```
+
 ### What Happens When Redis Itself Is Slow/Down?
 
 This is the follow-up question that separates strong answers:
@@ -109,6 +136,21 @@ protect the system from overload — the rate limiter itself becoming
 the reason for an outage defeats its purpose. Explicitly choosing and
 justifying this is a strong signal in an interview.
 
+```
+REDIS SLOW / DOWN — the fail-open path
+  ① request ──▶ API Gateway ──▶ Rate Limiter ──GET key──▶ Redis
+        │
+        ▼
+  ② reply within timeout (a few ms)? ──yes──▶ normal check (allow / 429)
+        │ no (timeout / connection refused)
+        ▼
+  ③ log + emit metric "ratelimit_store_unavailable" ──▶ alert on-call
+        │
+        ▼
+  ④ FAIL OPEN ──▶ forward to App Server ──▶ ✓ 200 (unlimited, for now)
+     (fail-closed variant: ✗ reject instead — critical infra only)
+```
+
 ### Where Enforcement Happens: Edge vs. Origin
 
 - **Edge/CDN-level** (ch.11): can reject obviously abusive traffic
@@ -117,6 +159,23 @@ justifying this is a strong signal in an interview.
   enforcement point.
 - **Per-service**: rare, only for a specific expensive endpoint that
   needs a STRICTER limit than the platform-wide default.
+
+```
+RULE CONFIG UPDATE — stricter limit for one endpoint
+  ① Ops ──▶ rules config:  POST /login → 5 req/min per IP
+                             default     → 100 req/min per api-key
+        │
+        ▼
+  ② config published ──▶ every API Gateway node reloads its rules
+     (pushed or polled; held in gateway memory, not fetched per request)
+        │
+        ▼
+  ③ next request: match endpoint ──▶ pick rule ──▶ build key per rule
+     e.g. "ratelimit:login:203.0.113.7"  vs  "ratelimit:api-key-42"
+        │
+        ▼
+  ④ same Redis check as above ──▶ ✓ allow  /  ✗ 429 + Retry-After
+```
 
 ---
 

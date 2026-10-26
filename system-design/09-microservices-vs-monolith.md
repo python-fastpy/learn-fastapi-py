@@ -58,6 +58,33 @@ The knife is a **monolith**. The toolbox is **microservices**.
 | Complexity | Low operational complexity | High — needs service discovery, distributed tracing (ch.14), network reliability handling |
 | Data consistency | Easy (one DB, real transactions) | Hard — cross-service transactions need patterns like Sagas |
 
+```
+FAILURE ISOLATION — a bug crashes the payments code
+  MONOLITH
+  ① bug in payments module ──▶ the ONE application process crashes
+  ② Users + Orders + Payments all down ──▶ ✗ whole site offline
+
+  MICROSERVICES
+  ① Payments Service crashes ──▶ only that service is down
+  ② Gateway ──▶ Payments: timeout ──▶ ✗ "checkout unavailable" (503)
+  ③ Gateway ──▶ Users / Orders still answer ──▶ ✓ browse, view orders
+```
+
+```
+SAGA — "place order" across services (no shared DB transaction)
+  ① Orders Service: create order, status = PENDING  ✓
+        │
+        ▼
+  ② Payments Service: charge card ── fails ──▶ compensate:
+        │ ok                             Orders marks CANCELLED  ✗
+        ▼
+  ③ Inventory Service: reserve stock ── fails ──▶ compensate:
+        │ ok                       refund payment + cancel order  ✗
+        ▼
+  ④ Orders Service: status = CONFIRMED  ✓
+  each step is a local transaction; failures are undone by compensations
+```
+
 **Neither is "correct"** — most successful systems START as a monolith
 (faster to build and reason about while the product is still changing
 a lot) and split into microservices only once specific parts need
@@ -82,6 +109,26 @@ The gateway typically handles things that would otherwise be
 duplicated in every service: **authentication, rate limiting (ch.10),
 request routing, SSL termination, and sometimes response aggregation**
 (combining several services' responses into one for the client).
+
+```
+ONE REQUEST THROUGH THE API GATEWAY
+  ① Client ──GET /orders/42  (HTTPS + auth token)──▶ API Gateway
+        │
+        ▼
+  ② SSL terminated; token valid? ── no ──▶ ✗ 401 Unauthorized
+        │ yes
+        ▼
+  ③ under rate limit? ── no ──▶ ✗ 429 Too Many Requests
+        │ yes
+        ▼
+  ④ route by path: /orders/* ──▶ Orders Service ──▶ order #42
+        │
+        ▼
+  ⑤ (aggregation) also ask Users Service for the buyer's name
+        │
+        ▼
+  ⑥ combine both responses ──▶ ✓ 200 OK, one JSON body to the Client
+```
 
 ---
 

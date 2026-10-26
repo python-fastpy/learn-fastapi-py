@@ -41,6 +41,11 @@ function climbStairs(n) {
     }
     return prev1;
 }
+// TRACE climbStairs(5)   start: prev2 = 1, prev1 = 2
+//   i=3  curr = 2+1 = 3   prev2 = 2  prev1 = 3
+//   i=4  curr = 3+2 = 5   prev2 = 3  prev1 = 5
+//   i=5  curr = 5+3 = 8   prev2 = 5  prev1 = 8
+//   return 8
 
 console.log(climbStairs(4)); // 5
 console.log(climbStairs(5)); // 8
@@ -74,6 +79,20 @@ function coinChange(coins, amount) {
     }
     return dp[amount] === Infinity ? -1 : dp[amount];
 }
+// TRACE coinChange([1, 5, 11], 15)   dp[0] = 0, rest = Infinity
+//   i=1   c1: dp[0]+1=1                                -> dp[1]  = 1
+//   i=4   c1: dp[3]+1=4                                -> dp[4]  = 4
+//   i=5   c1: dp[4]+1=5   c5: dp[0]+1=1                -> dp[5]  = 1
+//   i=10  c1: dp[9]+1=6   c5: dp[5]+1=2                -> dp[10] = 2
+//   i=11  c1: dp[10]+1=3  c5: dp[6]+1=3  c11: dp[0]+1=1 -> dp[11] = 1
+//   ...
+//   i=15  c1: dp[14]+1=5  c5: dp[10]+1=3 c11: dp[4]+1=5 -> dp[15] = 3
+//   return 3
+// TRACE coinChange([2], 3)
+//   i=1  coin 2 > 1, skip       dp[1] = Infinity
+//   i=2  c2: dp[0]+1 = 1        dp[2] = 1
+//   i=3  c2: dp[1]+1 = Infinity dp[3] = Infinity
+//   dp[3] === Infinity -> return -1
 
 console.log(coinChange([1, 5, 11], 15)); // 3  (5+5+5)
 console.log(coinChange([2], 3));          // -1
@@ -106,6 +125,13 @@ function rob(nums) {
     }
     return prev1;
 }
+// TRACE rob([2, 7, 9, 3, 1])   start: prev2 = 0, prev1 = 0
+//   num=2  curr = max(0,  0+2)  = 2    prev2 = 0   prev1 = 2
+//   num=7  curr = max(2,  0+7)  = 7    prev2 = 2   prev1 = 7
+//   num=9  curr = max(7,  2+9)  = 11   prev2 = 7   prev1 = 11
+//   num=3  curr = max(11, 7+3)  = 11   prev2 = 11  prev1 = 11
+//   num=1  curr = max(11, 11+1) = 12   prev2 = 11  prev1 = 12
+//   return 12
 
 console.log(rob([2, 7, 9, 3, 1])); // 12
 console.log(rob([1, 2, 3, 1]));     // 4
@@ -130,6 +156,12 @@ function sortString(value) {
     } while (swapped);
     return chars.join("");
 }
+// TRACE sortString("dcba")   chars = [d,c,b,a]
+//   pass 1  d>c swap, d>b swap, d>a swap  -> [c,b,a,d]  swapped = true
+//   pass 2  c>b swap, c>a swap            -> [b,a,c,d]  swapped = true
+//   pass 3  b>a swap                      -> [a,b,c,d]  swapped = true
+//   pass 4  no swaps                      -> [a,b,c,d]  swapped = false, stop
+//   return "abcd"
 
 console.log(sortString("dcba")); // "abcd"
 
@@ -147,6 +179,13 @@ function reverseArray(arr) {
     }
     return arr;
 }
+// TRACE reverseArray([1, 3, 6, 5, 4])
+//   l=0 r=4  swap 1<->4  [4, 3, 6, 5, 1]
+//                         ^           ^
+//   l=1 r=3  swap 3<->5  [4, 5, 6, 3, 1]
+//                            ^     ^
+//   l=2 r=2  l < r false, stop
+//   return [4, 5, 6, 3, 1]
 
 console.log(reverseArray([1, 3, 6, 5, 4])); // [4, 5, 6, 3, 1]
 
@@ -161,6 +200,10 @@ function objectContains(obj1, obj2) {
         key => obj1.hasOwnProperty(key) && obj1[key] === obj2[key]
     );
 }
+// TRACE objectContains({ name: "John", age: 23 }, { age: 23 })
+//   Object.keys(obj2) = ["age"]
+//   key="age"  obj1.hasOwnProperty("age") true  &&  23 === 23 true
+//   every(...) -> true
 
 console.log(objectContains({ name: "John", age: 23 }, { age: 23 })); // true
 
@@ -193,6 +236,18 @@ function productExceptSelf(nums) {
     }
     return result;
 }
+// TRACE productExceptSelf([1, 2, 3, 4])   result = [1,1,1,1]
+//   left pass (result[i] = prefix, then prefix *= nums[i])
+//     i=0  result = [1,1,1,1]   prefix = 1
+//     i=1  result = [1,1,1,1]   prefix = 2
+//     i=2  result = [1,1,2,1]   prefix = 6
+//     i=3  result = [1,1,2,6]   prefix = 24
+//   right pass (result[i] *= suffix, then suffix *= nums[i])
+//     i=3  result = [1,1,2,6]     suffix = 4
+//     i=2  result = [1,1,8,6]     suffix = 12
+//     i=1  result = [1,12,8,6]    suffix = 24
+//     i=0  result = [24,12,8,6]   suffix = 24
+//   return [24, 12, 8, 6]
 
 console.log(productExceptSelf([1, 2, 3, 4])); // [24, 12, 8, 6]
 
@@ -216,6 +271,12 @@ function mergeIntervals(intervals) {
     }
     return merged;
 }
+// TRACE mergeIntervals([[1,3],[2,6],[8,10],[15,18]])   (already sorted)
+//   merged = [[1,3]]
+//   i=1 [2,6]    2 <= 3  overlap -> last[1] = max(3,6)   merged = [[1,6]]
+//   i=2 [8,10]   8 >  6  push                            merged = [[1,6],[8,10]]
+//   i=3 [15,18]  15 > 10 push                            merged = [[1,6],[8,10],[15,18]]
+//   return [[1,6],[8,10],[15,18]]
 
 console.log(mergeIntervals([[1,3],[2,6],[8,10],[15,18]]));
 // [[1,6],[8,10],[15,18]]

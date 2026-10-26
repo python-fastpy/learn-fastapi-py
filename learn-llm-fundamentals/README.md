@@ -4,11 +4,14 @@ What an LLM really is, how every setting (temperature, top_p, top_k,
 penalties, max_tokens, stop) changes its output, what an API call
 actually sends, how **tools** work and how to build the six common
 kinds safely, and the discipline that matters most in real AI apps:
-**context engineering**. It ends with a roadmap that maps every
+**context engineering**. Then the three things almost every real AI
+product is built from: **agents**, **RAG** (retrieval + embeddings), and
+**evals + guardrails**. It ends with a roadmap that maps every
 AI-engineer skill to the folder in this repo that teaches it.
 
-All 8 lessons are **pure Python: no packages, no API keys**. Every
-number in this README comes from running them.
+All 11 lessons are **pure Python: no packages, no API keys**. Every
+number in this README comes from running them, and every lesson part has
+an ASCII diagram right under its `# ====` header.
 
 ```bash
 cd learn-llm-fundamentals
@@ -20,6 +23,9 @@ uv run python 08_tool_types_catalogue.py
 uv run python 04_context_engineering.py
 uv run python 05_prompt_engineering.py
 uv run python 06_production_llm_engineering.py
+uv run python 09_agents.py               # needs 03 + 07
+uv run python 10_rag_and_embeddings.py   # needs 04
+uv run python 11_evals_and_guardrails.py # needs 05-07
 ```
 
 **How to use this:** read a section below, run the matching lesson,
@@ -38,6 +44,9 @@ has the diagram and the list of concepts.
 5. [Context engineering](#5-context-engineering) (lesson 04)
 6. [Prompt engineering](#6-prompt-engineering) (lesson 05)
 7. [Production engineering](#7-production-engineering) (lesson 06)
+   - [7b. Agents](#7b-agents) (lesson 09)
+   - [7c. RAG and embeddings](#7c-rag-and-embeddings) (lesson 10)
+   - [7d. Evals and guardrails](#7d-evals-and-guardrails) (lesson 11)
 8. [The AI engineer roadmap](#8-the-ai-engineer-roadmap)
 9. [Glossary](#9-glossary)
 
@@ -891,6 +900,85 @@ The engineering around the call (lesson 06).
 
 ---
 
+## 7b. Agents
+
+An agent is **an LLM in a loop with tools that decides its own next step**
+(lesson 09). One call answers; a workflow runs steps *you* fixed; an agent
+picks the steps itself.
+
+```
+         ┌──────────────────────────────────────────────┐
+         ▼                                              │
+  observe (messages) ──▶ think (LLM call) ──▶ tool call? ──yes──▶ run tool
+                                                │ no       (your code: validate,
+                                                ▼           permission, execute)
+                                          final answer
+  stop ALSO on: max_steps · token/$ budget · same action repeated · escalate to a human
+```
+
+| Topic | Measured in lesson 09 |
+|---|---|
+| **The loop** | Refund task: 4 LLM calls, context grows 146 → 207 → 295 → 368 tokens per call |
+| **Stopping** | 5 runs, 5 different exits: `final_answer` (4 calls), `escalated` (3), `max_steps` (5), `budget` (7), `repeated_action` (3). Without a cap a wandering agent runs and bills forever |
+| **ReAct vs plan-then-execute** | ReAct 4 calls / 1159 tokens; plan-first 2 calls / 284 tokens. But with a misspelled name the plan breaks at step 1, while ReAct reads the error and recovers |
+| **Workflow patterns** | chaining, routing, parallelization, orchestrator-workers, evaluator-optimizer. Voting: one 70%-accurate judge 72% → majority of 5: **85%** (5× the calls) |
+| **Subagents** | Isolated contexts: orchestrator peak context **84 vs 4203** tokens (50× smaller); total input 4493 vs 8428 |
+| **Evaluating agents** | 40 tasks: v1 **88%** success, v2 **98%**, ~3.1 steps and ~$0.0039 per task; failures grouped by type ("right action, WRONG order") |
+
+**Rule of thumb:** use a workflow when you can write the steps down; use an
+agent only when the steps genuinely depend on what the tools return. Always
+cap steps and spend, and put a human approval in front of risky actions.
+
+## 7c. RAG and embeddings
+
+RAG = **retrieve the relevant pieces of your data, put them in the
+context, answer only from them** (lesson 10; builds on lesson 04's SELECT).
+
+```
+ INDEX TIME (once / on change)            QUERY TIME (every question)
+ docs ─▶ chunk ─▶ embed ─▶ vector index    question ─▶ embed ─▶ search top-k
+                               │                                   │
+                               └──────────────▶ keyword + vector ◀─┘ (hybrid)
+                                                      │
+                                         rerank ─▶ top 3 chunks + [ids]
+                                                      │
+                          prompt: "answer ONLY from these, cite [id], else say I don't know"
+```
+
+| Topic | Measured in lesson 10 (12 docs, 13 labelled questions) |
+|---|---|
+| **Embeddings** | "money back" vs a refund doc: 0 shared keywords but cosine **0.45**; a doc sharing the word "back": cosine 0.00. Meaning beats word overlap |
+| **Chunking** | 20-word chunks with no overlap split the rollback command across a boundary; with overlap or by-paragraph it stays whole |
+| **Vector search** | Brute force: 12 comparisons per query. Toy ANN index: ~2.2 comparisons, same top-1 on 11/13 → why vector DBs use approximate search |
+| **Hybrid search** | hit-rate@3: keyword (BM25) **11/13**, vector **12/13**, hybrid **13/13**. BM25 nails exact codes (E403), vectors get synonyms |
+| **Reranking** | top-1 correct: hybrid 12/13 → hybrid + rerank **13/13** |
+| **Retrieval eval** | MRR: BM25 0.77, vector 0.87, hybrid 0.96, hybrid + rerank **1.00** |
+| **Failure modes** | stale index (caught by content hash), unanswerable questions (score threshold), injected instructions inside a document (treat retrieved text as untrusted data — lesson 05 delimiters) |
+
+## 7d. Evals and guardrails
+
+You can't improve what you don't measure, and you can't ship what you
+can't defend (lesson 11).
+
+```
+ EVAL LOOP                                        GUARDRAILS ON ONE REQUEST
+ eval set ─▶ run v1 & v2 ─▶ score ─▶ compare      input ─▶ injection check ─▶ least-privilege
+   ▲          (golden, edge,   (exact, regex,        │       tools ─▶ model ─▶ schema check
+   │           adversarial)    schema, judge)        ▼       ─▶ PII redaction ─▶ grounding
+   └──── ship / rollback ◀── per-slice gate       output      check ─▶ user  (+ trace everything)
+```
+
+| Topic | Measured in lesson 11 |
+|---|---|
+| **Eval set size** | A model that is really 85% scores anywhere from **70% to 95%** on 20 cases, 81%–88.5% on 200. Report a confidence interval, not one number |
+| **LLM-as-judge** | With a length bias it agrees with human labels only **26%**; without it 100%. On equal-quality pairs it picks the FIRST answer **69%** of the time (fair = 50%) → swap order, use a rubric |
+| **Regression gate** | v2's average went UP (naive gate: ship), but the deploys category fell **87% → 60%**. A per-slice gate blocks it |
+| **A/B test** | two-proportion z = 0.63 → not significant; don't declare a winner |
+| **Prompt injection** | 6 attacks, each matched to the layer that stops it (detector, tool allowlist, human confirmation). One "output hijack" gets past every input check → output checks + evals are required, not optional |
+| **Output guardrails** | schema validation + retry, PII redaction, content filter, grounding check (claims must appear in the sources) |
+
+---
+
 ## 8. The AI engineer roadmap
 
 An AI engineer builds **reliable products on top of models**. The job
@@ -928,13 +1016,16 @@ models from scratch. Each stage maps to where this repo teaches it.
 | 2 | Context engineering | **`learn-llm-fundamentals/04`** | ✅ |
 | 2 | Prompt engineering, few-shot, CoT, self-consistency | **`learn-llm-fundamentals/05`** | ✅ |
 | 2 | Structured output + validation | `learn-llm-fundamentals/03`, `learn-ai-advanced/04` | ✅ |
+| 3 | Embeddings, cosine similarity, chunking, hybrid search, reranking, retrieval evals | **`learn-llm-fundamentals/10`** | ✅ |
 | 3 | Embeddings, chunking, vector store, grounding | `learn-ai-advanced/01` | ✅ |
+| 4 | Agent loop, stopping, ReAct vs plan, workflow patterns, memory, subagents, agent evals | **`learn-llm-fundamentals/09`** | ✅ |
 | 4 | Agent loop, tools, sandbox, permissions | `learn-mini-claude/01–05` | ✅ |
 | 4 | LLM vs agent vs subagent | `learn-mini-claude/06` | ✅ |
 | 4 | Agent design patterns: ReAct, Plan-and-Execute, memory, delegation vs. handoff (stack depth measured) | `learn-agents/01–08` | ✅ |
 | 4 | MCP servers, clients, multi-server | `learn-mcp/01–16` | ✅ |
 | 4 | Graph orchestration, checkpoints, HITL, subgraphs | `learn-langgraph/01–13` | ✅ |
 | 4 | Agent UIs, generative UI | `learn-copilotkit/` | ✅ |
+| 5 | Eval sets, scoring, judge bias, regression gates, A/B, injection layers, output guardrails | **`learn-llm-fundamentals/11`** | ✅ |
 | 5 | Evals, golden datasets, LLM-as-judge | `learn-ai-advanced/02` | ✅ |
 | 5 | Guardrails, PII, prompt injection | `learn-ai-advanced/04` | ✅ |
 | 6 | Tracing, token/cost tracking | `learn-ai-advanced/03` | ✅ |
@@ -1015,3 +1106,25 @@ with subtopics and progress tracking, is in
 | **Fine-tuning** | Further training a model's weights on your examples | 06 |
 | **Reasoning / thinking model** | A model that generates internal reasoning tokens before answering | 02, 05 |
 | **Effort** | Setting on reasoning models controlling how much they think | 02 |
+| **Agent** | An LLM in a loop with tools that chooses its own next step | 09 |
+| **Agent loop** | observe → think → act (tool) → observe … → final answer | 09 |
+| **ReAct** | Interleaving reasoning ("thought") with tool actions and observations | 09 |
+| **Plan-then-execute** | Make the whole plan first, then run the steps; cheaper, but brittle | 09 |
+| **Workflow** | Steps fixed by your code (chain, route, parallel, orchestrator-workers, evaluator-optimizer) | 09 |
+| **Subagent** | An agent called by another agent, with its own isolated context | 09 |
+| **Human-in-the-loop** | A person approves a risky step before it runs | 07, 09 |
+| **Embedding** | A vector representing a text's meaning; similar meaning → nearby vectors | 10 |
+| **Cosine similarity** | Angle-based similarity between two vectors (1 = same direction) | 10 |
+| **Chunking** | Splitting documents into retrievable pieces (fixed size, paragraph, overlap) | 10 |
+| **Vector index / ANN** | Structure for fast nearest-neighbour search; approximate (ANN) trades exactness for speed | 10 |
+| **BM25** | Classic keyword-relevance scoring; good for exact terms and codes | 10 |
+| **Hybrid search** | Combining keyword and vector results (e.g. reciprocal rank fusion) | 10 |
+| **Reranker** | A slower, better scorer applied to the top results of a fast search | 10 |
+| **Recall@k / MRR** | Retrieval metrics: did the right doc appear in the top k / how high did it rank | 10 |
+| **Grounding / citation** | Answering only from supplied sources and pointing to them | 10 |
+| **Eval set** | Labelled examples (golden, edge, adversarial) used to score a prompt/model | 11 |
+| **LLM-as-judge** | Using a model with a rubric to score outputs; watch position/length bias | 11 |
+| **Regression gate** | A rule that blocks a release if any slice gets worse, not just the average | 11 |
+| **Prompt injection** | Instructions hidden in user input, documents or tool results that try to hijack the model | 08, 11 |
+| **Guardrail** | A check before or after the model: injection, schema, PII, policy, grounding | 11 |
+| **Trace** | One request's full record: prompt, tool calls, tokens, latency, cost | 11 |

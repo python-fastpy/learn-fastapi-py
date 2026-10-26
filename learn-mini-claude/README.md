@@ -849,4 +849,4 @@ exercise 1), and a great deal of prompt engineering.
 | Pausing to ask the user (interrupt/resume) | `learn-mcp` lesson 06, `learn-langgraph` lesson 09 |
 | Prompt injection via poisoned tool output | `learn-ai-advanced` lesson 04 |
 | Tracing tool calls, token cost | `learn-ai-advanced` lesson 03 |
-| Session storage beyond in-memory | `fastapi/08-session.py` |
+| Session storage beyond in-memory | `fastapi/advanced/08_session.py` |

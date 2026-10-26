@@ -38,6 +38,17 @@ from collections import Counter
 # ============================================================================
 # PART 1: Latency
 # ============================================================================
+# LATENCY TIMELINE -- QUEUE+INPUT (TTFT) THEN TOKENS, 1 char ≈ 0.5 s
+#  █ TTFT    ░ visible output tokens    ▒ hidden thinking tokens
+#  chat     █░░░░                                                     2.4s
+#  long     █░░░░░░░░░░░░░░░░░░░░                                    10.6s
+#  big      ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░         24.1s
+#  reason   ██▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░ 29.8s
+#
+#  PERCEIVED WAIT, long answer (800 tok @ 80 tok/s)
+#  non-streaming  ─────────── blank screen ────────────▶ all text at 10.6s
+#  streaming      ▶ first words at 0.6s ░░░░░░░░░░░░░░░▶ done at 10.6s
+#  (reasoning model streams its first visible word only at 26.0s)
 
 def latency(ttft_s: float, out_tokens: int, tps: float) -> float:
     return ttft_s + out_tokens / tps
@@ -73,6 +84,16 @@ def part1_latency():
 # ============================================================================
 # PART 2: Model selection and routing
 # ============================================================================
+# ROUTER -- CLASSIFY EACH REQUEST, SEND IT TO THE CHEAPEST CAPABLE MODEL
+#                       ┌─ easy (~80%) ─▶ small  $0.000875/call  acc 95%
+#  request ──▶ route() ─┤
+#                       └─ hard (~20%) ─▶ large  $0.0175/call    acc 92%
+#
+#  10,000 requests   cost  (█ = $5)                           accuracy
+#  all small     $  8.75   ██                                    87.1%
+#  all medium    $105.00   █████████████████████                 94.4%
+#  all large     $175.00   ███████████████████████████████████   96.7%
+#  routed        $ 42.27   ████████                              94.2%
 
 MODELS = {  # illustrative tiers -- plug in your provider's real numbers
     "small":  {"price_in": 0.25, "price_out": 1.25, "acc_easy": 0.95, "acc_hard": 0.55},
@@ -129,6 +150,15 @@ def part2_routing():
 # ============================================================================
 # PART 3: Response caching
 # ============================================================================
+# RESPONSE CACHE -- NORMALIZE ▶ HASH ▶ LOOKUP
+#  question ──▶ lowercase + collapse spaces ──▶ sha256(model, msgs, temp)
+#                                                   │
+#                                  ┌──── hit ───────┴────── miss ────┐
+#                                  ▼                                 ▼
+#                        return stored answer          call LLM, store answer
+#                        ($0, ~0 ms)                   (full cost + latency)
+#
+#  5,000 questions  hits 3,237 █████████████░░░░░░░ misses 1,763  (65% saved)
 
 def cache_key(model: str, messages: list[dict], temperature: float) -> str:
     """Hash of everything that affects the output. Normalize first:
@@ -179,6 +209,17 @@ def part3_caching():
 # ============================================================================
 # PART 4: Reliability -- retries and fallbacks
 # ============================================================================
+# RELIABILITY -- RETRY ▶ FALLBACK ▶ GIVE UP  (timeout on every call)
+#  call primary ───────ok──▶ done      91.910%  (primary fails 8%)
+#      │ fail: 429 / 5xx / timeout
+#      ▼ backoff 1s, 2s (+ jitter)
+#  retry ×2 ───────────ok──▶ done      99.970%  cumulative
+#      │ all 3 attempts failed
+#      ▼
+#  fallback model ─────ok──▶ done      99.995%  cumulative (fallback fails 5%)
+#      │ fail
+#      ▼
+#  error to user / queue for later
 
 def flaky_call(rng: random.Random, fail_rate: float) -> bool:
     return rng.random() >= fail_rate
@@ -220,6 +261,13 @@ def part4_reliability():
 # ============================================================================
 # PART 5: Batch vs real-time, and concurrency
 # ============================================================================
+# BATCH VS REAL-TIME -- 50,000 DOCS @ $0.004/CALL
+#  real-time  ████████████████████  $200   minutes   someone is waiting
+#  batch      ██████████░░░░░░░░░░  $100   hours     nobody is waiting
+#
+#  REAL-TIME FAN-OUT
+#  docs ──▶ Semaphore(N) ──▶ ≤ N calls in flight ──▶ API     (steady)
+#  docs ──▶ gather(10,000) ──▶ 429s ──▶ retries ──▶ more 429s (retry storm)
 
 def part5_batch():
     print("######## PART 5 -- Batch vs real-time ########\n")
@@ -239,6 +287,14 @@ def part5_batch():
 # ============================================================================
 # PART 6: Prompting vs RAG vs fine-tuning
 # ============================================================================
+# ESCALATION LADDER -- CHEAPEST FIX FIRST, EVALS AT EVERY RUNG
+#  ┌───────┐   ┌───────────┐   ┌───────────┐   ┌───────────┐   ┌───────────┐
+#  │ EVALS │──▶│ PROMPTING │──▶│ RAG       │──▶│ TOOLS     │──▶│ FINE-TUNE │
+#  └───────┘   └───────────┘   └───────────┘   └───────────┘   └───────────┘
+#   measure     behaviour       knowledge       actions,        narrow,
+#   first       format          citations       live data       high-volume
+#               minutes         days            days            weeks + data
+#  climb only when the eval shows the current rung has plateaued
 
 def part6_decision():
     print("######## PART 6 -- Prompting vs RAG vs fine-tuning ########\n")
@@ -274,6 +330,22 @@ def part6_decision():
 # ============================================================================
 # PART 7: Security and privacy
 # ============================================================================
+# SECURITY CHECKPOINTS ALONG ONE REQUEST
+#  user input
+#    ▼
+#  [1] rate limit + spend cap per user
+#    ▼
+#  [2] injection check: untrusted text (web/email/docs) wrapped as DATA
+#    ▼
+#  [3] prompt build: no secrets, PII minimised
+#    ▼
+#  ┌───────┐  tool call ──▶ [4] least privilege; confirm destructive tools
+#  │ MODEL │◀─ tool output ── treated as DATA again
+#  └───────┘
+#    ▼
+#  [5] output filter: validate before exec / HTML render / storage
+#    ▼
+#  [6] PII redaction ──▶ log (prompt version, model, tokens, cost, latency)
 
 def part7_security():
     print("######## PART 7 -- Security and privacy checklist ########\n")

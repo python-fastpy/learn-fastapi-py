@@ -95,6 +95,39 @@ OPTION C: Random string, check DB for collision
 cleanest — no collision handling needed, and the "coordination
 bottleneck" concern is solved cheaply by pre-allocating ranges per server.
 
+```
+CREATE SHORT URL — POST /shorten, step by step
+  ① Client ──POST {long_url}──▶ Load Balancer ──▶ App Server
+        │
+        ▼
+  ② custom code requested? ──yes──▶ DB: code taken? ──yes──▶ ✗ 409
+        │ no                              │ no ──▶ use it, skip to ④
+        ▼
+  ③ next id from THIS server's pre-allocated range (e.g. 1001-2000)
+     ──▶ base62 encode + shuffle/obfuscate ──▶ "xk29a"
+        │
+        ▼
+  ④ DB: INSERT (short_code, long_url, expires_at)
+        │
+        ▼
+  ⑤ ✓ 201 Created  { "short_url": "bit.ly/xk29a" }
+```
+
+```
+RANGE ALLOCATION — when an app server's block of ids runs out
+  ① App Server: next_id = 2000 = end of its range (1001-2000)
+        │
+        ▼
+  ② ask the central counter to atomically reserve the next block
+     (one coordination call per 1,000 codes, not per request)
+        │
+        ▼
+  ③ central counter ──▶ "you own 5001-6000" ──▶ App Server
+        │
+        ▼
+  ④ keep issuing ids locally: 5001, 5002, ...  ✓ no per-request lock
+```
+
 ### Read Path (the hot path — optimize this hardest)
 
 ```
@@ -110,6 +143,17 @@ bottleneck" concern is solved cheaply by pre-allocating ranges per server.
 your servers on repeat visits), but makes it harder to change the
 destination later or track click analytics accurately.
 
+```
+REPEAT VISIT — 301 vs 302
+  1st visit:  Browser ──▶ App Server ──▶ 301/302 + Location ──▶ long URL
+  2nd visit with 301:
+    Browser ──▶ own cache: "xk29a → long URL" ──▶ long URL
+               (✓ zero server load   ✗ click NOT counted, can't re-point)
+  2nd visit with 302:
+    Browser ──▶ App Server ──▶ log click ──▶ 302 ──▶ long URL
+               (✓ analytics + editable destination   ✗ every hit = load)
+```
+
 ### Scaling Further
 
 - **Database**: read replicas (ch.06) since this is read-heavy; the
@@ -117,6 +161,20 @@ destination later or track click analytics accurately.
   sharding at this scale (1TB total, remember).
 - **Geographic**: put the redirect service behind a CDN/edge layer
   (ch.11) so the redirect itself happens close to the user.
+
+```
+GLOBAL REDIRECT — edge first, then origin
+  ① User (Tokyo) ──GET /r/xk29a──▶ nearest CDN edge (ch.11)
+        │
+        ▼
+  ② edge has "xk29a"? ──yes──▶ ✓ 301/302 from the edge (no origin trip)
+        │ no
+        ▼
+  ③ edge ──▶ LB ──▶ App Server ──▶ Cache ──miss──▶ DB read replica
+        │
+        ▼
+  ④ response cached at edge ──▶ ✓ redirect; next Tokyo user stops at ②
+```
 
 ---
 

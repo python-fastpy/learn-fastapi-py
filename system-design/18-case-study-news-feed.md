@@ -115,6 +115,37 @@ even, general-purpose strategy (fan-out-on-write) breaks down for a
 small number of extreme outliers, so you special-case the outliers
 instead of redesigning the whole system around them.
 
+```
+HYBRID POST — what happens when someone posts
+  ① User ──POST──▶ Post Service ──▶ save post ONCE (shard = user ID)
+        │
+        ▼
+  ② ✓ 201 to the poster immediately; enqueue "post_created" (ch.08)
+        │
+        ▼
+  ③ follower count > 1M ? ──yes──▶ CELEBRITY: stop here
+        │ no                        (pulled by followers at READ time)
+        ▼
+  ④ fan-out worker ──▶ prepend post_id to each follower's pre-built feed
+```
+
+```
+HYBRID FEED READ — GET /feed
+  ① User ──▶ Feed Service ──▶ Cache: my pre-built feed (pushed posts)
+        │
+        ▼
+  ② follow graph: which CELEBRITIES do I follow? (e.g. 3 accounts)
+        │
+        ▼
+  ③ fetch each celebrity's recent posts (stored once, hot → cached)
+        │
+        ▼
+  ④ merge ① + ③, sort newest first, take the top page
+        │
+        ▼
+  ⑤ hydrate post_ids → post content ──▶ ✓ return feed
+```
+
 ### Supporting Pieces
 
 - **Cache** (ch.04): a user's pre-built feed IS effectively a cache —
@@ -128,6 +159,39 @@ instead of redesigning the whole system around them.
   post is saved immediately (fast response to the poster), and an
   async worker does the (potentially slow, for a mid-size account)
   fan-out to followers' feeds in the background.
+
+```
+ASYNC FAN-OUT WORKER — normal account (e.g. 5,000 followers)
+  ① Post Service ──"post_created"──▶ Message Queue (ch.08)
+        │
+        ▼
+  ② Fan-out Worker consumes the event
+        │
+        ▼
+  ③ page through the follower list in batches (e.g. 1,000 at a time)
+        │
+        ▼
+  ④ per follower: push post_id onto their cached feed, trim to N newest
+     (inactive followers skipped — their feed is rebuilt on next login)
+        │
+        ▼
+  ⑤ ack the queue message ✓   (worker crash → message redelivered)
+```
+
+```
+FEED FETCH — active vs. inactive user
+  ① GET /feed ──▶ Feed Service ──▶ Cache: feed for user_id ?
+        │ hit (active user)              │ miss (inactive / evicted)
+        ▼                                ▼
+  ② ✓ read pre-built list (fast)   ③ follow graph ──▶ pull recent posts
+                                      of each followed user
+                                         │
+                                         ▼
+                                   ④ merge + sort ──▶ SET feed in cache
+                                         │   (fan-out resumes from now)
+                                         ▼
+                                   ⑤ ✓ return feed (slower, but rare)
+```
 
 ---
 

@@ -61,6 +61,17 @@ def show_call(name: str, args: dict, result):
 # ============================================================================
 # 1. WEB SEARCH -- read-only, but everything it returns is untrusted
 # ============================================================================
+# WEB SEARCH: REQUEST PATH + CHECKPOINTS (FAKE_WEB has 3 pages)
+#   web_search("python asyncio", allowed_domains=?)
+#     ▼
+#   ┌ CHECK 1 domain filter: host == d or host.endswith("." + d)
+#   │   ["python.org"]: docs.python.org ✓  realpython.com ✗  spam-seo ✗
+#   ├ word match: query words ∩ page words
+#   │   realpython ✗ (its words are "python:" and "async", no exact hit)
+#   ├ CHECK 2 SUSPICIOUS phrase? ─▶ add "warning": possible prompt injection
+#   │   spam-seo.example "IGNORE ALL PREVIOUS INSTRUCTIONS"  ✗ tagged
+#   └ return {title, url, snippet[:120]} ─▶ model treats as DATA, cites url
+#   no filter: 2 hits (python docs + tagged spam)   python.org: 1 hit
 
 FAKE_WEB = [  # stand-in for a search API (no network in this lesson)
     {"url": "https://docs.python.org/3/library/asyncio.html", "title": "asyncio -- Python docs",
@@ -113,6 +124,17 @@ def part1_web_search():
 # ============================================================================
 # 2. CODE EXECUTION / REPL -- the most powerful and the most dangerous
 # ============================================================================
+# CODE EXEC: run_python() SANDBOX PATH
+#   code string from the model
+#     ▼
+#   ┌ subprocess: sys.executable -I -c code      (never exec() in your app)
+#   │   cwd = TemporaryDirectory (thrown away)   env = PATH + SYSTEMROOT only
+#   ├ CHECK timeout_s (default 3.0) ─ exceeded ─▶ {"error": "TIMEOUT"}
+#   ├ CHECK output cap: stdout[:2000], stderr[-2000:]
+#   └ {exit_code, stdout, stderr} ─▶ model reads it, fixes its code
+#   demo: primes < 1000 ─▶ exit 0, "76127"    print(1/0) ─▶ exit 1 + traceback
+#         while True: pass (timeout_s=1.5) ─▶ ✗ killed after 1.5s
+#   PRODUCTION: wrap all of this in a container/VM -- no network, CPU/mem caps
 
 def run_python(code: str, timeout_s: float = 3.0, max_output: int = 2000) -> dict:
     """Run Python code in a separate process and return stdout/stderr/exit code.
@@ -160,6 +182,17 @@ def part2_code_execution():
 # ============================================================================
 # 3. DATABASE QUERIES -- narrow tools vs text-to-SQL
 # ============================================================================
+# DATABASE: NARROW PARAMETERIZED TOOL vs TEXT-TO-SQL WITH READ-ONLY GUARD
+#   orders_by_status(status)            run_sql(query)
+#     ▼                                   ▼
+#   fixed SQL: WHERE status = ?         CHECK 1 one SELECT, no ';'
+#   model supplies only the VALUE         ✗ DELETE FROM orders ─▶ READ_ONLY
+#     'open' ─▶ ORD-1, ORD-3            CHECK 2 PRAGMA query_only = ON
+#     "open' OR '1'='1" ─▶ [] ✓           (the DB itself refuses writes)
+#     (injection is just a string)      sqlite error ─▶ SQL_ERROR result
+#                                         ✗ FROM customers ─▶ no such table
+#                                       CHECK 3 fetchmany(50) + truncated
+#                                         ✓ GROUP BY status ─▶ 3 rows
 
 def make_db() -> sqlite3.Connection:
     db = sqlite3.connect(":memory:")
@@ -230,6 +263,18 @@ def part3_database():
 # ============================================================================
 # 4. API REQUESTS -- calling other services
 # ============================================================================
+# API REQUEST: http_get() CHECKPOINTS
+#   url (+ optional fields) from the model
+#     ▼
+#   CHECK 1 scheme == "https" AND host in ALLOWED_HOSTS
+#     ✗ http://169.254.169.254/latest/meta-data/ ─▶ HOST_NOT_ALLOWED (SSRF)
+#     ▼ ✓ api.github.com / api.weather.example
+#   SERVER-SIDE: add Authorization from SECRETS -- the model never sees it
+#     ▼
+#   status >= 500 ─▶ UPSTREAM_UNAVAILABLE, retryable: true   (rome ─▶ 503)
+#   status >= 400 ─▶ HTTP_ERROR (not retryable)
+#     ▼ 200
+#   CHECK 2 trim to `fields`: cpython ~197 tokens ─▶ ~27 tokens (3 fields)
 
 FAKE_INTERNET: dict[str, tuple[int, dict]] = {  # stand-in transport: url -> (status, body)
     "https://api.github.com/repos/python/cpython": (200, {"full_name": "python/cpython",
@@ -291,6 +336,17 @@ def part4_api_requests():
 # ============================================================================
 # 5. EMAIL / SLACK / SMS -- side effects on real people
 # ============================================================================
+# MESSAGING: DRAFT ─▶ HUMAN CONFIRM ─▶ SEND, DEDUPED BY idempotency_key
+#   send_message(channel, to, body, idempotency_key, confirmed)
+#     ▼
+#   CHECK channel in {email, slack, sms}      ✗ BAD_CHANNEL
+#   CHECK email domain in {example.com}       ✗ ceo@competitor.example
+#                                               ─▶ RECIPIENT_NOT_ALLOWED
+#   CHECK len(body) <= 1000                   ✗ TOO_LONG
+#   confirmed=False ─▶ "draft" ─▶ shown to user ─▶ (user approves)
+#   confirmed=True  ─▶ key in SENT_KEYS?
+#     no  ─▶ deliver, remember "notify-ORD-3-shipped" ─▶ "sent"   OUTBOX: 1
+#     yes ─▶ "already_sent" (retry after network blip)           OUTBOX: 1
 
 OUTBOX: list[dict] = []
 SENT_KEYS: set[str] = set()
@@ -345,6 +401,18 @@ def part5_messaging():
 # ============================================================================
 # 6. FILE SYSTEM ACCESS -- inside a sandbox root, never outside it
 # ============================================================================
+# FILE SYSTEM: RESOLVE FIRST, THEN CHECK THE PATH IS INSIDE SANDBOX
+#   path from the model
+#     ▼
+#   (SANDBOX / path).resolve()   -- collapses '..', absolute paths, symlinks
+#     ▼
+#   CHECK resolved.is_relative_to(SANDBOX)?
+#     ✓ "notes.txt"          ─▶ <tmp>/agent_sandbox_*/notes.txt
+#     ✗ "../../.env"         ─▶ lands outside ─▶ OUTSIDE_SANDBOX
+#     ✗ "<home>/.ssh/id_rsa" ─▶ absolute path wins the join ─▶ OUTSIDE_SANDBOX
+#     ▼
+#   CHECK is_file()? else NOT_FOUND ─▶ read <= MAX_READ_BYTES (10_000)
+#   list_files() ─▶ ["notes.txt", "src/app.py"]
 
 SANDBOX = Path(tempfile.mkdtemp(prefix="agent_sandbox_"))
 (SANDBOX / "notes.txt").write_text("Remember: deploy on Friday.\n")
@@ -404,6 +472,21 @@ def part6_file_system():
 # ============================================================================
 # 7. Risk table, server tools, and MCP
 # ============================================================================
+# RISK LADDER: READ-ONLY (top) ─▶ IRREVERSIBLE SIDE EFFECTS (bottom)
+#   ┌ reads, untrusted in │ web search       treat as data, cite, domains
+#   │ reads your data     │ database         parameterized, read-only, RLS
+#   │ calls services      │ API requests     host allowlist, server secrets
+#   │ runs code           │ code execution   sandbox, timeout, output caps
+#   │ writes your disk    │ file system      resolved-path root, write gate
+#   ▼ acts on PEOPLE      │ email/Slack/SMS  confirm first, idempotency key
+#
+# WHO RUNS THE TOOL? CLIENT TOOLS vs SERVER TOOLS
+#   CLIENT (everything in this file)      SERVER (provider-hosted)
+#   you ─▶ model: request + tool defs     you ─▶ model: request + enable tool
+#   model ─▶ you: tool call               provider runs web search / fetch /
+#   YOUR CODE runs it (+ guardrails)        code execution itself
+#   you ─▶ model: tool_result             result arrives in the SAME response
+#   model ─▶ you: final answer            less code, but you control less
 
 def part7_summary():
     print("######## 7. Risk table, server tools, MCP ########\n")

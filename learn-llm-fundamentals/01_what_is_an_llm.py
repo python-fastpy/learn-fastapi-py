@@ -42,6 +42,17 @@ Flow:
         v
    " on"  --> append --> [464, 3797, 3332, 319] --> run the model again ...
 
+TRAINING vs INFERENCE (two separate phases):
+   TRAINING (once, offline)               INFERENCE (every API call)
+   ┌──────────────────────────┐          ┌──────────────────────────────┐
+   │ huge text corpus         │          │ your prompt tokens           │
+   │   ▼                      │          │   ▼                          │
+   │ count / adjust weights   │ weights  │ look up P(next | context)    │
+   │ so real text gets high P ├─frozen──▶│   ▼                          │
+   │ (here: NgramModel counts)│          │ sample 1 token, append, loop │
+   └──────────────────────────┘          └──────────────────────────────┘
+   Weights never change at inference -- only the context does.
+
 PREREQUISITES: None. Pure Python, no packages, no credentials.
 
 Run:  uv run python 01_what_is_an_llm.py      (or just: python 01_what_is_an_llm.py)
@@ -62,6 +73,16 @@ from collections import Counter, defaultdict
 # common words get one token, rare words are split into pieces. The toy
 # below uses greedy longest-match over a hand-written vocabulary -- the
 # mechanism real tokenizers use at inference time is close to this.
+#
+# TEXT -> TOKENS -> IDS  (real output of part 1 for "The cat sat on the mat.")
+#   "The cat sat on the mat."
+#        │  tokenize()
+#        ▼
+#   tokens │ "The"  │ " cat" │ " sat" │ " on"  │ " the" │ " mat" │ "."
+#        │  TOKEN_TO_ID (index in TOY_VOCAB)
+#        ▼
+#   ids    │ 9      │ 1      │ 2      │ 3      │ 0      │ 4      │ 23
+#   6 words ──▶ 7 tokens   (the space rides on the FRONT of each word)
 
 TOY_VOCAB = [
     # common whole words (with a leading space, like real tokenizers)
@@ -76,6 +97,11 @@ TOY_VOCAB = [
 
 TOKEN_TO_ID = {tok: i for i, tok in enumerate(TOY_VOCAB)}
 
+# GREEDY LONGEST-MATCH, STEP BY STEP: " unbelievable"
+#   i=0  " unbelievable"  longest vocab prefix ──▶ " un"     (id 11)  i=3
+#   i=3     "believable"  longest vocab prefix ──▶ "believ"  (id 12)  i=9
+#   i=9           "able"  longest vocab prefix ──▶ "able"    (id 13)  i=13 end
+#   no entry matches at i? ──▶ emit that 1 raw char (TOKEN_TO_ID gives -1)
 
 def tokenize(text: str) -> list[str]:
     """Greedy longest-match: at each position take the longest vocab entry."""
@@ -127,6 +153,15 @@ def part1_tokenization():
 # follows which in some training text. "Training" is just counting here;
 # in a real LLM it's gradient descent over trillions of tokens -- but the
 # goal is identical: make real text get high probability.
+#
+# THE NEXT-TOKEN TABLE = COUNTS ÷ TOTAL  (bigram, context "the", 10 examples)
+#   context ("the",) ──▶ counts ──▶ P(next)
+#     capital   4  ──▶ 0.40 ████████░░░░░░░░░░░░
+#     cat       2  ──▶ 0.20 ████░░░░░░░░░░░░░░░░
+#     mat       2  ──▶ 0.20 ████░░░░░░░░░░░░░░░░
+#     dog       1  ──▶ 0.10 ██░░░░░░░░░░░░░░░░░░
+#     rug       1  ──▶ 0.10 ██░░░░░░░░░░░░░░░░░░
+#                       └─ sums to 1.00: ONE distribution, not one answer
 
 TRAINING_TEXT = """
 paris is the capital of france .
@@ -141,6 +176,17 @@ rome is a beautiful city .
 """
 
 
+# TRAINING = COUNTING  (NgramModel.__init__, n=2)
+#   "rome is the capital of italy ."
+#     │  pad with <s> / </s>, slide a window of n words
+#     ▼
+#   <s>│rome rome│is is│the the│capital capital│of of│italy italy│. .│</s>
+#     │  counts[context][next] += 1   (for every line of TRAINING_TEXT)
+#     ▼
+#   counts[("of",)]  = {france: 2, italy: 1, germany: 1}
+#   counts[("the",)] = {capital: 4, cat: 2, mat: 2, dog: 1, rug: 1}
+#   next_token_probs(): last n-1 tokens ──▶ counts ÷ total (unseen ──▶ </s>)
+#   Real LLM: same goal, but gradient descent ADJUSTS weights instead of +1.
 class NgramModel:
     """Predicts the next word from the previous `n-1` words by counting.
 
@@ -194,6 +240,26 @@ def part2_next_token():
 # To produce text: predict, pick one token, append it, predict again.
 # "Pick one" is where temperature and top_p come in (lesson 02). Here we
 # use plain sampling in proportion to probability.
+#
+# THE GENERATE LOOP  (generate())
+#   tokens = prompt.split()
+#   ┌──▶ predict: probs = model.next_token_probs(tokens)
+#   │      ▼
+#   │    sample:  nxt = rng.choices(choices, weights=weights)
+#   │      ▼
+#   │    nxt == "</s>" ? ──yes──▶ STOP (model chose to end)
+#   │      │ no
+#   │      ▼
+#   │    append:  tokens.append(nxt)
+#   │      ▼
+#   │    steps left (< max_tokens)? ──no──▶ STOP (cut off)
+#   │      │ yes
+#   └──────┘
+#
+# THE REAL RUN BELOW  (seed 3; every arrow = one full model call)
+#   [rome is] ─1▶ the ─2▶ cat ─3▶ sat ─4▶ on ─5▶ the ─6▶ capital ─7▶ of
+#             ─8▶ germany ─9▶ . ─10▶ </s> = STOP
+#   step 8 had 3 options (france .50 / italy .25 / germany .25): dice -> germany
 
 def generate(model: NgramModel, prompt: str, max_tokens: int = 12,
              rng: random.Random | None = None, verbose: bool = False) -> str:
@@ -230,6 +296,14 @@ def part3_generation():
 # The model was trained on TRUE sentences only. Watch it produce false ones.
 # Each step is locally plausible ("of" -> "italy" is a real pattern), but
 # nothing checks the whole sentence against reality.
+#
+# PLAUSIBLE PATHS vs THE TRUE PATH  (bigram, prompt "paris is the capital")
+#   capital ─1.00▶ of ─┬─0.50▶ france ─┬─0.50▶ .  ──▶ TRUE (the only one)
+#                      │               └─0.50▶ is ─▶ a / the / ... ──▶ FALSE
+#                      ├─0.25▶ italy   ─1.00▶ .   ──▶ FALSE
+#                      └─0.25▶ germany ─1.00▶ .   ──▶ FALSE
+#   P(true) = 0.50 × 0.50 = 0.25 ──▶ ~50 of 200 expected (40 in the run below)
+#   every single step is locally plausible; only the whole path is wrong
 
 def part4_hallucination():
     print("######## PART 4 -- Why LLMs hallucinate ########\n")
@@ -253,6 +327,17 @@ def part4_hallucination():
 # ============================================================================
 # PART 5: More context = better predictions
 # ============================================================================
+# MORE CONTEXT = NARROWER DISTRIBUTION  (P(next) right after "...capital of")
+#   prompt:  paris  is  the  capital  of  ▶ ?
+#   2-gram sees                       [of]
+#   4-gram sees           [the  capital  of]
+#   6-gram sees [paris  is  the  capital  of]
+#
+#   model   france                     italy       germany     wrong/200
+#   2-gram  ██████████░░░░░░░░░░ .50   █████ .25   █████ .25      111
+#   4-gram  ██████████░░░░░░░░░░ .50   █████ .25   █████ .25      104
+#   6-gram  ████████████████████ 1.00  ░ 0         ░ 0              0
+#   only a window that reaches back to "paris" collapses it to the true answer
 
 def part5_more_context():
     print("######## PART 5 -- More context, fewer mistakes ########\n")

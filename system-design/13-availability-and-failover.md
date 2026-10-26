@@ -62,6 +62,39 @@ Some downtime during the switch        Can lose one node with ZERO
                                         keeps serving
 ```
 
+```
+ACTIVE-PASSIVE FAILOVER — step by step
+  ① health check pings Primary every few seconds ──▶ ✓ OK, ✓ OK, ...
+        │
+        ▼
+  ② N checks in a row fail/time out ──▶ Primary declared DOWN
+        │                                  (detection time)
+        ▼
+  ③ promote Backup ──▶ it becomes the new Primary (accepts writes)
+        │                                  (promotion time)
+        ▼
+  ④ redirect traffic: DNS / virtual IP / LB target ──▶ new Primary
+        │
+        ▼
+  ⑤ ✓ service restored   ✗ requests during ②–④ failed or waited
+     (old Primary, once repaired, rejoins as the new standby)
+```
+
+```
+ACTIVE-ACTIVE — losing one node
+  ① LB spreads requests ──▶ Node A  and ──▶ Node B
+        │
+        ▼
+  ② Node B fails its health check ──▶ LB removes B from rotation
+        │
+        ▼
+  ③ all new requests ──▶ Node A only  (A needs headroom for the load)
+        │
+        ▼
+  ④ ✓ no promotion step — the service as a whole stays up
+     (requests in flight on B when it died may need a client retry)
+```
+
 ### Graceful Degradation
 
 Instead of "everything works" or "everything is down," design so LESS
@@ -91,6 +124,24 @@ Circuit breaker states:
       └──── success on a trial request ◀── HALF-OPEN (after a cooldown,
                                                    try ONE request to see
                                                    if it recovered)
+```
+
+```
+CIRCUIT BREAKER — one call to the recommendations service
+  ① page needs recommendations ──▶ check breaker state
+        │
+        ├── OPEN ──────▶ ✗ skip the call, use fallback  (fail fast)
+        │
+        ├── HALF-OPEN ─▶ one trial call ──▶ ok → CLOSED / fail → OPEN
+        │
+        ▼ CLOSED
+  ② call service (with a timeout) ── ✓ success ──▶ show recommendations
+        │ ✗ error / timeout
+        ▼
+  ③ failures++ ──▶ over threshold? ── yes ──▶ trip to OPEN
+        │
+        ▼
+  ④ either way: show fallback (hide the section), page still loads ✓
 ```
 
 ---

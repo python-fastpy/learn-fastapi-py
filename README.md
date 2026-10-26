@@ -126,17 +126,19 @@ See [flow_to_learning_map.txt](../reuters-ai_assistant/reuters-assistant_backend
 
 ### FastAPI (`fastapi/`)
 
-| File | Topics |
-|------|--------|
-| `01-crud.py` | Raw-dict CRUD, Body/Query/Path/Header/Cookie/Form/File params (no Pydantic yet) |
-| `02-pydantic.py` | BaseModel, Field validation, validators, nested models, response_model, model_dump, BaseSettings (env config) |
-| `03-routes.py` | APIRouter, Annotated style, response types, Depends intro, exception handlers, BackgroundTasks |
-| `04-headers-auth-request-anatomy.py` | HTTP request/response anatomy, auth headers, API keys, OAuth2PasswordBearer, security headers |
-| `05-async-await.py` | async/await, gather, create_task, Semaphore, Lock, Event, Queue, shield, httpx |
-| `06-middleware-cors-caching.py` | CORS, GZip, custom middleware, Cache-Control, ETag, rate limiting |
-| `07-lifespan.py` | Startup/shutdown, app.state, DI over shared resources, background jobs, testing lifespan |
-| `08-session.py` | Cookie/Redis/JWT session strategies + comparison table (full lifespan deep-dive: see `07-lifespan.py`) |
-| `09-testing-with-pytest.py` | TestClient, dependency overrides, async testing (httpx+ASGITransport), validation-error assertions |
+| Level | File | Topics |
+|-------|------|--------|
+| basic | `01_crud.py` | Raw-dict CRUD, Body/Query/Path/Header/Cookie/Form/File params (no Pydantic yet) |
+| basic | `02_pydantic.py` | BaseModel, Field validation, validators, nested models, response_model, model_dump, BaseSettings (env config) |
+| basic | `03_routes.py` | APIRouter, Annotated style, response types, Depends intro, exception handlers, BackgroundTasks |
+| basic | `04_headers_auth_request_anatomy.py` | HTTP request/response anatomy, auth headers, API keys, OAuth2PasswordBearer, security headers |
+| intermediate | `05_async_await.py` | async/await, gather, create_task, Semaphore, Lock, Event, Queue, shield, httpx |
+| intermediate | `06_middleware_cors_caching.py` | CORS, GZip, custom middleware, Cache-Control, ETag, rate limiting |
+| intermediate | `07_lifespan.py` | Startup/shutdown, app.state, DI over shared resources, background jobs, testing lifespan |
+| advanced | `08_session.py` | Cookie/Redis/JWT session strategies + comparison table (full lifespan deep-dive: see `07_lifespan.py`) |
+| advanced | `09_testing_with_pytest.py` | TestClient, dependency overrides, async testing (httpx+ASGITransport), validation-error assertions |
+
+Run a file from its level folder, e.g. `cd fastapi/basic; uvicorn 01_crud:app --reload`.
 
 ### Book Store Project (`project-book-store/`)
 
@@ -356,15 +358,18 @@ Any changes you push to `main` (new files, updated examples) will automatically 
 ```
 learn-fastapi-py/
 ├── fastapi/                    # FastAPI learning files
-│   ├── 01-crud.py
-│   ├── 02-pydantic.py
-│   ├── 03-routes.py
-│   ├── 04-headers-auth-request-anatomy.py
-│   ├── 05-async-await.py
-│   ├── 06-middleware-cors-caching.py
-│   ├── 07-lifespan.py
-│   ├── 08-session.py
-│   └── 09-testing-with-pytest.py
+│   ├── basic/
+│   │   ├── 01_crud.py
+│   │   ├── 02_pydantic.py
+│   │   ├── 03_routes.py
+│   │   └── 04_headers_auth_request_anatomy.py
+│   ├── intermediate/
+│   │   ├── 05_async_await.py
+│   │   ├── 06_middleware_cors_caching.py
+│   │   └── 07_lifespan.py
+│   └── advanced/
+│       ├── 08_session.py
+│       └── 09_testing_with_pytest.py
 ├── project-book-store/         # Runnable end-to-end project (JSON -> DynamoDB -> AWS)
 │   ├── README.md               # START HERE for this project
 │   ├── pyproject.toml

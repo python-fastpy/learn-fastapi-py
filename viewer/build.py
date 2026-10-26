@@ -62,33 +62,43 @@ def split_sections(text):
     return content, cheat_sheet, reference
 
 
+LEVEL_ORDER = {"basic": 0, "intermediate": 1, "advanced": 2}
+
+
 def parse_files():
     data = {}
     for folder in FOLDERS:
-        folder_path = os.path.join(BASE_DIR, folder)
-        if not os.path.isdir(folder_path):
+        root_path = os.path.join(BASE_DIR, folder)
+        if not os.path.isdir(root_path):
             continue
 
-        files = sorted(f for f in os.listdir(folder_path) if f.endswith(".py"))
-        folder_data = {}
+        # Each subfolder (e.g. fastapi/basic) becomes its own sidebar group
+        for dirpath, dirnames, filenames in os.walk(root_path):
+            dirnames[:] = sorted(
+                (d for d in dirnames if not d.startswith((".", "__"))),
+                key=lambda d: (LEVEL_ORDER.get(d, 99), d),
+            )
+            group = os.path.relpath(dirpath, BASE_DIR).replace(os.sep, "/")
+            folder_data = {}
 
-        for filename in files:
-            filepath = os.path.join(folder_path, filename)
-            with open(filepath, "r", encoding="utf-8") as f:
-                text = f.read()
+            for filename in sorted(f for f in filenames if f.endswith(".py")):
+                filepath = os.path.join(dirpath, filename)
+                with open(filepath, "r", encoding="utf-8") as f:
+                    text = f.read()
 
-            if len(text.strip()) < 50:
-                continue
+                if len(text.strip()) < 50:
+                    continue
 
-            content, cheat_sheet, reference = split_sections(text)
-            folder_data[filename] = {
-                "content": content,
-                "cheatSheet": cheat_sheet,
-                "reference": reference,
-            }
-            print(f"  {folder}/{filename}: content={len(content)}  cheat={len(cheat_sheet)}  ref={len(reference)}")
+                content, cheat_sheet, reference = split_sections(text)
+                folder_data[filename] = {
+                    "content": content,
+                    "cheatSheet": cheat_sheet,
+                    "reference": reference,
+                }
+                print(f"  {group}/{filename}: content={len(content)}  cheat={len(cheat_sheet)}  ref={len(reference)}")
 
-        data[folder] = folder_data
+            if folder_data:
+                data[group] = folder_data
 
     return data
 

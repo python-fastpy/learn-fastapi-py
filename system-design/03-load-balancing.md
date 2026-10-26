@@ -29,6 +29,20 @@ restaurant keeps running with the remaining waiters.
                 (unhealthy servers are removed from rotation)
 ```
 
+```
+ONE REQUEST THROUGH THE LOAD BALANCER
+  ① Client ──▶ Load Balancer  (one public address)
+        │
+        ▼
+  ② LB keeps only healthy servers in its pool: [S1, S2, S3]
+        │
+        ▼
+  ③ routing algorithm picks one (e.g. round robin → S2)
+        │
+        ▼
+  ④ LB ──▶ Server 2 ──▶ response ──▶ LB ──▶ Client  ✓ 200 OK
+```
+
 ### Routing Algorithms
 
 | Algorithm | How it decides | Good for |
@@ -38,6 +52,14 @@ restaurant keeps running with the remaining waiters.
 | **Least connections** | Send to whichever server has fewest active connections | Requests vary a lot in duration |
 | **IP hash** | Same client IP always → same server | Need "sticky sessions" without shared storage (a workaround, not a fix — see ch.02's statelessness note) |
 | **Consistent hashing** | See ch.12 — used when the "servers" are really cache/data shards, not just app replicas |
+
+```
+ROUND ROBIN vs. LEAST CONNECTIONS — the next request arrives
+  ① active connections right now:   S1 = 12    S2 = 3    S3 = 7
+  ② ROUND ROBIN:       last went to S2 ──▶ next in order ──▶ S3
+                       (ignores that S3 is busier than S2)
+  ③ LEAST CONNECTIONS: min(12, 3, 7) ──▶ S2 ──▶ S2 now = 4  ✓
+```
 
 ### Layer 4 vs. Layer 7 Load Balancing
 
@@ -52,6 +74,21 @@ Can't do content-based routing       Can do SSL termination, A/B
                                        testing, canary releases
 ```
 
+```
+LAYER 7 PATH-BASED ROUTING
+  ① GET /images/cat.png ──▶ L7 LB reads the HTTP request
+        │
+        ▼
+  ② path starts with /api/ ? ───── yes ──▶ API server pool
+        │ no
+        ▼
+  ③ path starts with /images/ ? ── yes ──▶ image server pool  ✓ (this one)
+        │ no
+        ▼
+  ④ default server pool
+  (an L4 LB only sees IP + port — it can't make decisions ② or ③)
+```
+
 ### Health Checks
 
 The load balancer doesn't just guess a server is alive — it pings a
@@ -60,12 +97,41 @@ pulled out of rotation automatically. This is HOW horizontal scaling
 (ch.02) actually survives a server crashing: the load balancer notices
 and routes around it within seconds.
 
+```
+HEALTH CHECK LOOP — Server 2 crashes
+  ① every few seconds: LB ──GET /health──▶ each server
+        │
+        ▼
+  ② 200 OK ? ── yes ──▶ ✓ stays in rotation
+        │ no / timeout
+        ▼
+  ③ missed checks in a row ≥ threshold ? ── no ──▶ keep checking
+        │ yes
+        ▼
+  ④ ✗ S2 pulled from rotation ──▶ traffic goes to S1, S3 only
+  ⑤ S2 recovers + passes checks again ──▶ back in rotation
+```
+
 ### Where Load Balancers Themselves Live
 
 A single load balancer is itself a single point of failure — so in
 production there are usually at least two, with DNS or a floating IP
 routing to whichever is currently active (tied to ch.13's
 active-passive failover pattern).
+
+```
+LOAD BALANCER FAILOVER (active-passive)
+  ① Client ──▶ DNS / floating IP ──▶ LB-A (active)     LB-B (standby)
+        │
+        ▼
+  ② ✗ LB-A dies ──▶ LB-B notices LB-A stopped responding
+        │
+        ▼
+  ③ floating IP / DNS is switched to point at LB-B
+        │
+        ▼
+  ④ Client ──▶ LB-B ──▶ servers  ✓ traffic keeps flowing
+```
 
 ---
 

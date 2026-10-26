@@ -45,6 +45,20 @@ TOKEN BUCKET
 ```
 
 ```
+TOKEN BUCKET — one request, step by step
+  ① request arrives (client = api-key-42)
+        │
+        ▼
+  ② refill: tokens = min(capacity, tokens + elapsed × rate)
+        │
+        ▼
+  ③ tokens ≥ 1 ? ──── no ───▶ ✗ 429 Too Many Requests  (+ Retry-After)
+        │ yes
+        ▼
+  ④ tokens -= 1  ──▶ forward to app server ──▶ ✓ 200 OK
+```
+
+```
 LEAKY BUCKET                          FIXED WINDOW COUNTER
 ────────────                          ─────────────────────
 Requests queue up, processed          Count requests in the current
@@ -63,6 +77,23 @@ SLIDING WINDOW (fixes the boundary bug)
 Instead of a hard reset at each clock boundary, weight the previous
 window's count by how much it overlaps the current sliding window.
 More accurate, slightly more computation/memory.
+```
+
+```
+SLIDING WINDOW — one request, step by step  (limit = 100 / minute)
+  ① request arrives at 11:01:15  (15s = 25% into the current minute)
+        │
+        ▼
+  ② read counts: previous window (11:00) = 80, current (11:01) = 30
+        │
+        ▼
+  ③ estimate = current + previous × (1 − 0.25) = 30 + 80 × 0.75 = 90
+        │
+        ▼
+  ④ estimate < 100 ? ──── no ───▶ ✗ 429 Too Many Requests
+        │ yes
+        ▼
+  ⑤ current += 1  ──▶ forward to app server ──▶ ✓ 200 OK
 ```
 
 ### Where Enforcement Happens
@@ -85,6 +116,20 @@ The counter needs to live in a **shared, fast store** — Redis is the
 standard choice (`INCR` + a short `EXPIRE` is a simple token-bucket-ish
 implementation in about 2 lines).
 
+```
+SHARED COUNTER IN REDIS — per request, from ANY app server
+  ① Server A/B/C ──INCR rl:key-42:11:01──▶ Redis  (atomic, returns n)
+        │
+        ▼
+  ② n == 1 ?  (first request this window) ── yes ──▶ EXPIRE key 60s
+        │ either way
+        ▼
+  ③ n ≤ 100 ? ──── no ───▶ ✗ 429 Too Many Requests  (+ Retry-After)
+        │ yes
+        ▼
+  ④ ✓ forward to app — every server checked the SAME shared count
+```
+
 ### What the Client Sees
 
 A well-designed API tells the client where it stands, instead of just
@@ -95,6 +140,17 @@ HTTP/1.1 429 Too Many Requests
 X-RateLimit-Limit: 100
 X-RateLimit-Remaining: 0
 Retry-After: 42
+```
+
+```
+CLIENT BACK-OFF ON 429
+  ① Client ──request──▶ Gateway ──limit hit──▶ ✗ 429, Retry-After: 42
+        │
+        ▼
+  ② client waits 42s  (no tight retry loop hammering the API)
+        │
+        ▼
+  ③ retry ──▶ Gateway ──▶ tokens refilled ──▶ ✓ 200 OK
 ```
 
 ---

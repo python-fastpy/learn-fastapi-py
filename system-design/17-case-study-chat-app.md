@@ -100,6 +100,37 @@ write time. Clients render messages sorted by this sequence number,
 which survives out-of-order network delivery.
 ```
 
+```
+SEND MESSAGE — A to B, both online
+  ① A ──WebSocket {client_msg_id, text}──▶ Connection Server (A's)
+        │
+        ▼
+  ② Message Service: seq = next for this conversation (e.g. 1042)
+        │
+        ▼
+  ③ write to Message Store (sharded DB) ──▶ ✓ ack {seq} back to A
+        │
+        ▼
+  ④ Redis: user_id B → server_id ──▶ found: Connection Server (B's)
+        │
+        ▼
+  ⑤ push down B's WebSocket ──▶ B renders sorted by seq ──▶ ✓ delivered
+```
+
+```
+AT-LEAST-ONCE RETRY + DEDUP
+  ① A sends msg (client_msg_id = m-77) ──▶ stored ✓ ... ack LOST ✗
+        │
+        ▼
+  ② A's timeout fires ──▶ resend the SAME m-77
+        │
+        ▼
+  ③ Message Service: m-77 already stored? ──yes──▶ re-send original ack
+        │ no                                       (✓ no duplicate)
+        ▼
+  ④ store as a new message, assign seq, ack ✓
+```
+
 ### Handling the "Connection Server" Problem
 
 Persistent WebSocket connections mean a user is "pinned" to whichever
@@ -119,12 +150,43 @@ Message Service needs to deliver to User B:
   3. Not found (offline) → just persist; deliver on next reconnect
 ```
 
+```
+RECONNECT — B comes back online after being offline
+  ① B ──open WebSocket──▶ any Connection Server
+        │
+        ▼
+  ② Redis: SET user_id B → server_id  (reachable for live pushes again)
+        │
+        ▼
+  ③ B ──"last seq I have, per conversation"──▶ Message Service
+        │
+        ▼
+  ④ Message Store: messages with seq > last seq ──▶ pushed to B in order
+        │
+        ▼
+  ⑤ B acks ──▶ marked delivered ✓  (new messages use the push path)
+```
+
 ### Online Presence
 
 "Last seen" / online status is a perfect eventual-consistency (ch.07)
 use case — briefly stale presence info causes zero real harm, so it's
 fine to update it via a lightweight heartbeat (e.g. every 30 seconds)
 rather than requiring instant, strongly consistent propagation.
+
+```
+PRESENCE — heartbeat, eventually consistent
+  ① B's client ──heartbeat every 30s──▶ Connection Server
+        │
+        ▼
+  ② Redis: SET online:B = now  (TTL ~60s — missed beats = offline)
+        │
+        ▼
+  ③ A opens chat ──▶ GET online:B ──▶ key present? ──yes──▶ ✓ "online"
+                                          │ no (TTL expired)
+                                          ▼
+                                  "last seen 14:02"  (slightly stale = ok)
+```
 
 ---
 

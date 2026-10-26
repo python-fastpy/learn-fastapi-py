@@ -42,6 +42,26 @@ they do, and each library only has to manage half as much.
   "eventual consistency" trade-off from ch.07.
 - If the leader dies, one follower is promoted (failover, see ch.13).
 
+```
+REPLICATION — one write, then one read, step by step
+  ① Client ──INSERT/UPDATE──▶ LEADER  (the only node that takes writes)
+        │
+        ▼
+  ② Leader commits locally ──▶ ✓ write acknowledged to client
+        │
+        ▼
+  ③ Leader streams the change ──▶ Follower 1, 2, 3  (slightly later)
+        │
+        ▼
+  ④ Client ──SELECT──▶ load balancer ──▶ any Follower
+        │
+        ▼
+  ⑤ change applied yet? ── no ──▶ ✗ stale row returned (lag window)
+        │ yes
+        ▼
+     ✓ fresh row returned
+```
+
 ### Sharding / Partitioning (splitting DIFFERENT data across machines)
 
 ```
@@ -65,11 +85,41 @@ they do, and each library only has to manage half as much.
 - Geographic (US shard, EU shard): great for latency and data residency
   laws, bad if a huge % of users are in one region.
 
+```
+SHARD ROUTING — one query, step by step
+  ① query arrives: GET user "maria"
+        │
+        ▼
+  ② router extracts the sharding key ──▶ key = "maria"
+        │
+        ▼
+  ③ map key → shard
+       by range:  "m" falls in I-Q            ──▶ Shard 2
+       by hash:   hash("maria") % 3 → e.g. 0  ──▶ Shard 1
+        │
+        ▼
+  ④ send query to THAT shard only ──▶ ✓ row returned (1 shard touched)
+```
+
 **The cost of sharding**: queries that need data from multiple shards
 (e.g. a JOIN across two users on different shards) become slow or
 impossible without extra coordination — this is the #1 reason teams
 delay sharding as long as possible and reach for replication + a
 bigger leader first.
+
+```
+CROSS-SHARD QUERY — scatter / gather
+  ① query: "all users who signed up today"  (no sharding key in it)
+        │
+        ▼
+  ② router can't pick one shard ──▶ fan out to EVERY shard
+        ├──▶ Shard 1 ─┐
+        ├──▶ Shard 2 ─┼──▶ ③ router waits for ALL partial results
+        └──▶ Shard 3 ─┘                    │
+                                           ▼
+  ④ merge / sort / limit in the router ──▶ ✓ one combined answer
+     (slowest shard sets the latency; a shard down ──▶ ✗ error/partial)
+```
 
 ### Indexing (a smaller, related idea)
 
@@ -111,3 +161,16 @@ that cross-shard queries get more complex."
 4. Replication lag means a user can write something, immediately read
    it back from a follower, and NOT see their own write — this is a
    real, common bug class ("read-your-writes consistency" — see ch.07).
+
+```
+READ-YOUR-WRITES BUG — replication lag in action
+  ① User ──"rename to Bob"──▶ LEADER ──▶ ✓ 200 OK
+        │
+        ▼
+  ② User reloads page ──SELECT──▶ Follower 2  (change not arrived yet)
+        │
+        ▼
+  ③ Follower 2 ──▶ still "Alice" ──▶ ✗ user thinks the save failed
+  Fix: send this user's reads to the LEADER for a short while after
+       they write (or only to a follower known to be caught up)
+```

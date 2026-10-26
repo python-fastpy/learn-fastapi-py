@@ -1,4 +1,4 @@
-﻿"""Lesson 05 -- The Web UI: mini Claude in a browser
+"""Lesson 05 -- The Web UI: mini Claude in a browser
 =======================================================
 
 WHY THIS MATTERS:
@@ -24,7 +24,7 @@ Concepts:
   - Static files: FastAPI serves web/ directly; no bundler involved
   - Session state: conversation lives in a server-side dict keyed by
     session id. Restart the server and it's gone -- fine for a lesson,
-    swap for Redis/DynamoDB in production (see fastapi/08-session.py)
+    swap for Redis/DynamoDB in production (see fastapi/advanced/08_session.py)
   - Deny rules vs. asking: run_command is refused outright (a rule decided
     in advance); everything else that can change something asks you. That
     is how Claude Code's own permissions are shaped.
@@ -107,7 +107,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="mini-claude", lifespan=lifespan)
 
 # Server-side conversation state: session_id -> message list.
-# In-memory, so it resets when you restart. See fastapi/08-session.py for
+# In-memory, so it resets when you restart. See fastapi/advanced/08_session.py for
 # the Redis/JWT alternatives when you need it to survive a restart.
 SESSIONS: dict[str, list] = {}
 

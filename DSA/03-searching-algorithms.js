@@ -42,6 +42,13 @@ function linearSearch(arr, target) {
     }
     return -1;
 }
+// TRACE linearSearch([-5, 2, 10, 4, 6], 20)   (not-found case)
+//   i=0  arr[0]=-5  != 20
+//   i=1  arr[1]=2   != 20
+//   i=2  arr[2]=10  != 20
+//   i=3  arr[3]=4   != 20
+//   i=4  arr[4]=6   != 20
+//   i=5  loop ends (5 < 5 false) -> return -1   (checked all n=5 elements)
 
 console.log(linearSearch([-5, 2, 10, 4, 6], 10));  // 2
 console.log(linearSearch([-5, 2, 10, 4, 6], 6));   // 4
@@ -94,6 +101,13 @@ function binarySearch(arr, target) {
     }
     return -1;
 }
+// TRACE binarySearch([-5, 2, 4, 6, 10], 20)   (not-found case)
+//   step 1  left=0 right=4 mid=2  arr[2]=4  < 20 -> left = 3
+//   step 2  left=3 right=4 mid=3  arr[3]=6  < 20 -> left = 4
+//   step 3  left=4 right=4 mid=4  arr[4]=10 < 20 -> left = 5
+//   left=5 > right=4 -> loop ends -> return -1
+//           [-5, 2, 4, 6, 10]
+//                          ^ L walked past the end: 20 is bigger than everything
 
 console.log(binarySearch([-5, 2, 4, 6, 10], 10)); // 4
 console.log(binarySearch([-5, 2, 4, 6, 10], 6));  // 3
@@ -125,6 +139,13 @@ function bsHelper(arr, target, left, right) {
     if (target < arr[mid]) return bsHelper(arr, target, left, mid - 1);
     return bsHelper(arr, target, mid + 1, right);
 }
+// TRACE recursiveBinarySearch([-5, 2, 4, 6, 10], 10)  -> bsHelper(arr, 10, 0, 4)
+//   bsHelper(0, 4)   mid=2  arr[2]=4  < 10 -> recurse right half
+//     bsHelper(3, 4)   mid=3  arr[3]=6  < 10 -> recurse right half
+//       bsHelper(4, 4)   mid=4  arr[4]=10 == 10 -> return 4
+//     <- 4
+//   <- 4
+//   result: 4   (3 frames deep on the call stack)
 
 console.log(recursiveBinarySearch([-5, 2, 4, 6, 10], 10)); // 4
 console.log(recursiveBinarySearch([-5, 2, 4, 6, 10], 6));  // 3
@@ -173,6 +194,14 @@ function jumpSearch(arr, target) {
     }
     return -1;
 }
+// TRACE jumpSearch([0..9], 11)   n=10 step=3   (not-found case)
+//   jump  prev=0 curr=3  arr[3]=3 < 11 -> prev=3 curr=6
+//   jump  prev=3 curr=6  arr[6]=6 < 11 -> prev=6 curr=9
+//   jump  prev=6 curr=9  arr[9]=9 < 11 -> prev=9 curr=12
+//   curr=12 < n=10? no -> stop jumping
+//   scan  i=9..min(12,9)=9   arr[9]=9 != 11
+//   -> return -1
+// jumpSearch([0..9], 0): arr[3]=3 < 0? no -> no jumps; scan i=0 -> arr[0]=0 -> return 0
 
 console.log(jumpSearch([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 7)); // 7
 console.log(jumpSearch([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 0)); // 0
@@ -228,6 +257,12 @@ function interpolationSearch(arr, target) {
     }
     return -1;
 }
+// TRACE interpolationSearch([10,20,30,40,50,60,70], 15)   (not-found case)
+//   step 1  lo=0 hi=6  15 in [10..70]? yes
+//           pos = 0 + floor((15-10)*(6-0)/(70-10)) = floor(30/60) = 0
+//           arr[0]=10 < 15 -> lo = 1
+//   step 2  lo=1 hi=6  15 >= arr[1]=20? NO -> range check fails, loop ends
+//   -> return -1   (15 falls between 10 and 20, so it can't be in the array)
 
 console.log(interpolationSearch([10, 20, 30, 40, 50, 60, 70], 40)); // 3
 console.log(interpolationSearch([10, 20, 30, 40, 50, 60, 70], 15)); // -1
@@ -273,6 +308,12 @@ function twoSumSorted(arr, target) {
     }
     return null;
 }
+// TRACE twoSumSorted([1,2,3,4,6], 20)   (not-found case)
+//   step 1  left=0 right=4  1+6=7  < 20 -> left++
+//   step 2  left=1 right=4  2+6=8  < 20 -> left++
+//   step 3  left=2 right=4  3+6=9  < 20 -> left++
+//   step 4  left=3 right=4  4+6=10 < 20 -> left++
+//   left=4 < right=4? no -> pointers met -> return null
 
 console.log(twoSumSorted([1, 2, 3, 4, 6], 6)); // [1, 3]  (indices of 2,4)
 console.log(twoSumSorted([1, 2, 3, 4, 6], 20)); // null
@@ -298,6 +339,13 @@ function removeDuplicatesSorted(arr) {
     }
     return slow + 1;
 }
+// TRACE removeDuplicatesSorted([1, 1, 2])   (small version)
+//   start  slow=0                                       [1, 1, 2]
+//   fast=1 arr[1]=1 == arr[0]=1 -> skip                 [1, 1, 2]
+//   fast=2 arr[2]=2 != arr[0]=1 -> slow=1, arr[1]=2     [1, 2, 2]
+//                                                           ^ slow
+//   return slow+1 = 2   (unique part: [1, 2])
+// removeDuplicatesSorted([]) -> 0 (early return)
 
 const dupArr = [1, 1, 2, 2, 3, 4, 4, 5];
 console.log(removeDuplicatesSorted(dupArr)); // 5 (unique: 1,2,3,4,5)
@@ -327,6 +375,11 @@ function isPalindrome(s) {
     }
     return true;
 }
+// TRACE isPalindrome("hello")
+//   clean = "hello"   l=0 r=4
+//   step 1  clean[0]='h' vs clean[4]='o' -> differ -> return false
+//           h e l l o
+//           ^       ^  mismatch on the very first pair
 
 console.log(isPalindrome("A man, a plan, a canal: Panama")); // true
 console.log(isPalindrome("hello")); // false
@@ -386,6 +439,15 @@ function maxSumSubarray(arr, k) {
     }
     return maxSum;
 }
+// TRACE maxSumSubarray([4,2,1,7,8,1,2,8,1,0], 3)
+//   first window [4,2,1] -> windowSum=7  maxSum=7
+//   i=3  +arr[3]=7 -arr[0]=4  windowSum=10  maxSum=10
+//   i=4  +arr[4]=8 -arr[1]=2  windowSum=16  maxSum=16   <- window [1,7,8]
+//   i=5  +arr[5]=1 -arr[2]=1  windowSum=16  maxSum=16
+//   i=6  +arr[6]=2 -arr[3]=7  windowSum=11  maxSum=16
+//   ...
+//   i=9  +arr[9]=0 -arr[6]=2  windowSum=9   maxSum=16
+//   -> return 16
 
 console.log(maxSumSubarray([2, 1, 5, 1, 3, 2], 3)); // 9
 console.log(maxSumSubarray([4, 2, 1, 7, 8, 1, 2, 8, 1, 0], 3)); // 16
@@ -416,6 +478,14 @@ function longestUniqueSubstring(s) {
     }
     return maxLen;
 }
+// TRACE longestUniqueSubstring("pwwkew")
+//   end=0 'p'  new                    start=0  len=1  maxLen=1
+//   end=1 'w'  new                    start=0  len=2  maxLen=2
+//   end=2 'w'  seen@1 >= 0 -> start=2 start=2  len=1  maxLen=2
+//   end=3 'k'  new                    start=2  len=2  maxLen=2
+//   end=4 'e'  new                    start=2  len=3  maxLen=3  <- "wke"
+//   end=5 'w'  seen@2 >= 2 -> start=3 start=3  len=3  maxLen=3  ("kew")
+//   -> return 3
 
 console.log(longestUniqueSubstring("abcabcbb")); // 3  ("abc")
 console.log(longestUniqueSubstring("bbbbb"));    // 1  ("b")
@@ -454,6 +524,11 @@ function minSubarrayLen(target, arr) {
     }
     return minLen === Infinity ? 0 : minLen;
 }
+// TRACE minSubarrayLen(100, [1, 2, 3])   (no window big enough)
+//   end=0  sum=1   >= 100? no
+//   end=1  sum=3   >= 100? no
+//   end=2  sum=6   >= 100? no   (inner while never runs)
+//   minLen still Infinity -> return 0
 
 console.log(minSubarrayLen(7, [2, 3, 1, 2, 4, 3])); // 2 ([4,3])
 console.log(minSubarrayLen(100, [1, 2, 3]));          // 0

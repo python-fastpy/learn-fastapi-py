@@ -132,6 +132,11 @@ function example1(n) {
     }
 }
 // Total: n * n = O(n^2)
+// TRACE example1(3)
+//   i=0  j=0,1,2  -> prints (0,0) (0,1) (0,2)
+//   i=1  j=0,1,2  -> prints (1,0) (1,1) (1,2)
+//   i=2  j=0,1,2  -> prints (2,0) (2,1) (2,2)
+//   total prints = 3 * 3 = 9   (n=10 -> 100)
 
 // --- Example 2: Dependent inner loop => O(n^2) ---
 function example2(n) {
@@ -142,6 +147,12 @@ function example2(n) {
     }
 }
 // Total: n(n-1)/2 => O(n^2)  (drop constant 1/2)
+// TRACE example2(4)
+//   i=0  j<0   -> no prints               (0)
+//   i=1  j=0   -> (1,0)                    (1)
+//   i=2  j=0,1 -> (2,0) (2,1)              (2)
+//   i=3  j=0,1,2 -> (3,0) (3,1) (3,2)      (3)
+//   total = 0+1+2+3 = 6 = 4*3/2
 
 // --- Example 3: Inner loop halves => O(n log n) ---
 function example3(n) {
@@ -152,6 +163,12 @@ function example3(n) {
     }
 }
 // Total: n * log(n) => O(n log n)
+// TRACE example3(4)
+//   i=0  j=4 -> 2 -> 1 -> 0 stop   prints (0,4) (0,2) (0,1)
+//   i=1  j=4 -> 2 -> 1             prints (1,4) (1,2) (1,1)
+//   i=2  same 3 prints
+//   i=3  same 3 prints
+//   total = 4 * 3 = 12   (inner runs floor(log2 4)+1 = 3 times)
 
 // --- Example 4: Loop that halves => O(log n) ---
 function example4(n) {
@@ -161,6 +178,13 @@ function example4(n) {
     }
 }
 // Total: O(log n)   (binary search pattern)
+// TRACE example4(16)
+//   start  i = 16
+//   iter 1  16 > 1 -> i = 8
+//   iter 2   8 > 1 -> i = 4
+//   iter 3   4 > 1 -> i = 2
+//   iter 4   2 > 1 -> i = 1
+//   1 > 1 false -> stop   4 iterations = log2(16)
 
 // --- Example 5: Two sequential loops => O(n) ---
 function example5(arr) {
@@ -168,6 +192,10 @@ function example5(arr) {
     for (let j = 0; j < arr.length; j++) { console.log(arr[j]); } // O(n)
 }
 // Total: O(n) + O(n) = O(2n) = O(n)
+// TRACE example5([1,2,3])
+//   loop 1  i=0,1,2  prints 1, 2, 3     (3 steps)
+//   loop 2  j=0,1,2  prints 1, 2, 3     (3 steps)
+//   total = 3 + 3 = 6 = 2n  -> O(n)
 
 // --- Example 6: Two DIFFERENT inputs ---
 function example6(arrA, arrB) {
@@ -175,6 +203,10 @@ function example6(arrA, arrB) {
     for (let j = 0; j < arrB.length; j++) { console.log(arrB[j]); }
 }
 // Total: O(a + b)  -- NOT O(n)!  Different inputs, different variables.
+// TRACE example6([1,2,3], ["x","y"])
+//   loop 1  i=0,1,2  prints 1, 2, 3     (a = 3 steps)
+//   loop 2  j=0,1    prints x, y        (b = 2 steps)
+//   total = 3 + 2 = 5 = a + b
 
 // ============================================================
 // 8. SPACE COMPLEXITY EXAMPLES               [INTERMEDIATE]
@@ -189,6 +221,12 @@ function sumArray(arr) {
     return total;
 }
 // Time: O(n)  |  Space: O(1)
+// TRACE sumArray([4, 1, 5])
+//   start  total = 0
+//   i=0  total = 0 + 4 = 4
+//   i=1  total = 4 + 1 = 5
+//   i=2  total = 5 + 5 = 10
+//   returns 10   (only total + i ever stored -> O(1) space)
 
 // O(n) space -- creates an array proportional to input
 function doubleArray(arr) {
@@ -199,6 +237,12 @@ function doubleArray(arr) {
     return result;
 }
 // Time: O(n)  |  Space: O(n)
+// TRACE doubleArray([4, 1, 5])
+//   start  result = [ ]
+//   i=0  push 8    result = [ 8 ]
+//   i=1  push 2    result = [ 8, 2 ]
+//   i=2  push 10   result = [ 8, 2, 10 ]
+//   returns [ 8, 2, 10 ]   (new array of n items -> O(n) space)
 
 // O(n) space -- recursion call stack
 function recursiveSum(n) {
@@ -206,6 +250,14 @@ function recursiveSum(n) {
     return n + recursiveSum(n - 1);    // n frames on the call stack
 }
 // Time: O(n)  |  Space: O(n)  (call stack)
+// TRACE recursiveSum(3)
+//   recursiveSum(3) = 3 + recursiveSum(2)
+//     recursiveSum(2) = 2 + recursiveSum(1)
+//       recursiveSum(1) = 1 + recursiveSum(0)
+//         recursiveSum(0) -> n <= 0 -> 0      (stack depth 4)
+//       <- 1 + 0 = 1
+//     <- 2 + 1 = 3
+//   <- 3 + 3 = 6     returns 6
 
 // O(n^2) space -- 2D matrix
 function createMatrix(n) {
@@ -216,6 +268,12 @@ function createMatrix(n) {
     return matrix;
 }
 // Time: O(n^2)  |  Space: O(n^2)
+// TRACE createMatrix(3)
+//   start  matrix = [ ]
+//   i=0  matrix[0] = [0,0,0]   matrix = [ [0,0,0] ]
+//   i=1  matrix[1] = [0,0,0]   matrix = [ [0,0,0], [0,0,0] ]
+//   i=2  matrix[2] = [0,0,0]   matrix = [ [0,0,0], [0,0,0], [0,0,0] ]
+//   returns 3x3 grid -> 9 cells = n^2
 
 // ============================================================
 // 9. AMORTIZED COMPLEXITY                    [ADVANCED]

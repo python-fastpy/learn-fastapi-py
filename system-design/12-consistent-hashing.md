@@ -54,6 +54,20 @@ NAIVE HASHING: server = hash(key) % N
 ```
 
 ```
+KEY LOOKUP — walking the ring  (A=45°, B=135°, C=225°, D=315°)
+  ① hash("cat") ──▶ position 100°  (same hash function as the servers)
+        │
+        ▼
+  ② search sorted server positions for the first one ≥ 100°
+        │
+        ▼
+  ③ found B (135°) ──▶ ✓ "cat" lives on Server B
+        │  (key at 330°? nothing ≥ 330° → wrap past 360° to A at 45°)
+        ▼
+  ④ client/router sends GET cat ──▶ Server B
+```
+
+```
 Adding a new server (Server E) between B and C on the ring:
 
   Server D ── Server A ── Server B ── [Server E] ── Server C ── (back to D)
@@ -62,8 +76,38 @@ Adding a new server (Server E) between B and C on the ring:
   B and E, move to Server E. Server D, A, B's keys are UNTOUCHED.
 ```
 
+```
+ADDING SERVER E — step by step  (B=135°, new E=180°, C=225°)
+  ① hash("Server E") ──▶ 180°, insert E into the ring
+        │
+        ▼
+  ② E's clockwise successor ──▶ Server C (225°) — the only donor
+        │
+        ▼
+  ③ keys in (135°, 180°] move  C ──▶ E
+        │
+        ▼
+  ④ ✓ lookups for those keys now stop at E
+     ✓ keys in (180°, 225°] stay on C;  A, B, D untouched
+```
+
 That's the entire point: **adding or removing one node only remaps the
 keys near it on the ring**, not the whole keyspace.
+
+```
+REMOVING SERVER B — step by step  (original ring A, B, C, D)
+  ① B (135°) fails or is decommissioned ──▶ removed from the ring
+        │
+        ▼
+  ② B's keys, range (45°, 135°], now walk clockwise past 135° ...
+        │
+        ▼
+  ③ ... to the next server ──▶ Server C (225°) takes them over
+        │
+        ▼
+  ④ ✓ only B's range moves (to C);  A's and D's keys stay put
+     ✗ with hash % N, dropping to N=3 would remap almost every key
+```
 
 ### Virtual Nodes (fixing uneven distribution)
 
@@ -78,6 +122,21 @@ there are.
 Server A → hashed to 5 different positions: A1, A2, A3, A4, A5
 Server B → hashed to 5 different positions: B1, B2, B3, B4, B5
 (spread evenly around the ring instead of 2 lumps)
+```
+
+```
+LOOKUP WITH VIRTUAL NODES
+  ① hash("cat") ──▶ position on the ring
+        │
+        ▼
+  ② next point clockwise ──▶ virtual node B3
+        │
+        ▼
+  ③ map virtual → physical:  B3 ──▶ Server B  ──▶ ✓ "cat" lives on B
+        │
+        ▼
+  ④ if Server B dies: B1..B5 vanish, each small range falls to its own
+     next point clockwise → load spreads over the survivors, not one
 ```
 
 ### Where This Actually Shows Up

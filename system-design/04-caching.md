@@ -30,6 +30,20 @@ Browser cache          CDN edge cache        Server-side cache        Database
 Each layer you add removes load from everything behind it — a well-hit
 CDN cache means your database barely notices traffic spikes.
 
+```
+ONE READ THROUGH THE CACHE LAYERS
+  ① Browser cache ──── hit? ── yes ──▶ ✓ instant (no network call)
+        │ miss
+        ▼
+  ② CDN edge ───────── hit? ── yes ──▶ ✓ served from a nearby city
+        │ miss
+        ▼
+  ③ App ──▶ Redis ──── hit? ── yes ──▶ ✓ served, DB untouched
+        │ miss
+        ▼
+  ④ Database (source of truth) ──▶ ✓ correct, but the slowest path
+```
+
 ### Cache Population Strategies
 
 ```
@@ -48,6 +62,22 @@ First request after a miss is slow     after a write
 ```
 
 ```
+CACHE-ASIDE READ
+  App ──①get(key)──▶ Cache ──② hit? ──yes──▶ ✓ return value  (fast path)
+                        │ miss
+                        ▼
+  App ──③ query ──▶ Database ──④ row ──▶ App ──⑤ set(key, ttl) ──▶ Cache
+  ⑥ next get(key) ──▶ ✓ HIT
+```
+
+```
+WRITE-THROUGH WRITE
+  ① App ──write(key, v)──▶ Cache ──② same write──▶ Database
+  ③ both succeed ──▶ ✓ ack to App   (2 writes = slower write)
+  ④ next read ──▶ Cache HIT ──▶ ✓ already-fresh value
+```
+
+```
 WRITE-BACK (write-behind)              READ-THROUGH
 ──────────────────────────             ──────────────
 1. App writes to CACHE only            Looks like cache-aside from the
@@ -56,6 +86,18 @@ WRITE-BACK (write-behind)              READ-THROUGH
 Fast writes, but data can be LOST       responsible for loading from
 if the cache crashes before flushing    the DB on a miss — common in
                                          managed caching layers
+```
+
+```
+WRITE-BACK — write now, flush later
+  ① App ──write(key, v)──▶ Cache ──▶ ✓ ack immediately  (fast)
+  ② Cache marks the key "dirty" and moves on
+  ③ later, in a batch: Cache ──flush dirty keys──▶ Database ✓
+  ✗ cache crashes between ① and ③ ──▶ those writes are LOST
+
+READ-THROUGH MISS
+  App ──① get(key)──▶ Cache ──② miss ──▶ Cache itself queries Database
+  App ◀──④ value ──── Cache ◀──③ row (Cache stores it) ──┘
 ```
 
 ### Cache Invalidation — "the hard problem"
@@ -77,6 +119,17 @@ stale for up to N seconds      EVERY place that can change    to and react to
                                 that data — easy to miss one
 ```
 
+```
+UPDATE, THEN READ — TTL only vs. explicit invalidation
+  ① App updates price in DB: $10 ──▶ $12
+        │
+        ├── TTL only ─────▶ ② cache still says $10 ──▶ ✗ stale reads
+        │                      ③ TTL expires ──▶ re-fetch ──▶ $12
+        │
+        └── explicit ─────▶ ② App deletes the cache key after the write
+                               ③ next read misses ──▶ DB ──▶ ✓ $12 cached
+```
+
 ### Eviction — what happens when the cache is FULL
 
 You can't cache everything forever — memory is limited. **LRU (Least
@@ -85,6 +138,14 @@ hasn't been touched in the longest time. See `DSA/12-lru-cache.js` in
 this repo for a full from-scratch implementation of exactly this
 algorithm — it's both an interview data-structure question AND the real
 mechanism inside Redis/Memcached.
+
+```
+LRU EVICTION — set() on a FULL cache (capacity = 3)
+  order (most recent → least):   [ C, B, A ]
+  ① get(A) ──▶ hit, A moves to front ──▶ [ A, C, B ]
+  ② set(D) ──▶ full? ── yes ──▶ evict least recently used = B  ✗
+  ③ insert D at the front ──▶ [ D, A, C ]  ✓
+```
 
 ---
 

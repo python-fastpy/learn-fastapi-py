@@ -38,6 +38,23 @@ Best for: "IS something      happened at 10:03:01?"       Service → DB,
                                                             actually slow?"
 ```
 
+```
+ONE REQUEST → ALL THREE SIGNALS
+  ① request hits API Gateway ──▶ assign request/trace ID = abc123
+        │
+        ▼
+  ② Gateway ──(header: trace-id abc123)──▶ Users Service ──▶ DB
+        │   each hop records a SPAN (start, duration) ──▶ trace store
+        ▼
+  ③ each service writes LOG lines tagged abc123 ──▶ log store
+        │
+        ▼
+  ④ each service bumps METRICS (requests++, latency) ──▶ metrics DB
+        │
+        ▼
+  ⑤ dashboards/alerts read metrics; abc123 links trace ↔ logs
+```
+
 Tracing matters MOST once you have microservices (ch.09) — in a
 monolith, a slow request is one process to look at; in a microservices
 system, a slow request might have hopped through 6 services, and
@@ -67,12 +84,41 @@ means alerts should be tied to things that actually need a human
 (symptom-based: "users are experiencing errors"), not every possible
 internal metric wobble (cause-based noise: "CPU hit 81% for 10 seconds").
 
+```
+ALERT EVALUATION — step by step  (rule: error rate > 5% for 5 min)
+  ① every ~30s: evaluate the rule against the latest metrics
+        │
+        ▼
+  ② error rate > 5% ? ──── no ───▶ ✓ stay quiet (reset the timer)
+        │ yes
+        ▼
+  ③ held for 5 min straight ? ── no ──▶ keep watching (pending)
+        │ yes
+        ▼
+  ④ alert FIRES ──▶ grouped/deduped with alerts already open
+        │
+        ▼
+  ⑤ page on-call ──▶ dashboard (what) ──▶ trace (where) ──▶ logs (why)
+```
+
 ### Health Checks (the simplest form of observability)
 
 This is the same `/health` endpoint from ch.03's load balancer — a
 minimal signal of "am I alive," which is necessary but far from
 sufficient; a server can return `200 OK` on `/health` while its
 database connection is completely broken.
+
+```
+SHALLOW vs. DEEP HEALTH CHECK
+  ① LB ── GET /health ──▶ App server
+        │
+        ├── shallow: "process is up" ──▶ ✓ 200 OK  (even if DB is down!)
+        │
+        └── deep: ② ping DB   ③ ping critical downstream services
+                  │
+                  ├── all OK ───▶ ✓ 200 OK ──▶ stays in rotation
+                  └── any fail ─▶ ✗ 503    ──▶ LB pulls it from rotation
+```
 
 ---
 

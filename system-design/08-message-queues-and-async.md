@@ -36,6 +36,26 @@ traffic spike fills up the queue instead of crashing the consumer, and
 the consumer catches up when things calm down (this is called
 **backpressure absorption**, or informally "smoothing out spikes").
 
+```
+ONE MESSAGE'S LIFE — ack, retry, dead-letter
+  ① Producer ──publish msg──▶ Queue;  Producer ──▶ ✓ 202 to user now
+        │
+        ▼
+  ② Consumer pulls msg  (hidden from other consumers, NOT deleted yet)
+        │
+        ▼
+  ③ processed ok? ── yes ──▶ ack ──▶ Queue deletes msg ──▶ ✓ done
+        │ no (error / crash / timeout — no ack arrives)
+        ▼
+  ④ msg becomes visible again ──▶ redelivered (attempts += 1)
+        │
+        ▼
+  ⑤ attempts > max (e.g. 5)? ── no ──▶ back to ②
+        │ yes
+        ▼
+  ⑥ move to DEAD-LETTER QUEUE ──▶ ✗ alert a human / inspect later
+```
+
 ### Point-to-Point Queue vs. Pub-Sub
 
 ```
@@ -52,6 +72,19 @@ Good for: distributing work             Good for: notifying multiple
                                           react independently)
 ```
 
+```
+PUB-SUB FAN-OUT — one "OrderPlaced" event
+  ① Order service ──publish OrderPlaced{id: 991}──▶ [topic: orders]
+        │
+        ▼
+  ② broker hands a COPY to every subscriber
+        ├──▶ Email service      ──▶ sends receipt          ✓
+        ├──▶ Analytics service  ──▶ +1 to daily sales      ✓
+        └──▶ Inventory service  ──▶ reserves stock         ✓
+  ③ each subscriber acks/retries on its OWN: a slow Email service
+     doesn't delay Inventory, and the Order service never waits
+```
+
 ### Delivery Guarantees
 
 | Guarantee | Meaning | Risk |
@@ -65,6 +98,20 @@ Why idempotency matters (at-least-once in practice):
   "charge $10" processed TWICE by accident → customer charged $20  ✗
   "set balance = current - 10, only if not already applied this
    request_id" → safe to run twice, same end result             ✓
+```
+
+```
+IDEMPOTENT CONSUMER — the same message delivered twice
+  ① msg {request_id: r-77, "charge $10"} arrives
+        │
+        ▼
+  ② r-77 already in processed-ids? ── yes ──▶ ack & skip ──▶ ✓ no double
+        │ no
+        ▼
+  ③ charge $10 AND record r-77  (in the same DB transaction)
+        │
+        ▼
+  ④ ack ──▶ ✓ done   (ack lost? redelivery hits step ② ──▶ skipped)
 ```
 
 ### Async/Event-Driven Processing

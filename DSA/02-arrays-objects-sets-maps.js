@@ -111,6 +111,10 @@ const obj = {
     sayMyName: function () {
         console.log(this.name);
     },
+    // TRACE obj.sayMyName()
+    //   step 1  called as obj.sayMyName() -> this = obj
+    //   step 2  this.name -> obj.name = "shubham"
+    //   prints "shubham"   (detached: const f = obj.sayMyName; f() -> this is not obj)
 };
 obj.hobby = "footbal";
 delete obj.hobby;

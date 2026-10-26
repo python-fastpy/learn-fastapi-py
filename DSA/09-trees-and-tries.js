@@ -36,12 +36,19 @@ class BinarySearchTree {
     }
 
     isEmpty() { return this.root === null; }
+    // TRACE isEmpty() on new tree: root = null -> true
 
     insert(value) {
         const node = new BSTNode(value);
         if (this.isEmpty()) this.root = node;
         else this.insertNode(this.root, node);
     }
+    // TRACE insert(10), insert(5)
+    //   insert(10): tree empty -> root = 10
+    //   insert(5):  tree not empty -> insertNode(root=10, node 5)
+    //                10
+    //               /
+    //              5
 
     insertNode(root, newNode) {
         if (newNode.value < root.value) {
@@ -52,6 +59,18 @@ class BinarySearchTree {
             else this.insertNode(root.right, newNode);
         }
     }
+    // TRACE insert(7)   tree:     10
+    //                            /  \
+    //                           5    15
+    //                          /
+    //                         3
+    //   step 1  at 10: 7 < 10 -> left is 5 -> recurse
+    //   step 2  at 5:  7 > 5  -> right is null -> place 7
+    //                             10
+    //                            /  \
+    //                           5    15
+    //                          / \
+    //                         3   7
 
     search(root, value) {
         if (!root) return false;
@@ -60,6 +79,11 @@ class BinarySearchTree {
             ? this.search(root.left, value)
             : this.search(root.right, value);
     }
+    // TRACE search(root, 20)   tree: 10 / (5: 3, 7) / 15
+    //   step 1  at 10: 20 > 10 -> go right
+    //   step 2  at 15: 20 > 15 -> go right
+    //   step 3  root = null    -> return false
+    // (search 5: at 10, 5 < 10 -> left; at 5: match -> true)
 
     preorder(root) {
         if (!root) return;
@@ -67,6 +91,15 @@ class BinarySearchTree {
         this.preorder(root.left);
         this.preorder(root.right);
     }
+    // TRACE preorder(root)   tree:   10
+    //                              /    \
+    //                             5      15
+    //                           /   \
+    //                          3     7
+    //   pre(10) print 10 -> pre(5) print 5 -> pre(3) print 3 -> (null, null)
+    //   back to 5  -> pre(7) print 7 -> (null, null)
+    //   back to 10 -> pre(15) print 15 -> (null, null)
+    //   output: 10 5 3 7 15   (node, left, right)
 
     inOrder(root) {
         if (!root) return;
@@ -74,6 +107,11 @@ class BinarySearchTree {
         console.log(root.value);
         this.inOrder(root.right);
     }
+    // TRACE inOrder(root)   same tree (10 / 5,15 / 3,7)
+    //   in(10) -> in(5) -> in(3) -> left null, print 3, right null
+    //   back to 5  -> print 5  -> in(7) -> print 7
+    //   back to 10 -> print 10 -> in(15) -> print 15
+    //   output: 3 5 7 10 15   (left, node, right = sorted)
 
     postOrder(root) {
         if (!root) return;
@@ -81,6 +119,11 @@ class BinarySearchTree {
         this.postOrder(root.right);
         console.log(root.value);
     }
+    // TRACE postOrder(root)   same tree (10 / 5,15 / 3,7)
+    //   post(10) -> post(5) -> post(3) -> print 3
+    //   back to 5  -> post(7) -> print 7 -> then print 5
+    //   back to 10 -> post(15) -> print 15 -> then print 10
+    //   output: 3 7 5 15 10   (left, right, node)
 
     levelOrder() {
         // BFS — plain array used as a queue (push at rear, shift from front).
@@ -93,11 +136,24 @@ class BinarySearchTree {
             if (curr.right) queue.push(curr.right);
         }
     }
+    // TRACE levelOrder()   same tree (10 / 5,15 / 3,7)
+    //   step | shift -> print | push children | queue after
+    //   0    |                |               | [10]
+    //   1    | 10             | 5, 15         | [5, 15]
+    //   2    | 5              | 3, 7          | [15, 3, 7]
+    //   3    | 15             | -             | [3, 7]
+    //   4    | 3              | -             | [7]
+    //   5    | 7              | -             | []  -> done
+    //   output: 10 5 15 3 7
 
     min(root) { return root.left ? this.min(root.left) : root.value; }
     max(root) { return root.right ? this.max(root.right) : root.value; }
+    // TRACE min(root) / max(root)   same tree (10 / 5,15 / 3,7)
+    //   min: at 10 left=5 -> at 5 left=3 -> at 3 left=null -> 3
+    //   max: at 10 right=15 -> at 15 right=null -> 15
 
     delete(value) { this.root = this.deleteNode(this.root, value); }
+    // TRACE delete(5): root = deleteNode(10, 5) -> returns 10 (see below)
 
     deleteNode(root, value) {
         if (root === null) return root;
@@ -116,6 +172,20 @@ class BinarySearchTree {
         }
         return root;
     }
+    // TRACE deleteNode(root, 5)   tree:     10
+    //                                      /  \
+    //                                     5    15
+    //                                    / \
+    //                                   3   7
+    //   step 1  at 10: 5 < 10 -> root.left = deleteNode(5, 5)
+    //   step 2  at 5:  match, two children -> min(right=7) = 7 -> value = 7
+    //   step 3  root.right = deleteNode(7, 7): leaf -> returns null
+    //   step 4  node(7) returned to 10.left; 10 returned as new root
+    //                             10
+    //                            /  \
+    //                           7    15
+    //                          /
+    //                         3
 }
 
 let bst = new BinarySearchTree();
@@ -185,15 +255,26 @@ class Trie {
         }
         curr.isEndOfWord = true;
     }
+    // TRACE insert("car")   trie already has "cat":  root ─ c ─ a ─ t*
+    //   'c'  root has c -> reuse     curr = c
+    //   'a'  c has a    -> reuse     curr = a
+    //   'r'  a has no r -> create r  curr = r
+    //   end: r.isEndOfWord = true
+    //   root ─ c ─ a ─ t*
+    //               └─ r*
 
     search(word) { // O(k) — exact word match
         const node = this.#traverse(word);
         return node !== null && node.isEndOfWord;
     }
+    // TRACE search("cat") / search("ca")   trie: cat, car, dog
+    //   "cat": traverse -> node t, t.isEndOfWord = true  -> true
+    //   "ca":  traverse -> node a, a.isEndOfWord = false -> false
 
     startsWith(prefix) { // O(k) — used for autocomplete
         return this.#traverse(prefix) !== null;
     }
+    // TRACE startsWith("ca")   traverse -> node a (not null) -> true
 
     #traverse(str) {
         let curr = this.root;
@@ -203,6 +284,11 @@ class Trie {
         }
         return curr;
     }
+    // TRACE #traverse("dogs")   trie: cat, car, dog
+    //   'd'  root has d -> curr = d
+    //   'o'  d has o    -> curr = o
+    //   'g'  o has g    -> curr = g
+    //   's'  g has no s -> return null   (so search("dogs") = false)
 }
 
 const trie = new Trie();

@@ -31,6 +31,19 @@ VERTICAL SCALING ("scale up")          HORIZONTAL SCALING ("scale out")
      machine you can buy/afford)          Failure of one node ≠ outage
 ```
 
+```
+ONE SERVER DIES — what the user sees
+  VERTICAL:   Client ──▶ [ Big Server ] ✗ crashed
+                              │
+                              ▼
+              ✗ every request fails → full outage until it's fixed
+
+  HORIZONTAL: ① Client ──▶ Load Balancer ──▶ Server 2  ✗ crashed
+              ② LB stops routing to Server 2 (fails health check)
+              ③ Client ──▶ Load Balancer ──▶ Server 1 / 3 / 4
+              ④ ✓ requests still served (just less spare capacity)
+```
+
 ### Why horizontal scaling needs "statelessness"
 
 If server #1 stores a logged-in user's session in its own memory, and
@@ -38,7 +51,7 @@ the load balancer sends that user's NEXT request to server #2, server
 #2 has no idea who they are. Horizontal scaling only works cleanly when
 any server can handle any request — which means session/state has to
 live somewhere shared (a database, Redis, or in a token the client
-carries — see `08-session.py` in `fastapi/` for exactly this problem).
+carries — see `08_session.py` in `fastapi/advanced/` for exactly this problem).
 
 ```
 BAD (stateful):                       GOOD (stateless):
@@ -46,6 +59,17 @@ BAD (stateful):                       GOOD (stateless):
   Server 2: [user B's session]          Server 2 ─┼──▶ Shared session
   → user A's next request MUST          Server 3 ─┘     store (Redis)
     go back to Server 1                → ANY server can serve ANY user
+```
+
+```
+USER A's NEXT REQUEST — stateful vs. stateless
+  ① login ──▶ LB ──▶ Server 1  (session created)
+  ② next request ──▶ LB ──▶ Server 2  (LB picked a different server)
+        │
+        ▼
+  ③ where does the session live?
+        ├── Server 1's memory ──▶ Server 2 can't find it ──▶ ✗ logged out
+        └── shared Redis ───────▶ Server 2 looks it up ────▶ ✓ served
 ```
 
 ### Diminishing Returns of Vertical Scaling
@@ -85,6 +109,19 @@ see database scaling (ch.06)."
 **Model answer structure:** identify the bottleneck → say whether the
 component can even BE horizontally scaled → note what needs to change
 to make it stateless if it currently isn't.
+
+```
+"HANDLE 10x TRAFFIC" — decision flow
+  ① find the bottleneck (CPU on app servers? DB latency?)
+        │
+        ▼
+  ② app servers? ── yes ──▶ stateless? ── yes ──▶ ✓ add servers behind LB
+        │ no                    │ no
+        │                       ▼
+        │                 externalize session/state first, then scale out
+        ▼
+  ③ database? ──▶ harder: scale up, or replication/sharding (ch.06)
+```
 
 ---
 
