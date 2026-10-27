@@ -140,6 +140,8 @@ def part1_tokenization():
     print("     window, max_tokens. That's why tokens matter to an engineer.")
     print("   - Why LLMs are bad at 'count the r's in strawberry': they see")
     print("     tokens like ['str', 'awberry'], not letters.\n")
+    print("  Every case (spaces, capitals, numbers, code, emoji, other languages),")
+    print("  with a real BPE tokenizer trained from scratch: 01b_tokens_in_depth.py\n")
 
 
 # ============================================================================

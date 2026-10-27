@@ -19,6 +19,7 @@ its `# ====` header.
 ```bash
 cd learn-llm-fundamentals
 uv run python 01_what_is_an_llm.py      # or plain: python 01_what_is_an_llm.py
+uv run python 01b_tokens_in_depth.py     # every tokenization case, real BPE
 uv run python 02_sampling_temperature_top_p.py
 uv run python 03_chat_api_anatomy.py
 uv run python 07_tool_calling.py         # tools: read these two right after 03
@@ -36,6 +37,7 @@ uv run python advanced/13_reasoning_and_structured_output.py
 uv run python advanced/14_fine_tuning.py
 uv run python advanced/15_run_open_models_locally.py   # real model if Ollama is running
 uv run advanced/15b_run_with_transformers.py           # after cloning a model (lesson 15)
+uv run python advanced/16_own_model_with_your_context.py  # "our own model + our docs": what works
 ```
 
 **How to use this:** read a section below, run the matching lesson,
@@ -64,6 +66,7 @@ has the diagram and the list of concepts.
     - [10b. Reasoning models, structured output, multimodal](#10b-reasoning-models-structured-output-multimodal) (lesson 13)
     - [10c. Fine-tuning](#10c-fine-tuning) (lesson 14)
     - [10d. Run an open-source model locally](#10d-run-an-open-source-model-locally) (lessons 15, 15b)
+    - [10e. Our own model with our context](#10e-our-own-model-with-our-context) (lesson 16)
 
 ---
 
@@ -126,6 +129,38 @@ talking to. "Memory" is always your code resending text.
 Tokens are the unit of **everything**: price, speed, context-window
 size, `max_tokens`. Models see tokens, not letters, which is why
 "count the r's in strawberry" is hard for them.
+
+#### Tokens in depth (lesson 01b)
+
+`01b_tokens_in_depth.py` trains a real **byte-level BPE** tokenizer from scratch, using
+the same algorithm as GPT-style tokenizers. It then runs every kind of text through it.
+
+```
+ text ──▶ 1. pre-split (words, ≤3-digit numbers, symbols, spaces) ──▶ 2. bytes ──▶ 3. replay learned merges ──▶ ids
+ BPE training: count adjacent pairs ──▶ merge the most frequent ──▶ repeat until no pair repeats
+     "low lower lowest" : l+o ─▶ lo,  lo+w ─▶ low,  _+low ─▶ _low,  e+r ─▶ er
+```
+
+In the toy tokenizer's output below, `[ ]` marks a pre-split chunk and `|` separates tokens inside it.
+
+| Case | Example | What happens |
+|---|---|---|
+| Leading space | `cat` → `[c\|at]` vs ` cat` → `[_cat]` | The space belongs to the token, so in-sentence words differ from line-start words |
+| Capitalisation | `Hello` 1, `hello` 3, `HELLO` 5 tokens | Each casing is a different token. Rare casings get split up |
+| Word forms | ` running` → 1, ` runner` → `_runn\|er` | Common forms stay whole, others split into sub-words |
+| Rare or made-up words | ` antidisestablishment` → 13 tokens | Rare words fall apart into many pieces |
+| Typos | ` weather` 1 vs ` weathre` 3 tokens | A typo is a rare word, so it costs more |
+| Numbers | `1000000` → `[1\|00] [00\|0] [0]` | Pre-split into chunks of up to 3 digits, then BPE. The model never sees the number as one value |
+| Whitespace | `a\n\n\nb` → 5 tokens; 4-space indent → 3 space tokens, with the 4th space glued to the word | Newlines and runs of spaces are tokens too |
+| Code / JSON / URLs | `{"name": "Ada"}` → 9 tokens | Lots of symbols means many small tokens |
+| Other scripts | Same greeting: English 10, Spanish 19, Hindi 50, Chinese 21 tokens | Non-Latin characters are 2–4 UTF-8 bytes each, and rarely seen bytes stay about 1 token each |
+| Emoji | 👍 = 4 bytes, 👨‍👩‍👧 = 18 bytes | One visible character can be many tokens |
+| Special tokens | `<\|bos\|>` `<\|user\|>` `<\|eos\|>` | Reserved IDs. User text is encoded with specials disabled, so it can't forge roles |
+| Counting | `chars ÷ 4` fits English prose | It underestimates code, numbers and other languages. Count with the provider's tokenizer |
+| Vocabulary size | More merges means fewer tokens per text | But the embedding table also gets bigger (vocab × hidden size) |
+
+Exact splits differ between GPT, Claude, Llama and Gemma, because each has its own
+tokenizer. The **rules** above hold for all of them.
 
 ### The context window
 
@@ -1241,3 +1276,31 @@ uv run python advanced/15_run_open_models_locally.py
 ```
 Any earlier lesson's SDK code can point at the local model by changing only the base URL:
 `OpenAI(base_url="http://127.0.0.1:11434/v1", api_key="ollama")`.
+
+### 10e. Our own model with our context
+
+**Is it possible? Yes, in three ways.** Lesson 16 runs the first two on the same
+10-line company handbook, so you can compare them directly.
+
+```
+ A. open model + OUR DOCS IN THE PROMPT     B. train OUR OWN model         C. fine-tune an open model
+    question ─▶ retrieve top-k lines           handbook ─▶ count/train          (lesson 14)
+       ─▶ [docs + "cite, else say I don't       ─▶ model knows ONLY the
+           know"] ─▶ Ollama on this laptop         handbook's words
+    ✓ fluent, grounded, private, instant       ✗ copies or SPLICES lines      ✓ tone/format
+      updates (edit the docs)                   ✗ can't answer questions      ✗ facts that change
+```
+
+| Measured in lesson 16 | Result |
+|---|---|
+| **B: train from scratch** (word-trigram model on the handbook only) | Of 4 generations, 1 copies a real line and 3 are **spliced** into statements that aren't in the handbook ("25 vacation days can be carried over…") |
+| **B: answering questions** | It has never seen a question, so it falls back and continues with random handbook words |
+| **B: does it know facts?** | Perplexity: "25 vacation days" 37.2 vs "40 vacation days" 38.2 (barely different), vs an unrelated sentence 88.3. It models words, not facts |
+| **A: local RAG** | Each question retrieves its handbook lines, which go into a prompt with citations and an "I don't know" rule. The prompt is sent to Ollama if it's running (lesson 15) |
+| **A: unanswerable question** | "Parental leave" still retrieves the *sick* leave line, because they share the word "leave". The "say I don't know" rule is what prevents a made-up answer |
+| **Context budget** | Up to about 500 policy lines fit in `num_ctx=8192`. Beyond that, retrieve the top-k (lesson 10) |
+
+**Verdict:** "our own model with our context" really means an open model you run
+yourself (lesson 15) with your documents in the prompt. Training from scratch is
+for learning how models work, not for shipping. Fine-tuning (lesson 14) is for
+tone and format, not for facts that change.
