@@ -9,9 +9,12 @@ product is built from: **agents**, **RAG** (retrieval + embeddings), and
 **evals + guardrails**. It ends with a roadmap that maps every
 AI-engineer skill to the folder in this repo that teaches it.
 
-All 11 lessons are **pure Python: no packages, no API keys**. Every
-number in this README comes from running them, and every lesson part has
-an ASCII diagram right under its `# ====` header.
+Lessons 01–11 are the core, and 12–15 in [`advanced/`](advanced/) cover transformer
+internals, reasoning models and structured output, fine-tuning, and running an
+open-source model on your own machine. All are **pure Python: no packages, no API
+keys**, except 15b, which runs a real downloaded model. Every number in this README
+comes from running them, and every lesson part has an ASCII diagram right under
+its `# ====` header.
 
 ```bash
 cd learn-llm-fundamentals
@@ -26,6 +29,13 @@ uv run python 06_production_llm_engineering.py
 uv run python 09_agents.py               # needs 03 + 07
 uv run python 10_rag_and_embeddings.py   # needs 04
 uv run python 11_evals_and_guardrails.py # needs 05-07
+
+# ADVANCED (folder advanced/, run from this folder)
+uv run python advanced/12_inside_the_transformer.py
+uv run python advanced/13_reasoning_and_structured_output.py
+uv run python advanced/14_fine_tuning.py
+uv run python advanced/15_run_open_models_locally.py   # real model if Ollama is running
+uv run advanced/15b_run_with_transformers.py           # after cloning a model (lesson 15)
 ```
 
 **How to use this:** read a section below, run the matching lesson,
@@ -49,6 +59,11 @@ has the diagram and the list of concepts.
    - [7d. Evals and guardrails](#7d-evals-and-guardrails) (lesson 11)
 8. [The AI engineer roadmap](#8-the-ai-engineer-roadmap)
 9. [Glossary](#9-glossary)
+10. [Advanced](#10-advanced) (lessons 12-15, folder `advanced/`)
+    - [10a. Inside the transformer](#10a-inside-the-transformer) (lesson 12)
+    - [10b. Reasoning models, structured output, multimodal](#10b-reasoning-models-structured-output-multimodal) (lesson 13)
+    - [10c. Fine-tuning](#10c-fine-tuning) (lesson 14)
+    - [10d. Run an open-source model locally](#10d-run-an-open-source-model-locally) (lessons 15, 15b)
 
 ---
 
@@ -1030,6 +1045,10 @@ models from scratch. Each stage maps to where this repo teaches it.
 | 5 | Guardrails, PII, prompt injection | `learn-ai-advanced/04` | ✅ |
 | 6 | Tracing, token/cost tracking | `learn-ai-advanced/03` | ✅ |
 | 6 | Latency, routing, response caching, batch, fine-tune decision | **`learn-llm-fundamentals/06`** | ✅ |
+| 1+ | Transformer internals: attention, KV cache, n² context cost, lost in the middle, parameters | **`learn-llm-fundamentals/advanced/12`** | ✅ |
+| 2+ | Reasoning models, structured output (JSON mode → constrained decoding), multimodal inputs | **`learn-llm-fundamentals/advanced/13`** | ✅ |
+| 6+ | Fine-tuning: data, training, overfitting, LoRA, distillation, DPO, forgetting | **`learn-llm-fundamentals/advanced/14`** | ✅ |
+| 6+ | Open-weight models locally: memory math, quantization, Ollama, clone from Hugging Face | **`learn-llm-fundamentals/advanced/15`** | ✅ |
 | 6 | Retries, error handling | `learn-langgraph/12`, `learn-mcp/06` | ✅ |
 | 6 | Streaming | `learn-langgraph/10`, `learn-mcp` | ✅ |
 | 7 | Deploy to AWS (Lambda, Fargate, IaC) | `project-book-store/`, `aws/` | ✅ |
@@ -1043,11 +1062,10 @@ with subtopics and progress tracking, is in
 
 | Topic | Why it matters | Start with |
 |---|---|---|
-| Production vector databases | Scaling RAG past an in-memory list | pgvector, OpenSearch, or a managed vector DB; hybrid (keyword + vector) search; rerankers |
-| Multimodal | Images, PDFs, audio in and out | Your provider's vision/document input docs |
-| Fine-tuning hands-on | Narrow, high-volume tasks; distillation | Provider fine-tuning guides; LoRA with Hugging Face `peft` for open models |
-| Open-weight / local models | Privacy, cost, offline | Ollama or vLLM; compare against your eval set |
-| Transformer internals | Intuition for attention, context limits | Karpathy's *Let's build GPT* and 3Blue1Brown's transformer videos |
+| Production vector databases | Scaling RAG past an in-memory list | pgvector, OpenSearch, or a managed vector DB (the concepts are in lesson 10) |
+| Multimodal, hands-on | Images, PDFs, audio in and out | Your provider's vision/document input docs (concepts: lesson 13) |
+| Fine-tuning a real model | Narrow, high-volume tasks | LoRA with Hugging Face `peft` / Unsloth on a model from lesson 15 (concepts: lesson 14) |
+| Transformer from scratch, trained | Deeper intuition than lesson 12's toy | Karpathy's *Let's build GPT* and 3Blue1Brown's transformer videos |
 
 **Projects that prove the skills** (build them in order):
 
@@ -1128,3 +1146,98 @@ with subtopics and progress tracking, is in
 | **Prompt injection** | Instructions hidden in user input, documents or tool results that try to hijack the model | 08, 11 |
 | **Guardrail** | A check before or after the model: injection, schema, PII, policy, grounding | 11 |
 | **Trace** | One request's full record: prompt, tool calls, tokens, latency, cost | 11 |
+| **Self-attention** | Each token mixes in information from earlier tokens, weighted by softmax(QKᵀ/√d) | 12 |
+| **Causal mask** | Hides future tokens so the model can only look backwards | 12 |
+| **KV cache** | Stored keys/values of past tokens so each new token is computed once | 12 |
+| **Parameters** | The learned numbers (weights) of a model; "7B" = 7 billion of them | 12 |
+| **Constrained decoding** | Masking tokens at each step so output must match a schema/grammar | 13 |
+| **JSON mode** | Output is guaranteed to be valid JSON, but not your schema | 13 |
+| **Thinking budget** | Cap on a reasoning model's hidden thinking tokens | 13 |
+| **SFT** | Supervised fine-tuning on (prompt, ideal answer) examples | 14 |
+| **LoRA / QLoRA** | Train a small low-rank update instead of all weights (QLoRA: on a 4-bit base) | 14 |
+| **Distillation** | A big "teacher" model labels data to train a small "student" | 14 |
+| **DPO** | Preference tuning from (chosen, rejected) answer pairs | 14 |
+| **Catastrophic forgetting** | A fine-tune that loses general ability; mitigated by mixing in replay data | 14 |
+| **Open-weight model** | A model whose weights you can download and run yourself | 15 |
+| **Quantization** | Storing weights in fewer bits (8, 4) to shrink memory and speed up inference | 15 |
+| **GGUF / safetensors** | File formats: GGUF for llama.cpp/Ollama (often quantized), safetensors for Hugging Face | 15 |
+
+---
+
+## 10. Advanced
+
+Four lessons in [`advanced/`](advanced/), for after you've done 01–11. They're still pure
+Python and need no keys. The exception is lesson 15b, which runs a real downloaded model.
+
+### 10a. Inside the transformer
+
+Lesson 01 used an n-gram stand-in. Lesson 12 builds a real (tiny, untrained)
+transformer, so every number below comes from actually running it.
+
+```
+ token ids ─▶ embedding + position ─▶ [ attention ─▶ MLP ] x N blocks ─▶ unembed ─▶ logits ─▶ softmax
+                                          │
+            scores = Q·Kᵀ / √d ─▶ causal mask (no peeking ahead) ─▶ softmax ─▶ mix the V vectors
+```
+
+| Topic | Measured in lesson 12 |
+|---|---|
+| **Self-attention by hand** | 4 tokens, masked attention matrix printed as numbers and as a heat map; every row sums to 1 |
+| **Position** | Without position vectors "dog bites man" and "man bites dog" are literally identical inputs |
+| **KV cache** | Generating 20 tokens: 1,218,048 multiplications without the cache vs 131,968 with it, **9.2× less**, identical output |
+| **Why context is limited** | Attention cost grows with n²; the KV cache grows with context length |
+| **Lost in the middle** (simulated) | Answer found 41% at the start, **12% in the middle**, 56% at the end, so put key facts and the question at the edges (lesson 04) |
+| **Parameters** | Counted by summing weight matrices and checked against the formula; a 7B-like config = 6,738,415,616 |
+
+### 10b. Reasoning models, structured output, multimodal
+
+| Topic | Measured in lesson 13 (simulated models, real JSON checks) |
+|---|---|
+| **Thinking budget** | Easy problems: +0.5 pt for 3× the cost. Hard problems: +66 pt, but the last doubling (16k→32k) adds only +1 pt |
+| **Structured output, 3 levels** | Failure rate: prompt-only **21.5%**, JSON mode **7.5%**, schema-constrained **2.0%** (the rest are `max_tokens` truncations, so still check `stop_reason`) |
+| **Constrained decoding** | The allowed-token set printed at each step for a tiny grammar; constrained output always parses |
+| **Tool-forced output** | Schema-valid isn't the same as correct: a semantic check rejects 4 of 5 schema-valid invoices |
+| **Images → tokens** | Image patches become vectors in the same token stream; cropping saves 87% of image tokens |
+
+### 10c. Fine-tuning
+
+Lesson 14 trains a small model from scratch with real gradient descent, so the
+training curves are measured, not drawn.
+
+```
+ base model ──SFT (prompt, ideal answer)──▶ instruction model ──DPO / RLHF (chosen vs rejected)──▶ aligned model
+              data: clean, dedup, split        watch val loss ─▶ stop early        then eval: task + general ability
+```
+
+| Topic | Measured in lesson 14 |
+|---|---|
+| **Data checks** | 39 raw rows → 5 dropped (2 duplicates, off-style, too short, bad schema) → 26 train / 8 val, 0 leakage |
+| **Overfitting** | Val loss is lowest at epoch 68 (1.020) and rises to 1.180 by epoch 2000 while train loss → 0.003, so stop early |
+| **LoRA** | 7B-like model: full fine-tune ≈ **108 GB** training memory, LoRA r16 ≈ **14 GB**, QLoRA ≈ **4 GB**; a real rank-4 adapter on the toy model reaches the same 62% val accuracy |
+| **Distillation** | teacher 510 params / 100%, student 45 params / 75% at a fraction of the serving cost |
+| **DPO** | loss falls 0.693 → 0.011 on chosen/rejected pairs |
+| **Forgetting** | After the fine-tune: task 100% but general 0%. With 6 replay rows mixed in: general back to 67% |
+
+### 10d. Run an open-source model locally
+
+```
+ download ONCE:  ollama pull qwen2.5:0.5b      or   git clone / hf download Qwen/Qwen2.5-0.5B-Instruct
+ run:            Ollama server :11434 (HTTP, OpenAI-compatible)    or   transformers in Python (15b)
+```
+
+**Lesson 15 (pure Python)** shows:
+- **Will it fit?** Memory = parameters × bits ÷ 8, plus the KV cache. At 4-bit (Q4) an 8B model needs about 5.5 GB, so it fits on a 32 GB laptop. A 70B model needs about 45 GB, so it doesn't.
+- **Quantization by hand:** Q8 error is 0.002, Q4 is 0.034, Q2 is 0.226, which is why Q4 is the usual default.
+- **Ollama:** a real call plus timing, streaming and JSON-schema output when Ollama is running, otherwise the install steps.
+- **Hugging Face:** how to clone a model and what each file in the repo is for.
+
+**Lesson 15b** runs the cloned model with `transformers`: real tokens, the chat template, the top-5 next-token probabilities, then generation in tokens/sec.
+
+Quick start (Windows):
+```powershell
+winget install Ollama.Ollama              # or the installer from https://ollama.com/download
+ollama pull qwen2.5:0.5b
+uv run python advanced/15_run_open_models_locally.py
+```
+Any earlier lesson's SDK code can point at the local model by changing only the base URL:
+`OpenAI(base_url="http://127.0.0.1:11434/v1", api_key="ollama")`.
