@@ -38,6 +38,7 @@ uv run python advanced/14_fine_tuning.py
 uv run python advanced/15_run_open_models_locally.py   # real model if Ollama is running
 uv run advanced/15b_run_with_transformers.py           # after cloning a model (lesson 15)
 uv run python advanced/16_own_model_with_your_context.py  # "our own model + our docs": what works
+uv run python advanced/17_deploy_your_model_free.py       # deploy it + use it for free (--serve runs the API)
 ```
 
 **How to use this:** read a section below, run the matching lesson,

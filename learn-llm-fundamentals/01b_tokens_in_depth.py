@@ -87,7 +87,34 @@ Machine learning models learn patterns from data. Language models predict the ne
 The context window is limited. The price is per token. Tokens cost money.
 """
 
-# GPT-style pre-split: optional space + letters | 1-3 digits | optional space + other symbols | whitespace
+# ============================================================================
+# Pre-split (step 1 of tokenizing) -- cut text into chunks BEFORE BPE.
+# BPE merges only INSIDE a chunk, never across two.
+# ============================================================================
+#   FIVE ALTERNATIVES, tried left to right at each position (first match wins)
+#   ┌───┬────────────────────┬──────────────────────────────────────┬────────────────┐
+#   │ 1 │ " ?[A-Za-z]+"      │ optional ONE space + run of letters  │ "Hello" " world"│
+#   │ 2 │ " ?[0-9]{1,3}"     │ optional space + 1 to 3 digits       │ " 100" "000" "0"│
+#   │ 3 │ " ?[^\sA-Za-z0-9]+"│ optional space + run of symbols      │ "!" "):" " +"   │
+#   │ 4 │ "\s+(?!\S)"        │ whitespace run, stopping ONE short of│ "  " in "a   b" │
+#   │   │                    │ the next word (last space goes to it)│                │
+#   │ 5 │ "\s+"              │ any leftover whitespace (end of text)│ trailing "\n"  │
+#   └───┴────────────────────┴──────────────────────────────────────┴────────────────┘
+#   'Hello world!'         -> ['Hello', ' world', '!']
+#   'I have 1000000 cats.' -> ['I', ' have', ' 100', '000', '0', ' cats', '.']
+#   'def add(a, b):\n    return a+b'
+#                          -> ['def', ' add', '(', 'a', ',', ' b', '):', '\n   ', ' return', ' a', '+', 'b']
+#   'a   b'                -> ['a', '  ', ' b']
+#   WHY
+#   - the space sticks to the NEXT word: " cat" is one reusable token in every
+#     sentence, so "cat" and " cat" are different tokens (part 4)
+#   - letters, digits and symbols never mix: no wasted merges like "dog." or "cat2"
+#   - numbers cut every 3 digits: 1000000 -> 100|000|0 (parts 4 and 8)
+#   - rule 4 keeps " return" a normal token after indentation
+#   REAL TOKENIZERS (GPT-2/GPT-4) use the same idea with a bigger regex: they also
+#   split off contractions ('s 're 'll) and use \p{L} for letters in ANY script.
+#   Ours only knows A-Z, so Hindi/Chinese fall into rule 3 -- one reason part 5
+#   shows them costing so many tokens.
 PRESPLIT = re.compile(r" ?[A-Za-z]+| ?[0-9]{1,3}| ?[^\sA-Za-z0-9]+|\s+(?!\S)|\s+")
 
 
@@ -120,17 +147,48 @@ def header(title: str):
 #                 └ what byte-level BPE STARTS from: any text, emoji, any script
 #   Every modern LLM uses sub-words -- built by BPE (part 2) on top of bytes.
 #   (Illustrative split -- real tokenizers often cut words differently.)
+#   part1_why() CALCULATES every number with our tokenizer and prints each merge.
+#   Our tiny corpus only has "Unbelievable" (capital U), so it never learns "un"
+#   or "able" -> its split is [u|n|b|el|ie|v|ab|le] [_cat|s] = 10 pieces.
 
-def part1_why():
+def part1_why(tk: "BPETokenizer"):
     header("PART 1 -- Why tokens? characters vs words vs sub-words")
     text = "unbelievable cats"
+    new_word = "unbelievabler"
     chars = list(text)
     words = text.split()
-    print(f"  text: {text!r}\n")
-    print(f"  {'scheme':<11}{'pieces':>7}  {'vocab needed':<22}problem")
-    print(f"  {'characters':<11}{len(chars):>7}  {'~256 (all bytes)':<22}long sequences -> slow, less fits in context")
-    print(f"  {'words':<11}{len(words):>7}  {'millions':<22}a new word ('unbelievabler') can't be encoded")
-    print(f"  {'sub-words':<11}{'~5':>7}  {'~50k-200k':<22}none -- the compromise every LLM uses")
+    subs = tk.tokens(text)
+    word_vocab = set(re.findall(r"[A-Za-z]+", CORPUS))     # a words-scheme vocab built from our corpus
+    print(f"  text: {text!r}  (_ = space)\n")
+
+    print("  1) PIECES FOR THIS TEXT")
+    print(f"    characters = len(list(text))")
+    print(f"      {' '.join(show(c.encode()) for c in chars)}")
+    print(f"      " + " + ".join(f"{p!r}={len(p)}" for p in re.split(r"( )", text)) + f" = {len(chars)}")
+    print(f"    words = len(text.split())")
+    print(f"      {words} = {len(words)}")
+    print(f"    sub-words = pre-split {PRESPLIT.findall(text)}, then replay learned merges in each chunk")
+    for chunk in PRESPLIT.findall(text):
+        print(f"    chunk {chunk!r}")
+        tk._encode_chunk(chunk, trace=True)
+    print(f"      result {tk.grouped(text)} = {len(subs)}")
+
+    print("\n  2) VOCAB SIZE")
+    print(f"    characters = every possible byte value 0..255 = 256")
+    print(f"    words      = one entry per distinct word; our small corpus alone has {len(word_vocab)},")
+    print(f"                 all languages + names + typos + code = millions")
+    print(f"    sub-words  = 256 bytes + {len(tk.vocab) - 256} learned merges = {len(tk.vocab)}"
+          f"   (GPT-4: 256 + ~100k merges)")
+
+    print(f"\n  3) UNKNOWN WORD {new_word!r}")
+    print(f"    characters : every byte is in 0..255 -> always encodable")
+    print(f"    words      : {new_word!r} in word vocab? {new_word in word_vocab} -> cannot be encoded")
+    print(f"    sub-words  : {tk.grouped(new_word)} -> built from known pieces, never unknown")
+
+    print(f"\n  {'scheme':<11}{'pieces':>7}  {'vocab':<22}problem")
+    print(f"  {'characters':<11}{len(chars):>7}  {'256':<22}long sequences -> slow, less fits in context")
+    print(f"  {'words':<11}{len(words):>7}  {'millions':<22}a new word can't be encoded")
+    print(f"  {'sub-words':<11}{len(subs):>7}  {str(len(tk.vocab)) + ' (ours)':<22}none -- the compromise every LLM uses")
     print(f"  {'bytes':<11}{len(text.encode('utf-8')):>7}  {'256':<22}same as characters -- but it is where BPE starts")
 
 
@@ -229,14 +287,21 @@ class BPETokenizer:
         self.id_of = {tok: i for i, tok in enumerate(self.vocab)}
         self.special_id = {s: len(self.vocab) + i for i, s in enumerate(self.SPECIALS)}
 
-    def _encode_chunk(self, chunk: str) -> list[bytes]:
+    def _encode_chunk(self, chunk: str, trace: bool = False) -> list[bytes]:
         parts = [bytes([b]) for b in chunk.encode("utf-8")]
+        if trace:
+            print(f"      bytes          {' '.join(show(p) for p in parts)}")
         while len(parts) > 1:
             ranked = [(self.rank.get((parts[i], parts[i + 1]), 10**9), i) for i in range(len(parts) - 1)]
             best, i = min(ranked)
             if best == 10**9:
+                if trace:
+                    print("      no learned merge fits any neighbour pair -> stop")
                 break
+            pair = f"{show(parts[i])}+{show(parts[i + 1])}"
             parts[i:i + 2] = [parts[i] + parts[i + 1]]
+            if trace:
+                print(f"      merge #{best + 1:<5} {pair:<12} -> {' '.join(show(p) for p in parts)}")
         return parts
 
     def tokens(self, text: str) -> list[bytes]:
@@ -517,9 +582,9 @@ def part10_families():
 
 
 def main():
-    part1_why()
-    part2_train()
     tk = BPETokenizer(train_bpe(CORPUS, 1000))      # stops when no pair repeats
+    part1_why(tk)
+    part2_train()
     part3_encode(tk)
     part4_catalogue(tk)
     part5_bytes(tk)
