@@ -147,18 +147,60 @@ def header(title: str):
 #                 └ what byte-level BPE STARTS from: any text, emoji, any script
 #   Every modern LLM uses sub-words -- built by BPE (part 2) on top of bytes.
 #   (Illustrative split -- real tokenizers often cut words differently.)
-#   part1_why() CALCULATES every number with our tokenizer and prints each merge.
-#   Our tiny corpus only has "Unbelievable" (capital U), so it never learns "un"
-#   or "able" -> its split is [u|n|b|el|ie|v|ab|le] [_cat|s] = 10 pieces.
+#
+#   ------------------------------------------------------------------------
+#   QUESTION 1: What is word_vocab?
+#   ------------------------------------------------------------------------
+#   word_vocab = set(re.findall(r"[A-Za-z]+", CORPUS))
+#
+#   It is the "dictionary" a WORD tokenizer would have:
+#   a list of every different word that appears in our training text.
+#
+#   It is built in 2 small steps. Example text:  "The cat sat. The dog sat."
+#
+#     STEP 1  re.findall(r"[A-Za-z]+", ...)  = "give me every word"
+#             [A-Za-z]+ means "letters, one after another"
+#             so it reads letters and stops at a space or a "."
+#             -> ['The', 'cat', 'sat', 'The', 'dog', 'sat']
+#                                       ^^^^^         ^^^^^  repeats are still here
+#
+#     STEP 2  set(...)  = "remove the repeats"
+#             -> {'The', 'cat', 'sat', 'dog'}               4 different words
+#
+#   On our whole CORPUS this gives 157 different words.
+#   Careful: capitals count as different words.
+#     "Unbelievable"  IS  in the list   (the corpus has it with a capital U)
+#     "unbelievable"  is NOT            (small u never appears)
+#
+#   ------------------------------------------------------------------------
+#   QUESTION 2: What is new_word = "unbelievabler"?
+#   ------------------------------------------------------------------------
+#   A FAKE word. It is "unbelievable" + an extra "r", made up on purpose.
+#   We use it to ask: "what happens with a word the tokenizer never saw?"
+#
+#     words      : look it up in word_vocab -> not there -> FAILS, no token for it
+#     sub-words  : glue it from small known pieces -> u|n|b|el|ie|v|ab|l|er -> WORKS
+#     characters : every letter is a known byte -> WORKS
+#
+#   That is the whole reason LLMs use sub-words: like characters they never
+#   fail on a new word, but they use far fewer pieces.
+#
+#   ------------------------------------------------------------------------
+#   WHY DOES OUR TOKENIZER GIVE 10 PIECES, NOT THE 5 SHOWN ABOVE?
+#   ------------------------------------------------------------------------
+#   The 5-piece split above is a made-up example. Our real tokenizer learned
+#   from a tiny text with no small-u "unbelievable", so it never learned
+#   "un" or "able". Result:  u|n|b|el|ie|v|ab|le  +  _cat|s  = 10 pieces.
+#   A big tokenizer (GPT-4) learned from trillions of words -> bigger pieces.
 
 def part1_why(tk: "BPETokenizer"):
     header("PART 1 -- Why tokens? characters vs words vs sub-words")
     text = "unbelievable cats"
-    new_word = "unbelievabler"
+    new_word = "unbelievabler"                              # fake word, made up on purpose (QUESTION 2)
     chars = list(text)
     words = text.split()
     subs = tk.tokens(text)
-    word_vocab = set(re.findall(r"[A-Za-z]+", CORPUS))     # a words-scheme vocab built from our corpus
+    word_vocab = set(re.findall(r"[A-Za-z]+", CORPUS))     # every different word in CORPUS (QUESTION 1)
     print(f"  text: {text!r}  (_ = space)\n")
 
     print("  1) PIECES FOR THIS TEXT")
