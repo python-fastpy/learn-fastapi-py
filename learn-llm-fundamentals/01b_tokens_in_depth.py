@@ -35,6 +35,8 @@ WHAT YOU'LL LEARN:
   8. What tokens explain: letter counting, arithmetic, reversing, trailing
      spaces, different models giving different counts
   9. Vocabulary size: fewer tokens vs a bigger model
+ 10. Other tokenizer families: WordPiece, Unigram, SentencePiece, byte-level,
+     tokenizer-free models, and image/audio tokens
 
 Concepts:
   - BPE (byte-pair encoding): start from bytes, repeatedly merge the most frequent pair
@@ -114,7 +116,10 @@ def header(title: str):
 #                 └ unknown word ("unbelievabler") = cannot represent it at all
 #   sub-words  │un│believ│able│_cat│s│                  5 pieces, ~100k vocab
 #                 └ common words whole, rare words in parts, never "unknown"
-#   Every modern LLM uses sub-words -- built by BPE (part 2).
+#   bytes      │75│6E│62│65│...│20│63│61│74│73│        17 pieces, vocab = 256
+#                 └ what byte-level BPE STARTS from: any text, emoji, any script
+#   Every modern LLM uses sub-words -- built by BPE (part 2) on top of bytes.
+#   (Illustrative split -- real tokenizers often cut words differently.)
 
 def part1_why():
     header("PART 1 -- Why tokens? characters vs words vs sub-words")
@@ -126,6 +131,7 @@ def part1_why():
     print(f"  {'characters':<11}{len(chars):>7}  {'~256 (all bytes)':<22}long sequences -> slow, less fits in context")
     print(f"  {'words':<11}{len(words):>7}  {'millions':<22}a new word ('unbelievabler') can't be encoded")
     print(f"  {'sub-words':<11}{'~5':>7}  {'~50k-200k':<22}none -- the compromise every LLM uses")
+    print(f"  {'bytes':<11}{len(text.encode('utf-8')):>7}  {'256':<22}same as characters -- but it is where BPE starts")
 
 
 # ============================================================================
@@ -138,6 +144,15 @@ def part1_why():
 #   step 2: recount, merge again   "lo"+"w" -> "low"   low  │ low e r  │ n e w e r
 #   ...     stop when the vocab reaches its target size (here 256 bytes + N merges)
 #   The ORDERED list of merges IS the tokenizer.
+#
+#   PAIR COUNTS ARE WEIGHTED BY WORD FREQUENCY
+#   corpus: hug x10  pug x5  pun x12  bun x4  hugs x5
+#   start   h u g │ p u g │ p u n │ b u n │ h u g s
+#   count   u+g = 10+5+5 = 20   p+u = 5+12 = 17   u+n = 12+4 = 16   h+u = 10+5 = 15
+#   #1 u+g  -> "ug"    h ug  │ p ug │ p u n │ b u n │ h ug s
+#   #2 u+n  -> "un"    h ug  │ p ug │ p un  │ b un  │ h ug s      (u+n=16 now wins)
+#   #3 h+ug -> "hug"   hug   │ p ug │ p un  │ b un  │ hug s       (h+ug=15)
+#   One frequent word counts as much as many rare ones -- frequency, not grammar.
 
 def train_bpe(text: str, n_merges: int, trace: int = 0) -> list[tuple[bytes, bytes]]:
     chunks = Counter(tuple(bytes([b]) for b in c.encode("utf-8")) for c in PRESPLIT.findall(text))
@@ -191,6 +206,19 @@ def part2_train():
 #   merge #k ... _low est            until no learned merge applies
 #   ids          [ id(_low), id(est) ]
 #   DECODE = concatenate the bytes of each id -> exactly the original text
+#
+#   THE FULL PIPELINE FOR "unbelievable cats"
+#   1. pre-split (regex)    "unbelievable" │ " cats"     space stays on the NEXT word
+#   2. bytes                u n b e l i e v a b l e
+#   3. replay merges        un b e l i e v able  ->  un bel ie v able  ->  un believ able
+#      (earliest-learned matching rule first, repeat until none applies)
+#   4. look up ids          [un, believ, able, _cat, s]  ->  [359, 33094, 481, 8415, 82]
+#   KEY POINTS
+#   - deterministic: the same text always gives the same tokens
+#   - driven by FREQUENCY in the training data; "un|believ|able" looking like
+#     real morphology is a side effect of those pieces being common
+#   - training order = priority: merges learned earlier are applied first
+#   (ids and the exact split above are illustrative)
 
 class BPETokenizer:
     SPECIALS = ["<|bos|>", "<|eos|>", "<|user|>", "<|assistant|>"]
@@ -450,6 +478,44 @@ def part9_vocab_size():
           "  parameters -- the reason vocab size is a design decision, not a free lunch.")
 
 
+# ============================================================================
+# PART 10: Other tokenizer families
+# ============================================================================
+#   SUB-WORD ALGORITHMS (all produce sub-words; they differ in HOW they pick them)
+#   ┌────────────────┬──────────────────────────────────────────┬─────────────────────┐
+#   │ BPE            │ merge the most FREQUENT pair, repeat      │ GPT-2/3/4, Llama 3  │
+#   │ byte-level BPE │ same, but start from 256 bytes            │ GPT-2 on, tiktoken  │
+#   │ WordPiece      │ merge the pair that most raises LIKELIHOOD│ BERT, DistilBERT    │
+#   │                │ continuation marked ##: un ##believ ##able│                     │
+#   │ Unigram LM     │ start HUGE, REMOVE least useful pieces;   │ T5, ALBERT, XLNet   │
+#   │                │ a word may have several valid splits      │                     │
+#   │ SentencePiece  │ a FRAMEWORK running BPE or Unigram; space │ Llama 1/2, T5, Gemma│
+#   │                │ is a normal symbol "▁", no pre-split regex│                     │
+#   └────────────────┴──────────────────────────────────────────┴─────────────────────┘
+#   TOKENIZER-FREE (research): ByT5, CANINE read raw bytes/characters;
+#   MegaByte, Byte Latent Transformer group bytes into DYNAMIC patches --
+#   hard-to-predict regions get more patches, so there is no fixed vocab.
+#   NOT TEXT: images -> 16x16-pixel patches (ViT); audio -> neural codec codes.
+#
+#   See a REAL tokenizer (needs: uv add tiktoken):
+#     import tiktoken
+#     enc = tiktoken.get_encoding("cl100k_base")          # GPT-4's tokenizer
+#     ids = enc.encode("unbelievable cats")
+#     print(ids, [enc.decode([i]) for i in ids])
+
+def part10_families():
+    header("PART 10 -- Other tokenizer families")
+    word = "unbelievable"
+    print(f"  the same word {word!r}, as each family would typically mark it:\n")
+    print(f"  {'BPE / byte-level BPE':<24}un | believ | able        (pieces, space glued to next word)")
+    print(f"  {'WordPiece':<24}un | ##believ | ##able    (## = continues previous piece)")
+    print(f"  {'SentencePiece':<24}▁un | believ | able       (▁ = a space before this piece)")
+    print(f"  {'Unigram LM':<24}un|believ|able  OR  unbe|liev|able  (several splits, best one scored)")
+    print(f"  {'bytes (ByT5)':<24}{' '.join(f'{b:02X}' for b in word.encode())}")
+    print("\n  Illustrative splits. Every one is learned from data, and every one\n"
+          "  round-trips back to the exact original text.")
+
+
 def main():
     part1_why()
     part2_train()
@@ -461,6 +527,7 @@ def main():
     part7_counting(tk)
     part8_consequences(tk)
     part9_vocab_size()
+    part10_families()
 
 
 if __name__ == "__main__":

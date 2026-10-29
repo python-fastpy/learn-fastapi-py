@@ -30,17 +30,32 @@ Concepts:
   - Logits / probabilities: the model's score for each possible next token
   - Autoregressive: each new token is fed back in as input for the next
 
-Flow:
-   "The cat sat"                                       (your text)
-        |  tokenizer
-        v
-   [464, 3797, 3332]                                   (token IDs)
-        |  model (billions of learned numbers)
-        v
-   { " on": 0.61, " down": 0.22, " there": 0.05, ... } (one prob per vocab token)
-        |  sampling (lesson 02: temperature / top_p)
-        v
-   " on"  --> append --> [464, 3797, 3332, 319] --> run the model again ...
+Flow -- ONE step of generation:
+
+   1. YOUR TEXT       "The cat sat"
+                           │ tokenizer: cut the text into pieces (lesson 01b)
+                           ▼
+   2. TOKENS          "The" │ " cat" │ " sat"         the space belongs to the NEXT word
+                           │ look up each piece's row number in the vocabulary
+                           ▼
+   3. TOKEN IDS       [ 464,   3797,   3332 ]         real GPT-2 ids -- just row numbers,
+                           │                           the number itself means nothing
+                           │ model: billions of learned numbers
+                           ▼
+   4. PROBABILITIES   " on"     0.61  ████████████
+      for the NEXT    " down"   0.22  ████
+      token           " there"  0.05  █
+                      ...       one score for EVERY token in the vocab
+                                (GPT-2: 50,257 of them), all adding up to 1.0
+                           │ sampling: pick ONE (lesson 02: temperature / top_p)
+                           ▼
+   5. PICKED          " on"   (id 319)
+                           │ append it to the input and run the model AGAIN
+                           ▼
+   6. NEW INPUT       [464, 3797, 3332, 319]  ──▶  " the"  ──▶  " mat"  ──▶ ... until stop
+
+   The model never sees letters, only ids -- and each run produces just ONE
+   token. A whole answer is this step repeated, once per token.
 
 TRAINING vs INFERENCE (two separate phases):
    TRAINING (once, offline)               INFERENCE (every API call)
