@@ -1,12 +1,17 @@
 # LLM Fundamentals — Simple Version
 
-Short versions of the lessons in the parent folder, each about 100–130 lines.
-Every file follows the same pattern:
+Short versions of the lessons in the parent folder. Each one has about 100 lines of code,
+and the rest of the file is diagrams. Every file follows the same pattern:
 
 1. **IN ONE LINE**: the idea in one sentence
-2. **REAL USE CASE**: where you meet it in a FastAPI app, with a flow diagram
-3. **WHAT AN ENGINEER MUST KNOW**: 3–5 points
-4. **Small code in STEPs**: run it and read the output next to the code
+2. **REAL USE CASE**: where it sits in a FastAPI app (Browser → FastAPI → LLM)
+3. **HOW IT WORKS**: a pipeline diagram of the idea
+4. **A REAL RUN**: a table that traces one run, step by step, with the numbers the script prints
+5. **WHAT AN ENGINEER MUST KNOW**: 3–5 points
+6. **Small code in STEPs**: a diagram above each function shows what goes in, what happens and what comes out
+
+The numbers in the diagrams are the same as the script output, and the output is the same
+on every run. So run the file and read the diagram next to the output.
 
 The full, detailed lessons are still in the parent folder. Open them when you want more depth.
 

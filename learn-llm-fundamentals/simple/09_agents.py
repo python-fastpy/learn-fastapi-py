@@ -23,6 +23,58 @@ REAL USE CASE:
   │  └──────────────────────────────┘
   └───────┘  (loop again)
 
+WHERE THE AGENT SITS IN A REAL APP:
+
+  ┌──────────────┐  POST /chat   ┌─────────────────────────────┐  HTTPS   ┌──────────────────┐
+  │   Browser    │ ────────────▶ │  YOUR FASTAPI               │ ───────▶ │   LLM PROVIDER   │
+  │ "Refund Sam  │               │  run_agent() loop:          │ messages │  decides ONE     │
+  │  Lee's last  │               │   - sends messages          │ ◀─────── │  next step:      │
+  │  order"      │               │   - runs the tool it picked │ decision │  tool or answer  │
+  │              │ ◀──────────── │   - counts steps            │          └──────────────────┘
+  └──────────────┘  final answer └─────────────────────────────┘
+                                        │ ▲
+                              tool call │ │ result
+                                        ▼ │
+                                 ┌──────────────────────────────────┐
+                                 │ YOUR TOOLS (DB, payments API...) │
+                                 │ find_customer, get_orders,       │
+                                 │ refund_order                     │
+                                 └──────────────────────────────────┘
+  The model NEVER runs a tool itself. It only ASKS. Your code runs it.
+
+THE MESSAGES LIST GROWS EACH STEP (this is the agent's "memory"):
+
+  start:        [user: task]
+  after step 1: [user: task, assistant: find_customer, tool: {customer_id}]
+  after step 2: [ ... , assistant: get_orders,   tool: {orders}]
+  after step 3: [ ... , assistant: refund_order, tool: {refunded}]
+  step 4:       model reads ALL of it and gives the final answer
+  Each step = one more model call, and the model sees a longer list each time.
+
+GOOD RUN, step by step (the real run printed by STEP 2 + 3, max_steps = 5):
+
+   step   model decides (thought)        tool + args                    result
+   ────   ───────────────────────────    ───────────────────────────    ──────────────────────────────
+   1      "who is Sam Lee?"              find_customer                  {'customer_id': 'C-101'}
+                                         {'name': 'Sam Lee'}
+   2      "what did C-101 buy?"          get_orders                     {'orders': [ORD-3 80.0,
+                                         {'customer_id': 'C-101'}                   ORD-7 34.5]}
+   3      "last order = ORD-7"           refund_order                   {'refunded': True,
+                                         {'order_id': 'ORD-7'}           'order_id': 'ORD-7'}
+   4      "I have everything"            (no tool)                      final answer: "Done. I refunded
+                                                                        order ORD-7 for Sam Lee."
+   stop reason: final_answer   (4 of 5 allowed steps used)
+
+STUCK RUN (the real run printed by STEP 4, max_steps = 3):
+
+   step   tool + args                       result
+   ────   ───────────────────────────────   ────────────────────────
+   1      find_customer {'name': 'Sam Lee'} {'customer_id': 'C-101'}
+   2      find_customer {'name': 'Sam Lee'} {'customer_id': 'C-101'}   ◀── same again
+   3      find_customer {'name': 'Sam Lee'} {'customer_id': 'C-101'}   ◀── and again
+   ──▶    step 3 == max_steps  ──▶  "stopped: hit max_steps = 3"
+   stop reason: max_steps   (without the limit, this loops and costs money forever)
+
 WHAT AN ENGINEER MUST KNOW:
   1. Agent = model + tools + loop. The model decides the steps.
   2. ALWAYS have a step limit. Without it, a confused model loops forever
@@ -38,6 +90,15 @@ Run:  uv run python simple/09_agents.py
 # ----------------------------------------------------------------------------
 # STEP 1: TOOLS = normal Python functions the model is allowed to call
 # ----------------------------------------------------------------------------
+#   tool name         input (args)                 output (result)
+#   ───────────────   ──────────────────────────   ────────────────────────────────────────
+#   find_customer ──▶ {"name": "Sam Lee"}      ──▶ {"customer_id": "C-101"}
+#                     (name not in CUSTOMERS)  ──▶ {"error": "NOT_FOUND: no customer named ..."}
+#   get_orders    ──▶ {"customer_id": "C-101"} ──▶ {"orders": [ORD-3 80.0, ORD-7 34.5]}
+#   refund_order  ──▶ {"order_id": "ORD-7"}    ──▶ {"refunded": True, "order_id": "ORD-7"}
+#
+#   TOOLS dict = name ──▶ function. The model sends a NAME, your code looks it up.
+#   An error is a normal result (a dict), NOT a crash. The model reads it and can retry.
 CUSTOMERS = {"Sam Lee": "C-101"}
 ORDERS = {"C-101": [{"order_id": "ORD-3", "total": 80.0}, {"order_id": "ORD-7", "total": 34.5}]}
 
@@ -62,6 +123,21 @@ TOOLS = {"find_customer": find_customer, "get_orders": get_orders, "refund_order
 # ----------------------------------------------------------------------------
 # STEP 2: FAKE MODEL = looks at the messages so far and picks the next step
 # ----------------------------------------------------------------------------
+#   messages ──▶ count the "tool" results so far ──▶ step
+#                                                     │
+#      step 0? ── yes ──▶ {"tool": "find_customer", "args": {"name": "Sam Lee"}}
+#        │ no
+#        ▼
+#      step 1? ── yes ──▶ read customer_id "C-101" from result 1
+#        │ no             ──▶ {"tool": "get_orders", "args": {"customer_id": "C-101"}}
+#        ▼
+#      step 2? ── yes ──▶ read orders from result 2, take the LAST one ("ORD-7")
+#        │ no             ──▶ {"tool": "refund_order", "args": {"order_id": "ORD-7"}}
+#        ▼
+#      {"answer": "Done. I refunded order ORD-7 for Sam Lee."}
+#
+#   A real model does the same job: it reads the whole list and picks the next step.
+#   stuck_llm ignores the list and ALWAYS returns find_customer -> it never finishes.
 # A real call looks like this (Anthropic SDK):
 #   response = client.messages.create(model="...", max_tokens=1024,
 #                                     tools=TOOL_SCHEMAS, messages=messages)
@@ -89,6 +165,28 @@ def stuck_llm(messages):
 # ----------------------------------------------------------------------------
 # STEP 3: THE AGENT LOOP = ask model -> run tool -> add result -> repeat
 # ----------------------------------------------------------------------------
+#   messages = [{"role": "user", "content": "Refund Sam Lee's last order"}]
+#      │
+#      ▼
+#   ┌─▶ step > max_steps? ── yes ──▶ END: print "stopped: hit max_steps", return "max_steps"
+#   │      │ no
+#   │      ▼
+#   │   decision = llm(messages)  ──▶ e.g. {"tool": "get_orders", "args": {"customer_id": "C-101"}}
+#   │      │
+#   │      ▼
+#   │   "answer" in decision? ── yes ──▶ END: print final answer, return "final_answer"
+#   │      │ no
+#   │      ▼
+#   │   tool name in TOOLS? ── no ──▶ result = {"error": "UNKNOWN_TOOL ..."} no crash ─┐
+#   │      │ yes                                                                       │
+#   │      ▼                                                                           │
+#   │   result = TOOLS[name](**args) ──▶ {"orders": [ORD-3 80.0, ORD-7 34.5]}          │
+#   │      │ ◀─────────────────────────────────────────────────────────────────────────┘
+#   │      ▼
+#   │   messages.append(assistant: decision)
+#   │   messages.append(tool: result)       ◀── the model will see this next turn
+#   │      │
+#   └──────┘  step = step + 1
 def run_agent(task, llm, max_steps=5):
     messages = [{"role": "user", "content": task}]
     for step in range(1, max_steps + 1):          # the step limit: NEVER loop forever

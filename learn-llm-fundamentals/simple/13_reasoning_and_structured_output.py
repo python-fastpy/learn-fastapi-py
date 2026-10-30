@@ -9,16 +9,56 @@ REAL USE CASE:
   Your FastAPI endpoint asks the model to read a support ticket and return
   JSON that your code can save to a database:
 
-     ticket text
-          │
-          ▼
-     ┌───────────────────┐   hidden thinking  (billed as output tokens)
-     │      MODEL        │ ─────────────────▶ ...
-     └───────────────────┘   visible answer
-          │                  {"category": "bug", "priority": 2}
-          ▼
-     json.loads ──▶ schema check ──▶ value check ──▶ save to DB
-        (parses?)    (right keys?)    (makes sense?)
+  ┌──────────────┐ POST /ticket ┌─────────────────────┐  HTTPS   ┌──────────────────────────────┐
+  │   Browser    │ ───────────▶ │  YOUR FASTAPI       │ ───────▶ │        LLM PROVIDER          │
+  │ "app crashes │              │  1. build prompt    │          │  hidden thinking (billed!)   │
+  │  on login"   │              │  2. CHECK the JSON  │ ◀─────── │  visible answer:             │
+  │              │ ◀─────────── │  3. save to DB      │  answer  │  {"category": "bug",         │
+  └──────────────┘  201 saved   └─────────────────────┘          │   "priority": 2}             │
+                                    ▲ THIS LESSON                └──────────────────────────────┘
+                                    │ = step 2, the check
+
+THE CHECK PIPELINE (STEP 2 in the code). One fail = reject:
+
+  model text
+     │
+     ▼
+  ┌──────────────┐  no   ┌──────────────────────────────┐
+  │ json.loads   │ ────▶ │ REJECT: not valid JSON       │
+  │ parses?      │       └──────────────────────────────┘
+  └──────────────┘
+     │ yes
+     ▼
+  ┌──────────────┐  no   ┌──────────────────────────────┐
+  │ keys exactly │ ────▶ │ REJECT: wrong keys           │
+  │ cat + prio?  │       └──────────────────────────────┘
+  └──────────────┘
+     │ yes
+     ▼
+  ┌──────────────┐  no   ┌──────────────────────────────┐
+  │ category in  │ ────▶ │ REJECT: unknown category     │
+  │ the list?    │       └──────────────────────────────┘
+  └──────────────┘
+     │ yes
+     ▼
+  ┌──────────────┐  no   ┌───────────────────────────────────────┐
+  │ priority int │ ────▶ │ REJECT: priority must be a number 1-5 │
+  │ 1 to 5?      │       └───────────────────────────────────────┘
+  └──────────────┘
+     │ yes
+     ▼
+    OK ──▶ save to DB
+
+ONE VALIDATE -> RETRY RUN, step by step (the real run printed by STEP 4):
+
+   try   model returned                               check says                 next
+   ───   ──────────────────────────────────────────   ────────────────────────   ─────────────────
+    1    Sure! Here is the JSON: {"category": ...     REJECT: not valid JSON     retry, send error
+    2    {"category": "crash", "priority": 2}         REJECT: unknown category   retry, send error
+    3    {"category": "bug", "priority": 2}           OK                         save, stop
+
+   3 calls = 3x the cost and 3x the wait. Constrained decoding (STEP 3)
+   makes the FORMAT right the first time. Your VALUE checks still run.
 
 WHAT AN ENGINEER MUST KNOW:
   1. Thinking tokens are output tokens: more cost, more waiting. Use a
@@ -40,6 +80,12 @@ PRICE_PER_1M_OUTPUT = 15.00     # example price in dollars
 # ----------------------------------------------------------------------------
 # STEP 1: THINKING COSTS MONEY (thinking + answer are both output tokens)
 # ----------------------------------------------------------------------------
+#   easy task:  thinking     0  +  answer 200  =   200 output tokens
+#   hard task:  thinking 3,000  +  answer 200  = 3,200 output tokens
+#                  │
+#                  ▼  x $15 per 1,000,000 tokens  x 1,000 calls
+#   easy:   200 x 15 / 1,000,000 x 1,000  =  $3.00
+#   hard: 3,200 x 15 / 1,000,000 x 1,000  = $48.00   <- 16x the bill, same answer
 def cost_of_call(thinking_tokens, answer_tokens):
     total = thinking_tokens + answer_tokens
     return total, total * PRICE_PER_1M_OUTPUT / 1_000_000
@@ -48,6 +94,14 @@ def cost_of_call(thinking_tokens, answer_tokens):
 # ----------------------------------------------------------------------------
 # STEP 2: CHECK the model output (parse -> shape -> values)
 # ----------------------------------------------------------------------------
+#   text in                                       which check fails      result
+#   ───────────────────────────────────────────   ────────────────────   ─────────────────────
+#   {"category": "bug", "priority": 2}            (none)                 OK
+#   Sure! Here is the JSON: {"category": ...      json.loads             not valid JSON
+#   {"category": "crash", "priority": 2}          category list          unknown category
+#   {"category": "bug", "priority": "high"}       priority 1-5           priority must be ...
+#   {"category": "bug", "prio                     json.loads             not valid JSON
+#                                                  (cut off by max_tokens!)
 CATEGORIES = ["bug", "feature", "question"]
 
 
@@ -69,6 +123,26 @@ def check_output(text):
 # ----------------------------------------------------------------------------
 # STEP 3: CONSTRAINED DECODING = block every token that breaks the format
 # ----------------------------------------------------------------------------
+#   step  model WANTS (best first)   format ALLOWS               no constraint   with constraint
+#   ────  ────────────────────────   ─────────────────────────   ─────────────   ───────────────
+#    1    Sure!  {                   {                           Sure!   ✗       {
+#    2    "category":                "category":                 "category":     "category":
+#    3    "crash"  "bug"             "bug" "feature" "question"  "crash" ✗       "bug"
+#    4    ,                          ,                           ,               ,
+#    5    "priority":                "priority":                 "priority":     "priority":
+#    6    "high"  2                  1 2 3 4 5                   "high"  ✗       2
+#    7    }                          }                           }               }
+#
+#   for each step:
+#      │
+#      ▼
+#   constrained? ── no ──▶ take wanted[0] (the favourite, even if it breaks JSON)
+#      │ yes
+#      ▼
+#   drop every wanted token that is NOT allowed ──▶ take the best one left
+#
+#   no constraint : Sure!"category":"crash","priority":"high"}  -> REJECT: not valid JSON
+#   constraint    : {"category":"bug","priority":2}             -> OK
 # At each step: what the model WANTS (best first), and what the format ALLOWS.
 STEPS = [
     (["Sure!", "{"],                 ["{"]),
@@ -91,6 +165,38 @@ def decode(constrained):
             pick = wanted[0]                  # just the model's favourite
         out.append(pick)
     return "".join(out)
+
+
+# ----------------------------------------------------------------------------
+# STEP 4: VALIDATE -> RETRY loop (what your FastAPI code does without constraints)
+# ----------------------------------------------------------------------------
+#   attempt = 1
+#      │
+#      ▼
+#   ┌─▶ call the model ──▶ text
+#   │      │
+#   │      ▼
+#   │   check_output(text) == "OK"? ── yes ──▶ return json.loads(text)  (save to DB)
+#   │      │ no
+#   │      ▼
+#   │   attempt == max_tries? ── yes ──▶ give up, return None  (your API sends 502)
+#   │      │ no
+#   │      ▼
+#   │   add the error to the prompt: "Your last answer was rejected: unknown category"
+#   │   attempt = attempt + 1
+#   └──────┘
+#
+#   real run:  try 1 not valid JSON ──▶ try 2 unknown category ──▶ try 3 OK
+#              result {'category': 'bug', 'priority': 2}
+def ask_with_retry(model_replies, max_tries=3):
+    """model_replies = what a fake model returns on try 1, 2, 3 (a real app calls the API)."""
+    for attempt, text in enumerate(model_replies[:max_tries], start=1):
+        verdict = check_output(text)
+        print(f"  try {attempt}: {text:<58} -> {verdict}")
+        if verdict == "OK":
+            return json.loads(text)
+        # real app: put the verdict into the next prompt so the model can fix it
+    return None
 
 
 def main():
@@ -119,6 +225,10 @@ def main():
     print("  The model wanted 'Sure!', 'crash' and 'high'. The constraint blocked them.")
     print("  The shape is now guaranteed. The VALUES still need your own checks.")
 
+    print("\nSTEP 4: validate -> retry (no constraint, max 3 tries)")
+    result = ask_with_retry([samples[1], samples[2], samples[0]])
+    print(f"  result: {result}  (3 calls = 3x cost and wait)")
+
 
 if __name__ == "__main__":
     main()
@@ -127,4 +237,5 @@ if __name__ == "__main__":
 #   - Thinking = hidden output tokens. You pay for them. Use for hard tasks only.
 #   - Prompt "return JSON" < JSON mode < schema-constrained (a guarantee).
 #   - Always validate values in code. Cut-off output (max_tokens) still breaks JSON.
+#   - Without constraints: validate, then retry with the error. Limit the tries.
 # Try: add a sample with priority 9. Does check_output catch it?

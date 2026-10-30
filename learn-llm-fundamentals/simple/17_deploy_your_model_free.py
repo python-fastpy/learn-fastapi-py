@@ -23,6 +23,45 @@ REAL USE CASE:
           ▼
      {"answer": "...", "sources": ["leave-1"]}
 
+THE DEPLOY ARCHITECTURE (laptop + free tunnel; a free VM looks the same without the tunnel):
+
+  INTERNET                    PUBLIC EDGE                  YOUR MACHINE (laptop or free VM)
+  ┌──────────────┐  HTTPS     ┌───────────────────┐        ┌────────────────────────────────────────────┐
+  │ colleague's  │ ─────────▶ │ tunnel / host     │ ─────▶ │ uvicorn :8017 ──▶ FastAPI  POST /ask       │
+  │ app          │ POST /ask  │ (cloudflared,     │ local  │        │                                   │
+  │              │ X-API-Key  │  free HTTPS URL)  │ HTTP   │        ▼                                   │
+  │              │ ◀───────── │                   │ ◀───── │ check_request (STEP 1) ── fail ──▶ 401/400 │
+  │              │   JSON     └───────────────────┘ JSON   │        │ OK                                │
+  └──────────────┘                                         │        ▼                                   │
+                                                           │ find_sources + build prompt (STEP 2)       │
+                                                           │        │                                   │
+                                                           │        ▼                                   │
+                                                           │ Ollama :11434   (localhost ONLY,           │
+                                                           │                  never exposed)            │
+                                                           └────────────────────────────────────────────┘
+
+ONE REQUEST, all its branches (the real run printed by STEP 1 + 2):
+
+   request comes in
+        │
+        ▼
+   X-API-Key == API_KEY?  ── no ──▶ 401 {'error': 'missing or wrong X-API-Key'}          ("no key")
+        │ yes
+        ▼
+   "question" is text,    ── no ──▶ 400 {'error': 'send JSON like {"question": "..."}     ("bad body")
+   1-500 characters?                     (1-500 characters)'}
+        │ yes
+        ▼
+   find_sources(question) ──▶ any handbook line shares a word?
+        │ yes                                    │ no
+        ▼                                        ▼
+   200 {'answer': 'full-time employees       200 {'answer': "I don't know based on the
+        get 25 vacation days per year             handbook.", 'sources': []}
+        [leave-1]', 'sources': ['leave-1']}       ("not in docs": still 200, an honest answer)
+        ("good call")
+
+   The key check runs FIRST. A stranger without a key never reaches the model.
+
 WHAT AN ENGINEER MUST KNOW:
   1. Only expose YOUR /ask API. Never expose Ollama's port 11434 (it has no login).
   2. Always require an API key. A public URL will be found by strangers.
@@ -46,6 +85,16 @@ HANDBOOK = {
 # ----------------------------------------------------------------------------
 # STEP 1: CHECK the request (key first, then the body)
 # ----------------------------------------------------------------------------
+#   headers, body
+#      │
+#      ▼  sent_key = headers.get("X-API-Key", "")       "no key" test: sent_key = ""
+#   compare_digest(sent_key, "demo-key")? ── no ──▶ return (401, "missing or wrong X-API-Key")
+#      │ yes
+#      ▼  question = body.get("question", "")           "bad body" test: {"q": "oops"} -> ""
+#   is it text with 1-500 characters?    ── no ──▶ return (400, "send JSON like ...")
+#      │ yes
+#      ▼
+#   return None   (= OK, go on to STEP 2)
 def check_request(headers, body):
     """Return None if OK, or (status_code, error) to send back."""
     sent_key = headers.get("X-API-Key", "")
@@ -61,6 +110,24 @@ def check_request(headers, body):
 # ----------------------------------------------------------------------------
 # STEP 2: ANSWER = the /ask endpoint (retrieve + ask the model)
 # ----------------------------------------------------------------------------
+#   "How much vacation do I get?"              "What about parking?"
+#      │  lowercase, drop "?", remove small words
+#      ▼
+#   {vacation}                                 {parking}
+#      │  which handbook lines share a word?
+#      ▼
+#   leave-1: yes   remote-1: no                leave-1: no    remote-1: no
+#      │                                          │
+#      ▼                                          ▼
+#   sources = ['leave-1']                      sources = []
+#      │                                          │
+#      ▼  fake_model (real app: Ollama)           ▼  no sources -> do NOT guess
+#   'full-time employees get 25               "I don't know based on the handbook."
+#    vacation days per year [leave-1]'
+#      │                                          │
+#      └──────────────────┬───────────────────────┘
+#                         ▼
+#   200 {"answer": ..., "sources": [...]}     (both are a normal 200 answer)
 def find_sources(question):
     """Simple search: keep lines that share an important word with the question."""
     important = set(question.lower().strip("?").split()) - {"how", "much", "do", "i", "get", "what", "about"}
