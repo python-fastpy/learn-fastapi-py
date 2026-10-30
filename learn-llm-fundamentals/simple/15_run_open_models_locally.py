@@ -28,7 +28,7 @@ WHAT AN ENGINEER MUST KNOW:
   4. Local models are smaller and less smart than the best API models.
      Test them on YOUR task before you switch.
 
-Run:  uv run python simple/advanced/15_run_open_models_locally.py
+Run:  uv run python simple/15_run_open_models_locally.py
 """
 
 # ============================================================================

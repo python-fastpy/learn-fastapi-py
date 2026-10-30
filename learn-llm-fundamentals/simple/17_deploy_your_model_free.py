@@ -31,7 +31,7 @@ WHAT AN ENGINEER MUST KNOW:
      (24/7), Hugging Face Spaces (public demo), or a free API tier.
   5. Free tiers change often, and some may use your data. Read the terms.
 
-Run:  uv run python simple/advanced/17_deploy_your_model_free.py
+Run:  uv run python simple/17_deploy_your_model_free.py
 """
 
 import hmac

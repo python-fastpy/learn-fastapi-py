@@ -29,7 +29,7 @@ WHAT AN ENGINEER MUST KNOW:
   4. Even valid JSON can have wrong VALUES. Always check them in code.
   5. Images also become tokens. Big images = many tokens. Resize and crop.
 
-Run:  uv run python simple/advanced/13_reasoning_and_structured_output.py
+Run:  uv run python simple/13_reasoning_and_structured_output.py
 """
 
 import json

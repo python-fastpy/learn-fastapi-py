@@ -28,7 +28,7 @@ WHAT AN ENGINEER MUST KNOW:
   3. Change a policy -> edit one line -> the next answer is updated. No training.
   4. Always tell the model: "if it is not in the documents, say you don't know".
 
-Run:  uv run python simple/advanced/16_own_model_with_your_context.py
+Run:  uv run python simple/16_own_model_with_your_context.py
 """
 
 import random

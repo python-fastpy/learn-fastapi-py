@@ -53,7 +53,12 @@ User types a message in your app
 | 09 | `09_agents.py` | What is an agent? (a tool loop with a goal) |
 | 10 | `10_rag_and_embeddings.py` | How does the model answer from MY documents? |
 | 11 | `11_evals_and_guardrails.py` | How do I test that answers are good and safe? |
-| 12–17 | `advanced/` | Inside the transformer, fine-tuning, running your own model (15b is merged into 15) |
+| 12 | `12_inside_the_transformer.py` | How does attention work inside the model? |
+| 13 | `13_reasoning_and_structured_output.py` | What do "thinking" tokens cost, and how do I get valid JSON? |
+| 14 | `14_fine_tuning.py` | When and how do I train a model on my own data? |
+| 15 | `15_run_open_models_locally.py` | How much memory does a model need, and how do I run one on my PC? (includes 15b) |
+| 16 | `16_own_model_with_your_context.py` | Should I train a model or give it my documents? |
+| 17 | `17_deploy_your_model_free.py` | How do I put my model behind a safe API for free? |
 
 Run any lesson from the `learn-llm-fundamentals` folder:
 

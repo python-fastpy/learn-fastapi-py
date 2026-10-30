@@ -28,7 +28,7 @@ WHAT AN ENGINEER MUST KNOW:
      that change. Use RAG for facts.
   5. LoRA trains a tiny extra matrix instead of all weights: cheap and swappable.
 
-Run:  uv run python simple/advanced/14_fine_tuning.py
+Run:  uv run python simple/14_fine_tuning.py
 """
 
 import json

@@ -30,7 +30,7 @@ WHAT AN ENGINEER MUST KNOW:
   5. Facts in the MIDDLE of a long prompt get less attention. Put key info
      at the start or the end.
 
-Run:  uv run python simple/advanced/12_inside_the_transformer.py
+Run:  uv run python simple/12_inside_the_transformer.py
 """
 
 import math
