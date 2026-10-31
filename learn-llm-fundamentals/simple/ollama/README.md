@@ -39,6 +39,7 @@ Your prompts never leave your PC.
 |---|------|---------|-----------------------------------|
 | 00 | `00_setup_check.py` | Setup | Ollama running, models downloaded, first answer |
 | 01 | `01_next_token.py` | **Next-token prediction** | The model's top 5 choices for every token it writes |
+| 01b | `01b_inside_the_llm.py` | **Inside the model** | Real size (28 layers, 128k vocab), the raw chat template, the loop run by hand one token per call |
 | 02 | `02_tokens_and_cost.py` | **Tokens and cost** | Real token counts: English vs Hindi vs JSON vs typos |
 | 03 | `03_temperature.py` | **Temperature, seed** | Same prompt at temperature 0 / 1 / 1.8: same vs varied answers |
 | 04 | `04_chat_messages.py` | **Roles, no memory, done_reason** | The model forgets your name; input grows each turn; an answer cut off by the limit |
