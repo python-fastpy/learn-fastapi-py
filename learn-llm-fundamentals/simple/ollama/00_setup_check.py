@@ -25,6 +25,23 @@ OR CHECK BY HAND (same 3 steps, no Python needed):
                   -Body '{"model":"llama3.2","stream":false,
                           "messages":[{"role":"user","content":"Say hello in exactly 5 words."}]}'
 
+START / STOP OLLAMA:
+
+   Windows   start   open "Ollama" from the Start menu (runs in the tray, starts with Windows)
+                     or in a terminal:  ollama serve   (stays running until Ctrl+C)
+             stop    right-click the tray icon -> Quit Ollama
+                     or:  Stop-Process -Name "ollama*"     (kills the app + server)
+             check   Get-Process ollama* -ErrorAction SilentlyContinue
+                     -> prints nothing = Ollama is stopped
+
+   Mac       start   open the Ollama app        stop   menu bar icon -> Quit Ollama
+   Linux     start   sudo systemctl start ollama
+             stop    sudo systemctl stop ollama
+
+   Free RAM without stopping the server:
+             ollama ps                   which models are loaded in memory right now
+             ollama stop llama3.2        unload that model (server keeps running)
+
 HOW IT WORKS:
 
    ┌─────────────────┐   HTTP :11434   ┌───────────────────────────────┐
@@ -72,6 +89,10 @@ def main():
         answer = json.loads(r.read())["message"]["content"].strip()
     print("  answer:", answer)
     print("\nAll good -- go to 01_next_token.py")
+
+    print("\nWhen you are done:")
+    print(f"  ollama stop {CHAT_MODEL:<16} unload the model, free RAM (server keeps running)")
+    print('  Stop-Process -Name "ollama*"  stop Ollama completely (Windows)')
 
 
 if __name__ == "__main__":
