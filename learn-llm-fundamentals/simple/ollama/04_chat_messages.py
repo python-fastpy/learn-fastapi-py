@@ -12,7 +12,7 @@ CONCEPT IN ONE LINE:
    ROLES:   system    = rules from you, the developer ("You are a support bot...")
             user      = what the end user typed
             assistant = what the model said before
-            tool      = a result from your code (lesson 08)
+            tool      = a result from your code (lesson 10)
 
    RESPONSE: message.content   the answer
              done_reason       "stop" = finished,  "length" = CUT OFF by num_predict (max_tokens)

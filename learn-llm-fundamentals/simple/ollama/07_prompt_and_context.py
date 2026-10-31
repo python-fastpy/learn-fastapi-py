@@ -48,7 +48,19 @@ def main():
                  options=OPT)
     print("   weak prompt   ->", weak)
     print("   strong prompt ->", strong)
-    print("  (small models still fail sometimes -- that is why lesson 11 adds guardrails)")
+    print("  (small models still fail sometimes -- that is why lesson 16 adds guardrails)")
+
+    print("\nSTEP 5: few-shot -- SHOW examples instead of only describing the format")
+    review = "The lamp is bright but the cable broke after a week."
+    zero = ask(f"Extract the product and the sentiment from this review: {review}", options=OPT)
+    few = ask(review, options=OPT, system=(
+        "Extract product and sentiment. Answer exactly like the examples.\n"
+        "Review: Love this desk, very solid. -> desk | positive\n"
+        "Review: The chair squeaks and the seat is hard. -> chair | negative\n"
+        "Review: Mug is ok, nothing special. -> mug | neutral"))
+    print("   zero-shot ->", zero[:120])
+    print("   few-shot  ->", few)
+    print("  -> 2-3 examples fix the FORMAT far better than a long explanation.")
 
 
 if __name__ == "__main__":

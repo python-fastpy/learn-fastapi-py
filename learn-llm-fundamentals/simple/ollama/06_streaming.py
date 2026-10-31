@@ -15,7 +15,7 @@ CONCEPT IN ONE LINE:
      ...
      {"done": true, "eval_count": 57, ...}      ◀ last line has the token counts
 
-  In FastAPI you forward these pieces with StreamingResponse (see 12_fastapi_app.py).
+  In FastAPI you forward these pieces with StreamingResponse (see 19_fastapi_app.py).
 """
 
 import json

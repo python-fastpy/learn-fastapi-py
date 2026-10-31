@@ -8,9 +8,9 @@ CONCEPT IN ONE LINE:
         │  POST /ask {"question": "..."}
         ▼
    ┌──────────────────────────── FastAPI (this file) ─────────────────────────────┐
-   │ 1. input guard            block injection, empty or huge input   (lesson 11) │
-   │ 2. RAG                    embed question, pick top 2 docs         (lesson 10) │
-   │ 3. prompt                 rules + docs in tags + "I don't know"   (lesson 06) │
+   │ 1. input guard            block injection, empty or huge input   (lesson 16) │
+   │ 2. RAG                    embed question, pick top 2 docs         (lesson 14) │
+   │ 3. prompt                 rules + docs in tags + "I don't know"   (lesson 07) │
    │ 4. call Ollama            temperature 0, num_predict 200          (03, 04)    │
    │ 5. check done_reason      "length" -> mark answer as cut off      (lesson 04) │
    │ 6. return JSON            answer + sources + token usage          (lesson 02) │
@@ -20,11 +20,11 @@ CONCEPT IN ONE LINE:
    {"answer": "...", "sources": ["refunds"], "input_tokens": 210, "output_tokens": 31}
 
 RUN (fastapi + uvicorn are added just for this command, nothing is installed in the project):
-   uv run --with fastapi --with uvicorn uvicorn 12_fastapi_app:app --app-dir simple/ollama --port 8012
+   uv run --with fastapi --with uvicorn uvicorn 19_fastapi_app:app --app-dir simple/ollama --port 8019
 
 TRY IT:
-   open  http://localhost:8012/docs   (FastAPI's built-in test page)
-   or    curl -X POST localhost:8012/ask -H "Content-Type: application/json" -d "{\"question\": \"How long do refunds take?\"}"
+   open  http://localhost:8019/docs   (FastAPI's built-in test page)
+   or    curl -X POST localhost:8019/ask -H "Content-Type: application/json" -d "{\"question\": \"How long do refunds take?\"}"
 """
 
 import math

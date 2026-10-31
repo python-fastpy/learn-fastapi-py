@@ -16,7 +16,7 @@ import urllib.request
 
 OLLAMA = "http://localhost:11434"
 CHAT_MODEL = "llama3.2"            # 3B model, ~2 GB, supports tools.   ollama pull llama3.2
-EMBED_MODEL = "nomic-embed-text"   # turns text into vectors (lesson 10). ollama pull nomic-embed-text
+EMBED_MODEL = "nomic-embed-text"   # turns text into vectors (lessons 14, 15). ollama pull nomic-embed-text
 
 
 def post(path, body):

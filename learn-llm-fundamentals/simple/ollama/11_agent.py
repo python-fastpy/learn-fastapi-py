@@ -17,7 +17,7 @@ CONCEPT IN ONE LINE:
    │   step limit reached? ──── yes ──▶ STOP (protects you from endless loops / cost)
    └───────┘
 
-  Difference from lesson 08: here the model chains SEVERAL steps, and each step
+  Difference from lesson 10: here the model chains SEVERAL steps, and each step
   depends on the result of the step before.
 """
 

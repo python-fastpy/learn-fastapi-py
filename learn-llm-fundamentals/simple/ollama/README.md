@@ -28,6 +28,9 @@ here carries over directly.
 Hardware: llama3.2 (3B) runs on a normal laptop CPU with 8 GB RAM. A GPU makes it faster,
 but you don't need one.
 
+**Cost: free.** Running models on your own PC is free and unlimited, with no account and no API key.
+Your prompts never leave your PC.
+
 ## The lessons: one concept each
 
 | # | File | Concept you learn | What you see with the real model |
