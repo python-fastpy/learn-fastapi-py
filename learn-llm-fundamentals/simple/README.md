@@ -15,6 +15,9 @@ on every run. So run the file and read the diagram next to the output.
 
 **Videos:** [VIDEOS.md](VIDEOS.md) lists a video or visual tool for each lesson, plus a weekly plan.
 
+**Hands-on with a real model:** [ollama/](ollama/README.md) teaches every concept quickly with a free
+open-source model (llama3.2) running on your PC. No API key needed.
+
 The full, detailed lessons are still in the parent folder. Open them when you want more depth.
 
 ## The big picture: how one chat request works
