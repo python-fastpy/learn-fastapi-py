@@ -19,10 +19,25 @@ CONCEPT IN ONE LINE:
              prompt_eval_count / eval_count = input / output tokens (your bill)
 """
 
-from ollama_client import chat
+import httpx
 
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 SYSTEM = {"role": "system", "content": "You are a short, friendly assistant. Max 1 sentence."}
 OPT = {"temperature": 0}
+
+
+def chat(messages, options):
+    """One call to /api/chat. Returns the full response dict."""
+    body = {
+        "model": CHAT_MODEL,
+        "messages": messages,               # the WHOLE list, every time
+        "stream": False,
+        "options": options,
+    }
+    resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def main():

@@ -20,7 +20,10 @@ CONCEPT IN ONE LINE:
    deploy only if better everywhere       output guard: answer must be a valid label
 """
 
-from ollama_client import ask
+import httpx
+
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 
 CASES = [  # (ticket, expected label)
     ("I was charged twice this month", "billing"),
@@ -51,7 +54,16 @@ def output_guard(answer):
 def run_eval(system):
     per_label = {label: [0, 0] for label in sorted(LABELS)}  # label -> [correct, total]
     for ticket, expected in CASES:
-        got = output_guard(ask(ticket, system=system, options={"temperature": 0, "num_predict": 10}))
+        body = {
+            "model": CHAT_MODEL,
+            "messages": [{"role": "system", "content": system},  # the prompt version under test
+                         {"role": "user", "content": ticket}],
+            "stream": False,
+            "options": {"temperature": 0, "num_predict": 10},    # same input -> same output; 1 word is enough
+        }
+        resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)   # json= sends body as JSON
+        resp.raise_for_status()                            # 4xx/5xx -> exception
+        got = output_guard(resp.json()["message"]["content"].strip())
         per_label[expected][1] += 1
         per_label[expected][0] += got == expected
         print(f"    {'ok   ' if got == expected else 'WRONG'} {ticket:<40} expected {expected:<8} got {got}")

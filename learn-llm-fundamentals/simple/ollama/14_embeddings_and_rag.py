@@ -21,7 +21,11 @@ CONCEPT IN ONE LINE:
 
 import math
 
-from ollama_client import ask, embed
+import httpx
+
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
+EMBED_MODEL = "nomic-embed-text"
 
 DOCS = {
     "refunds":  "Refunds are paid back to the original card within 5 to 7 business days.",
@@ -29,6 +33,14 @@ DOCS = {
     "password": "To reset your password, click 'Forgot password' on the login page.",
     "support":  "Our support team is available Monday to Friday, 9:00 to 17:00 CET.",
 }
+
+
+def embed(texts):
+    """Text(s) -> list of vectors (each vector = a list of numbers)."""
+    body = {"model": EMBED_MODEL, "input": texts}          # input = one string or a list of strings
+    resp = httpx.post(OLLAMA + "/api/embed", json=body, timeout=300)   # json= sends body as JSON
+    resp.raise_for_status()                                # 4xx/5xx -> exception (e.g. 404 = model not pulled)
+    return resp.json()["embeddings"]
 
 
 def cosine(a, b):
@@ -59,7 +71,17 @@ def main():
     system = ("Answer ONLY from the docs below and cite the doc id like [refunds]. "
               "If the docs do not answer it, say \"I don't know.\"\n" + context)
     print("  docs used:", top)
-    print("  answer   :", ask(question, system=system, options={"temperature": 0}))
+    body = {
+        "model": CHAT_MODEL,
+        "messages": [{"role": "system", "content": system},     # the docs go in the system message
+                     {"role": "user", "content": question}],
+        "stream": False,
+        "options": {"temperature": 0},
+    }
+    resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)
+    resp.raise_for_status()
+    answer = resp.json()["message"]["content"].strip()
+    print("  answer   :", answer)
 
 
 if __name__ == "__main__":

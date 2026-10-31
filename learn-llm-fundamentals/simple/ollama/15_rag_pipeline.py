@@ -31,7 +31,11 @@ import json
 import math
 from pathlib import Path
 
-from ollama_client import ask, embed
+import httpx
+
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
+EMBED_MODEL = "nomic-embed-text"
 
 HANDBOOK = """
 # About
@@ -69,6 +73,14 @@ def chunk(text, size=CHUNK_SIZE, overlap=OVERLAP):
         for i in range(0, max(len(sentences) - overlap, 1), size - overlap):
             chunks.append(f"{title}: " + " ".join(sentences[i:i + size]))
     return chunks
+
+
+def embed(texts):
+    """Text(s) -> list of vectors, one raw POST to Ollama's /api/embed."""
+    body = {"model": EMBED_MODEL, "input": texts}          # input = one string or a list of strings
+    resp = httpx.post(OLLAMA + "/api/embed", json=body, timeout=300)   # json= sends body as JSON
+    resp.raise_for_status()                                # 4xx/5xx -> exception (e.g. 404 = model not pulled)
+    return resp.json()["embeddings"]
 
 
 # STEP 2: build or load the index (only re-embed when the handbook OR the chunk settings changed)
@@ -112,7 +124,17 @@ def answer(chunks, question):
     context = "\n".join(f"[{c['id']}] {c['text']}" for _, c in top)
     system = ("Answer ONLY from the handbook chunks below. After each fact, cite the chunk id like [c3]. "
               "If the chunks do not contain the answer, say \"I don't know.\"\n" + context)
-    print("  A:", ask(question, system=system, options={"temperature": 0}), "\n")
+    body = {
+        "model": CHAT_MODEL,
+        "messages": [{"role": "system", "content": system},     # the chunks go in the system message
+                     {"role": "user", "content": question}],
+        "stream": False,
+        "options": {"temperature": 0},
+    }
+    resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)
+    resp.raise_for_status()
+    reply = resp.json()["message"]["content"].strip()
+    print("  A:", reply, "\n")
 
 
 # STEP 5: measure retrieval -- does the right chunk come back in the top 3?

@@ -18,10 +18,27 @@ CONCEPT IN ONE LINE:
   Put user text inside tags too, so instructions hidden in it are treated as DATA.
 """
 
-from ollama_client import ask
+import httpx
 
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 POLICY = "Acme refund policy: refunds within 14 days of delivery. Shipping costs are not refunded."
 OPT = {"temperature": 0}
+
+
+def ask(question, system=None, options=None):
+    """One question in (+ optional system prompt), answer text out (POST /api/chat)."""
+    messages = [{"role": "system", "content": system}] if system else []
+    messages.append({"role": "user", "content": question})
+    body = {
+        "model": CHAT_MODEL,
+        "messages": messages,
+        "stream": False,
+        "options": options or {},
+    }
+    resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)
+    resp.raise_for_status()
+    return resp.json()["message"]["content"].strip()
 
 
 def main():

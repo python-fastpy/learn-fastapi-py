@@ -16,14 +16,25 @@ CONCEPT IN ONE LINE:
   COST: thinking tokens are output tokens -- you pay for them and wait for them.
 """
 
-import json
-import urllib.request
+import httpx
 
-from ollama_client import OLLAMA, ask, post
-
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 PROBLEM = ("A shop has 3 boxes with 4 apples each. A customer eats 5 apples, "
            "then the shop buys 2 more apples. How many apples does the shop have now?")
 THINKING_MODEL = "qwen3:1.7b"        # small thinking model, ~1.4 GB:  ollama pull qwen3:1.7b
+
+
+def ask(question, **extra):
+    """One question in, answer text out (POST /api/chat)."""
+    body = {
+        "model": CHAT_MODEL,
+        "messages": [{"role": "user", "content": question}],
+        "stream": False,                    # one JSON answer, not a stream of chunks
+        **extra,                            # e.g. options={"temperature": 0, "num_predict": 5}
+    }
+    r = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300).raise_for_status().json()
+    return r["message"]["content"].strip()
 
 
 def main():
@@ -37,14 +48,19 @@ def main():
                     options={"temperature": 0, "num_predict": 200}).replace("\n", "\n   "))
 
     print(f"\nSTEP 3: a real thinking model ({THINKING_MODEL})")
-    with urllib.request.urlopen(OLLAMA + "/api/tags") as r:
-        installed = [m["name"] for m in json.loads(r.read())["models"]]
+    tags = httpx.get(OLLAMA + "/api/tags", timeout=30).raise_for_status().json()
+    installed = [m["name"] for m in tags["models"]]
     if THINKING_MODEL not in installed:
         print(f"   not installed -- to try it:  ollama pull {THINKING_MODEL}")
         return
-    r = post("/api/chat", {"model": THINKING_MODEL, "think": True, "stream": False,
-                           "messages": [{"role": "user", "content": PROBLEM}],
-                           "options": {"temperature": 0}})
+    body = {
+        "model": THINKING_MODEL,
+        "messages": [{"role": "user", "content": PROBLEM}],
+        "stream": False,
+        "think": True,                      # return the steps in message.thinking
+        "options": {"temperature": 0},
+    }
+    r = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300).raise_for_status().json()
     thinking = r["message"].get("thinking", "")
     print(f"   thinking ({len(thinking)} chars): {thinking[:300]!r}...")
     print(f"   answer: {r['message']['content'].strip()}")

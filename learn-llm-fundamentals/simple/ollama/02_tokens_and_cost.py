@@ -18,15 +18,24 @@ WHAT WE DO:
   so even a 1-word message costs ~25-30 tokens. We subtract that baseline.
 """
 
-from ollama_client import chat
+import httpx
 
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 PRICE_PER_1M = 3.00          # example paid-API price per 1M input tokens
 
 
 def count_tokens(text):
     """Input tokens for one user message (num_predict=1: we only want the count)."""
-    r = chat([{"role": "user", "content": text}], options={"num_predict": 1})
-    return r["prompt_eval_count"]
+    body = {
+        "model": CHAT_MODEL,
+        "messages": [{"role": "user", "content": text}],
+        "stream": False,
+        "options": {"num_predict": 1},
+    }
+    resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)
+    resp.raise_for_status()
+    return resp.json()["prompt_eval_count"]
 
 
 def main():

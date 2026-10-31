@@ -26,11 +26,21 @@ CONCEPT IN ONE LINE:
                      export as GGUF file ──▶ ollama create my-model -f Modelfile  (FROM ./my-model.gguf)
 """
 
-from ollama_client import CHAT_MODEL, post
+import httpx
+
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 
 SYSTEM = ("You are Acme's support bot. Always answer in at most 2 sentences, "
           "be friendly, and end every answer with 'Anything else?'")
 QUESTION = [{"role": "user", "content": "How do I reset my password?"}]   # no system message!
+
+
+def post(path, body):
+    """Send JSON to Ollama (e.g. /api/create, /api/chat), return the JSON answer."""
+    resp = httpx.post(OLLAMA + path, json=body, timeout=300)   # json= sends body as JSON
+    resp.raise_for_status()                                # 4xx/5xx -> exception
+    return resp.json()
 
 
 def main():

@@ -18,10 +18,25 @@ CONCEPT IN ONE LINE:
    3. RAG        don't send everything; fetch only the relevant parts (lessons 14-15)
 """
 
-from ollama_client import ask, chat
+import httpx
 
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 FACT = "IMPORTANT: the customer's secret order code is 4417."
 FILLER = "The customer talked about the weather, the traffic and lunch plans. " * 40
+
+
+def chat(messages, options):
+    """One call to /api/chat. Returns the full response dict."""
+    body = {
+        "model": CHAT_MODEL,
+        "messages": messages,
+        "stream": False,
+        "options": options,                 # num_ctx = context window size in tokens
+    }
+    resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def ask_code(num_ctx):
@@ -41,8 +56,10 @@ def main():
     print("  -> with 256 the start (where the code was) was cut off, so the model can't know it.")
 
     print("\nSTEP 2: fix it by SUMMARIZING the old part into a few tokens")
-    summary = ask("Summarize this in one short sentence, keep any numbers:\n" + FACT + "\n" + FILLER,
-                  options={"temperature": 0, "num_predict": 40})
+    r = chat([{"role": "user",
+               "content": "Summarize this in one short sentence, keep any numbers:\n" + FACT + "\n" + FILLER}],
+             options={"temperature": 0, "num_predict": 40})
+    summary = r["message"]["content"].strip()
     print(f"  summary: {summary!r}")
     messages = [{"role": "system", "content": "Earlier conversation summary: " + summary},
                 {"role": "user", "content": "What is the customer's secret order code? Number only."}]

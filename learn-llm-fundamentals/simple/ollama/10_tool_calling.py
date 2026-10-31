@@ -20,7 +20,10 @@ CONCEPT IN ONE LINE:
 
 import json
 
-from ollama_client import chat
+import httpx
+
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 
 # 1) your real Python functions
 def get_weather(city):
@@ -51,7 +54,14 @@ TOOLS = [
 def run(question, max_turns=5):
     messages = [{"role": "user", "content": question}]
     for turn in range(1, max_turns + 1):
-        r = chat(messages, tools=TOOLS, options={"temperature": 0})
+        body = {
+            "model": CHAT_MODEL,
+            "messages": messages,
+            "stream": False,
+            "tools": TOOLS,                                   # the model sees only these descriptions
+            "options": {"temperature": 0},
+        }
+        r = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300).raise_for_status().json()
         msg = r["message"]
         messages.append(msg)
         if not msg.get("tool_calls"):                         # no tool wanted -> final answer

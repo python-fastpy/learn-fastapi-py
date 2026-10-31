@@ -53,8 +53,7 @@ HOW IT WORKS:
    Everything you learn here works the same way with a paid model later.
 """
 
-import json
-import urllib.request
+import httpx
 
 OLLAMA = "http://localhost:11434"
 CHAT_MODEL = "llama3.2"
@@ -64,9 +63,8 @@ EMBED_MODEL = "nomic-embed-text"
 def main():
     print("STEP 1: is Ollama running?")
     try:
-        with urllib.request.urlopen(OLLAMA + "/api/tags", timeout=5) as r:
-            models = [m["name"] for m in json.loads(r.read())["models"]]
-    except OSError:
+        models = [m["name"] for m in httpx.get(OLLAMA + "/api/tags", timeout=5).json()["models"]]
+    except httpx.TransportError:                             # can't connect / timed out
         print("  NO -- install from https://ollama.com and start it.")
         return
     print("  yes. models on this PC:", models)
@@ -83,10 +81,9 @@ def main():
         "stream": False,                    # one JSON answer, not a stream of chunks
         "options": {"temperature": 0},
     }
-    req = urllib.request.Request(OLLAMA + "/api/chat", data=json.dumps(body).encode("utf-8"),
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=300) as r:
-        answer = json.loads(r.read())["message"]["content"].strip()
+    resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)    # json= sends body as JSON
+    resp.raise_for_status()                                            # 404 = model not pulled
+    answer = resp.json()["message"]["content"].strip()
     print("  answer:", answer)
     print("\nAll good -- go to 01_next_token.py")
 

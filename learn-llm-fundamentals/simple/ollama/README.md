@@ -125,6 +125,7 @@ Each lesson here names its matching `simple/` lesson in its first lines ("detail
 
 - **Answers vary by model.** A small 3B model sometimes makes mistakes, especially in agents
   and injection tests. That's useful: you see the real failure modes. Try a bigger model by
-  changing `CHAT_MODEL` in `ollama_client.py` (for example `qwen2.5:7b` or `llama3.1:8b`).
+  changing `CHAT_MODEL` at the top of a lesson file (for example `qwen2.5:7b` or `llama3.1:8b`).
 - **The first call is slow** (about 5–20 s) while the model loads into memory. Later calls are fast.
-- **`ollama_client.py`** is the only helper. It's about 50 lines of plain `urllib`, so read it first.
+- **No helper module.** Each lesson calls Ollama directly with `httpx`, so you see the
+  raw JSON request and response in every file.

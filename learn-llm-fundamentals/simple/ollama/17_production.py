@@ -21,33 +21,34 @@ CONCEPT IN ONE LINE:
 
 import json
 import time
-import urllib.error
-import urllib.request
 
-from ollama_client import CHAT_MODEL, OLLAMA
+import httpx
+
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 
 CACHE = {}
 
 
 def call_model(model, question, timeout=60):
-    """One raw call that RAISES on errors (the shared helper exits instead)."""
+    """One raw call that RAISES on errors, so the caller can decide: retry or give up."""
     body = {"model": model, "stream": False, "options": {"temperature": 0, "num_predict": 60},
             "messages": [{"role": "user", "content": question}]}
-    req = urllib.request.Request(OLLAMA + "/api/chat", data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read())
+    resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=timeout)
+    resp.raise_for_status()                                 # 4xx/5xx -> httpx.HTTPStatusError
+    return resp.json()
 
 
 def with_retry(model, question, tries=3):
     for attempt in range(1, tries + 1):
         try:
             return call_model(model, question)
-        except urllib.error.HTTPError as e:
-            if e.code < 500:                                # 4xx = OUR mistake (e.g. 404 no such model)
-                raise RuntimeError(f"{model}: HTTP {e.code}, not retrying") from e   # retry won't help
-            error = f"HTTP {e.code} server error"           # 5xx = server problem, may pass
-        except (urllib.error.URLError, TimeoutError) as e:  # network / timeout = temporary
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            if code < 500:                                  # 4xx = OUR mistake (e.g. 404 no such model)
+                raise RuntimeError(f"{model}: HTTP {code}, not retrying") from e   # retry won't help
+            error = f"HTTP {code} server error"             # 5xx = server problem, may pass
+        except httpx.TransportError as e:                   # network / timeout = temporary
             error = str(e)[:50]
         wait = 2 ** (attempt - 1)                           # 1 s, 2 s, 4 s: "exponential backoff"
         print(f"    {model}: attempt {attempt} failed ({error})"

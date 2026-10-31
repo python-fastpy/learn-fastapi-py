@@ -23,7 +23,10 @@ CONCEPT IN ONE LINE:
 
 import json
 
-from ollama_client import chat
+import httpx
+
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 
 CUSTOMERS = {"ana@example.com": "C7"}
 ORDERS = {"C7": [{"id": "O-55", "date": "2026-10-20", "total": 40},
@@ -62,7 +65,9 @@ def run_agent(goal, max_steps=6):
                                               "Call one tool at a time."},
                 {"role": "user", "content": goal}]
     for step in range(1, max_steps + 1):
-        msg = chat(messages, tools=TOOLS, options={"temperature": 0})["message"]
+        body = {"model": CHAT_MODEL, "messages": messages, "stream": False,
+                "tools": TOOLS, "options": {"temperature": 0}}
+        msg = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300).raise_for_status().json()["message"]
         messages.append(msg)
         if not msg.get("tool_calls"):
             print(f"  step {step}: DONE -> {msg['content']}")

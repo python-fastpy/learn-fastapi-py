@@ -24,14 +24,24 @@ WHAT WE DO:
 
 import math
 
-from ollama_client import chat
+import httpx
+
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 
 
 def main():
     prompt = "Complete the sentence with one word: The capital of France is"
-    r = chat([{"role": "user", "content": prompt}],
-             logprobs=True, top_logprobs=5,          # show the model's top 5 choices
-             options={"temperature": 0, "num_predict": 6})
+    body = {
+        "model": CHAT_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "logprobs": True, "top_logprobs": 5,        # show the model's top 5 choices
+        "options": {"temperature": 0, "num_predict": 6},
+    }
+    resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)   # json= sends body as JSON
+    resp.raise_for_status()
+    r = resp.json()
 
     print("STEP 1: the answer")
     print("  ", repr(r["message"]["content"]))

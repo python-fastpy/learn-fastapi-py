@@ -22,7 +22,10 @@ CONCEPT IN ONE LINE:
 
 import json
 
-from ollama_client import chat
+import httpx
+
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 
 SCHEMA = {
     "type": "object",
@@ -50,7 +53,14 @@ def classify(email, tries=3):
     messages = [{"role": "system", "content": "Classify the support email. priority 5 = urgent."},
                 {"role": "user", "content": email}]
     for attempt in range(1, tries + 1):
-        r = chat(messages, format=SCHEMA, options={"temperature": 0})
+        body = {
+            "model": CHAT_MODEL,
+            "messages": messages,
+            "stream": False,
+            "format": SCHEMA,                       # only allow tokens that fit the schema
+            "options": {"temperature": 0},
+        }
+        r = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300).raise_for_status().json()
         text = r["message"]["content"]
         try:
             data = json.loads(text)

@@ -20,19 +20,22 @@ CONCEPT IN ONE LINE:
 
 import json
 import time
-import urllib.request
 
-from ollama_client import CHAT_MODEL, OLLAMA
+import httpx
+
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 
 
 def stream_chat(question):
     body = {"model": CHAT_MODEL, "stream": True, "options": {"temperature": 0},
             "messages": [{"role": "user", "content": question}]}
-    req = urllib.request.Request(OLLAMA + "/api/chat", data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
     start, first = time.time(), None
-    with urllib.request.urlopen(req) as resp:
-        for line in resp:                            # one JSON object per line
+    with httpx.stream("POST", OLLAMA + "/api/chat", json=body, timeout=300) as resp:
+        resp.raise_for_status()
+        for line in resp.iter_lines():               # one JSON object per line
+            if not line:
+                continue
             part = json.loads(line)
             if first is None:
                 first = time.time() - start          # time to first token (TTFT)

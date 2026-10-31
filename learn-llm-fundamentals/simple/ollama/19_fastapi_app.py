@@ -29,10 +29,13 @@ TRY IT:
 
 import math
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from ollama_client import chat, embed
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
+EMBED_MODEL = "nomic-embed-text"
 
 DOCS = {
     "refunds":  "Refunds are paid back to the original card within 5 to 7 business days.",
@@ -47,6 +50,14 @@ app = FastAPI(title="Support bot on llama3.2")
 
 class Question(BaseModel):
     question: str
+
+
+def embed(texts):
+    """Text(s) -> list of vectors, one raw POST to Ollama's /api/embed."""
+    body = {"model": EMBED_MODEL, "input": texts}          # input = one string or a list of strings
+    resp = httpx.post(OLLAMA + "/api/embed", json=body, timeout=300)   # json= sends body as JSON
+    resp.raise_for_status()                                # 4xx/5xx -> exception (e.g. 404 = model not pulled)
+    return resp.json()["embeddings"]
 
 
 def cosine(a, b):
@@ -78,8 +89,15 @@ def ask_endpoint(body: Question):
               "If they do not contain the answer, say \"I don't know.\"\n" + docs_text)
 
     # 4. call the model
-    r = chat([{"role": "system", "content": system}, {"role": "user", "content": q}],
-             options={"temperature": 0, "num_predict": 200})
+    payload = {
+        "model": CHAT_MODEL,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": q}],
+        "stream": False,
+        "options": {"temperature": 0, "num_predict": 200},
+    }
+    resp = httpx.post(OLLAMA + "/api/chat", json=payload, timeout=300)
+    resp.raise_for_status()
+    r = resp.json()
 
     # 5 + 6. check and return
     return {

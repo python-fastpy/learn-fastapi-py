@@ -28,7 +28,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ollama_client import chat
+import httpx
+
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 
 META = {"io.modelcontextprotocol/protocolVersion": "2026-07-28",      # sent on every request
         "io.modelcontextprotocol/clientInfo": {"name": "lesson-13", "version": "1.0"},
@@ -86,7 +89,10 @@ def main():
         tools = [mcp_to_ollama(t) for t in mcp_tools]
         messages = [{"role": "user", "content": "What is the status of order A-1001?"}]
         for turn in range(1, 5):
-            msg = chat(messages, tools=tools, options={"temperature": 0})["message"]
+            body = {"model": CHAT_MODEL, "messages": messages, "stream": False,
+                    "tools": tools, "options": {"temperature": 0}}      # tools from the server
+            resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300).raise_for_status()
+            msg = resp.json()["message"]
             messages.append(msg)
             if not msg.get("tool_calls"):
                 print(f"  final answer: {msg['content']}")

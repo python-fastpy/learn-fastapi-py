@@ -14,9 +14,24 @@ CONCEPT IN ONE LINE:
   seed = fixes the random dice, so a run can be repeated exactly (good for tests).
 """
 
-from ollama_client import ask
+import httpx
 
+OLLAMA = "http://localhost:11434"
+CHAT_MODEL = "llama3.2"
 PROMPT = "Invent a name for a coffee shop. Reply with the name only."
+
+
+def ask(question, options):
+    """One question in, answer text out (POST /api/chat)."""
+    body = {
+        "model": CHAT_MODEL,
+        "messages": [{"role": "user", "content": question}],
+        "stream": False,
+        "options": options,                 # temperature, seed, num_predict, ...
+    }
+    resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)
+    resp.raise_for_status()
+    return resp.json()["message"]["content"].strip()
 
 
 def main():
