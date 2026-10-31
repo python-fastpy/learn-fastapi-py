@@ -52,6 +52,111 @@ WHAT IS A LAYER? (step 4)
         'Paris' + '.' + <end> = 3 tokens x 28 = 84 layer passes.
   Bigger models = more, wider layers (llama3.1 70B: 80 layers x 8,192) -> smarter, slower.
 
+FULL PICTURE: TEXT -> TEMPLATE -> TOKENS -> 28 LAYERS -> 128k SCORES (steps 1-7)
+
+   TEXT           "Complete the sentence with one word: The capital of France is"
+                                                          │
+   TEMPLATE       wrap it in llama3.2's chat format (STEP 2 prints this):
+                                                          ▼
+        <|start_header_id|>user<|end_header_id|>\n\n
+        Complete the sentence with one word: The capital of France is<|eot_id|>
+        <|start_header_id|>assistant<|end_header_id|>\n\n
+                                                          │
+   TOKENS         split into pieces, each piece -> an ID from the 128,256 vocabulary
+                                                          ▼
+        <|begin_of_text|> <|start_header_id|> "user" <|end_header_id|> "\n\n"
+        "Complete" " the" " sentence" " with" " one" " word" ":" " The"
+        " capital" " of" " France" " is" <|eot_id|>
+        <|start_header_id|> "assistant" <|end_header_id|> "\n\n"
+                                                          = 22 tokens  (STEP 3: run 1 in= 22)
+        (the split shown is approximate -- Ollama gives the COUNT, not the pieces)
+                                                          │
+   Below, only the 5 tokens that matter for the answer are drawn;
+   in reality all 22 go through the layers side by side.  ▼
+
+   EMBEDDING      each token ID -> look up its row in a learned table (no maths, just a lookup)
+
+                          3,072 columns (numbers)
+                        ┌──────────────────────────────────────┐
+     ID 0      "!"      │  0.012  -0.341   0.077  ...   0.210  │
+     ...                │                 ...                  │
+     ID 9822   " France"│  0.231  -0.874   0.112  ...   0.045  │  <- one row = one token's embedding
+     ...                │                 ...                  │
+     ID 128255          │  ...                                 │
+                        └──────────────────────────────────────┘
+                          128,256 rows (one per vocabulary token)
+     size: 128,256 x 3,072 = 394 million numbers  (~12% of the 3.2 B parameters)
+
+     " France" -> ID 9822 -> row 9822 -> [0.231, -0.874, 0.112, ..., 0.045]
+
+     Training moves the rows so SIMILAR MEANINGS = SIMILAR NUMBERS:
+        " France" ●───● " Germany"        countries close together
+                    ● " Italy"
+        " Paris"  ●───● " Berlin"         capitals close together
+        " banana" ●                       far from both
+     (IDs, numbers and the picture are illustrative -- Ollama doesn't expose the table)
+
+     The row is the token's meaning ON ITS OWN -- " is" gets the same row in every sentence.
+     Context comes later, from the layers. Word ORDER is added inside attention (RoPE).
+     Not the same as lesson 14's embeddings: those are ONE vector for a WHOLE text.
+
+   Input tokens:   "The"  " capital"  " of"  " France"  " is"   ... "\n\n"
+                     │        │         │        │        │
+                  [3,072]  [3,072]   [3,072]  [3,072]  [3,072]    <- each token = its 3,072-number row
+                     │        │         │        │        │
+   ┌─────────────────┴────────┴─────────┴────────┴────────┴──────────────┐
+   │  LAYER 1                                                            │
+   │   ATTENTION (24 heads): each token looks at the tokens before it    │
+   │       " is" ──looks at──▶ " capital" (HIGH)   " France" (HIGH)      │
+   │   FEED-FORWARD (8,192 wide): "memory lookup" of learned facts       │
+   │   output: still 3,072 numbers per token, slightly "smarter"         │
+   └─────────────────────────────────────────────────────────────────────┘
+                     │        │         │        │        │
+   ┌─────────────────┴────────┴─────────┴────────┴────────┴──────────────┐
+   │  LAYER 2        same structure, its OWN weights                     │
+   └─────────────────────────────────────────────────────────────────────┘
+                    ...      ...       ...      ...      ...     (layers 3 ... 27)
+   ┌─────────────────┴────────┴─────────┴────────┴────────┴──────────────┐
+   │  LAYER 28       same structure, its OWN weights                     │
+   └─────────────────────────────────────────────────────────────────────┘
+                                                          │
+              only the LAST token's vector ("\n\n" after   │ assistant) is used to predict --
+              through attention it has gathered " capital" │ + " France" + " is"
+                                                          ▼
+                                                      [3,072]   <- "what does the assistant say first?"
+                                                          │
+   OUTPUT LAYER   3,072 numbers x weight table [3,072 x 128,256]
+                                                          ▼
+   128,256 SCORES (logits) -- one for EVERY token in the vocabulary:
+        token        score
+        ────────────────────
+        'Paris'      +24.1   ◀── highest
+        'Par'        +15.7
+        ' Paris'     +14.1
+        'France'     +12.7
+        'the'         +3.2
+        'banana'      -6.5
+        ... 128,250 more ...
+                                                          │
+   SOFTMAX        scores -> probabilities (all positive, add up to 1)
+                                                          ▼
+        'Paris' 0.9997   'Par' 0.0002   ' Paris' 0.00005   'France' 0.00001   ...
+                                                          │
+   PICK           temperature 0 -> take the top one       ▼
+                                                       'Paris'
+
+  Score GAP -> probability gap:  'Paris' +24.1 vs 'Par' +15.7 = 8.4 apart
+                                 -> e^8.4 ≈ 4,400x more likely
+  (Ollama does not return the raw scores: the numbers above are made up so their GAPS
+   match the real probabilities. The probabilities themselves are real.)
+
+     piece                    llama3.2     /api/show field (STEP 1)
+     vector per token         3,072        embedding_length
+     layers                   28           block_count
+     attention heads          24           attention.head_count
+     feed-forward width       8,192        feed_forward_length
+     scores per prediction    128,256      vocab_size
+
   Steps 3-5 happen inside the model and Ollama does not show them.
   Everything else we can see live.
 
@@ -59,6 +164,7 @@ WHAT IS A LAYER? (step 4)
   so nothing is hidden, and "num_predict": 1 -- the model writes only ONE token per call.
 """
 
+import json
 import math
 
 import httpx
@@ -68,23 +174,59 @@ CHAT_MODEL = "llama3.2"
 
 
 def main():
-    print("STEP 1: the model's real size (from /api/show)")
+    print("STEP 1: everything Ollama knows about the model (/api/show)")
     resp = httpx.post(OLLAMA + "/api/show", json={"model": CHAT_MODEL}, timeout=60)
     resp.raise_for_status()
-    info = resp.json()["model_info"]
-    arch = info["general.architecture"]                     # "llama" -> keys look like "llama.block_count"
-    print(f"  parameters      {info['general.parameter_count']:>13,}   learned numbers (weights)")
-    print(f"  vocab_size      {info[arch + '.vocab_size']:>13,}   different tokens it knows")
-    print(f"  embedding       {info[arch + '.embedding_length']:>13,}   numbers per token (vector)")
-    print(f"  layers          {info[arch + '.block_count']:>13,}   transformer blocks, stacked")
-    print(f"  attention heads {info[arch + '.attention.head_count']:>13,}   attention runs this many ways at once")
-    print(f"  context         {info[arch + '.context_length']:>13,}   max tokens it can read at once")
-    # -> parameters      3,212,749,888   learned numbers (weights)
-    # -> vocab_size            128,256   different tokens it knows
-    # -> embedding               3,072   numbers per token (vector)
-    # -> layers                     28   transformer blocks, stacked
-    # -> attention heads            24   attention runs this many ways at once
-    # -> context               131,072   max tokens it can read at once
+    show = resp.json()
+    show.pop("license", None)                        # 14 KB of legal text -- not useful here
+    print(json.dumps(show, indent=2))
+    # -> {
+    # "thinking": {"values": [false], "default": false},  <- can it "think" first? no (lesson 08)
+    # "modelfile": "# Modelfile generated by \"ollama show\"\n...FROM C:\\Users\\...\\.ollama\\models\\blobs\\sha256-dde5...
+    #               TEMPLATE ...  PARAMETER ...  LICENSE ...",    <- recipe for this model (~16 KB, lesson 18)
+    # "parameters": "stop \"<|start_header_id|>\"\nstop \"<|end_header_id|>\"\nstop \"<|eot_id|>\"",
+    #                                                     <- stop generating when it writes one of these
+    # "template": "<|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\n\n
+    #              {{ if .System }}{{ .System }} ... {{ range $i, $_ := .Messages }} ...",
+    #                                                     <- how /api/chat turns messages into text (STEP 2)
+    # "template_source": "go_template",
+    # "details": {"parent_model": "", "format": "gguf", "family": "llama", "families": ["llama"],
+    #             "parameter_size": "3.2B",
+    #             "quantization_level": "Q4_K_M"},        <- weights squeezed to ~4 bits each -> ~2 GB file
+    # "capabilities": ["completion", "tools"],            <- can chat + call tools (lesson 10)
+    # "modified_at": "2026-10-31T16:39:49.1145141+05:30",
+    # "model_info": {                                     <- the model's SHAPE (printed order may differ):
+    #   "general.architecture": "llama",
+    #   "general.basename": "Llama-3.2",
+    #   "general.file_type": 15,
+    #   "general.finetune": "Instruct",                   <- tuned to follow chat instructions
+    #   "general.languages": ["en", "de", "fr", "it", "pt", "hi", "es", "th"],
+    #   "general.parameter_count": 3212749888,            <- 3.2 BILLION learned numbers (weights)
+    #   "general.quantization_version": 2,
+    #   "general.size_label": "3B",
+    #   "general.tags": ["facebook", "meta", "pytorch", "llama", "llama-3", "text-generation"],
+    #   "general.type": "model",
+    #   "llama.attention.head_count": 24,                 <- attention runs 24 ways at once
+    #   "llama.attention.head_count_kv": 8,               <- heads share 8 key/value sets (smaller KV cache)
+    #   "llama.attention.key_length": 128,
+    #   "llama.attention.layer_norm_rms_epsilon": 1e-05,
+    #   "llama.attention.value_length": 128,
+    #   "llama.block_count": 28,                          <- 28 LAYERS, stacked
+    #   "llama.context_length": 131072,                   <- max tokens it can read at once
+    #   "llama.embedding_length": 3072,                   <- numbers per token (the vector)
+    #   "llama.feed_forward_length": 8192,                <- size of the "memory lookup" inside each layer
+    #   "llama.rope.dimension_count": 128,                <- RoPE = how the model knows token ORDER
+    #   "llama.rope.freq_base": 500000,
+    #   "llama.vocab_size": 128256,                       <- different tokens it knows
+    #   "tokenizer.ggml.bos_token_id": 128000,            <- <|begin_of_text|>, added at the start of every call
+    #   "tokenizer.ggml.eos_token_id": 128009,            <- <|eot_id|>, the <end> token it picks to stop
+    #   "tokenizer.ggml.merges": [],                      <- (empty: Ollama leaves out the big lists)
+    #   "tokenizer.ggml.model": "gpt2",                   <- BPE tokenizer, same family as GPT-2
+    #   "tokenizer.ggml.pre": "llama-bpe",
+    #   "tokenizer.ggml.token_type": [],
+    #   "tokenizer.ggml.tokens": []
+    # }}
+    # 24 heads x 128 (key_length) = 3,072 = embedding_length -- the heads split the vector between them.
 
     print("\nSTEP 2: the chat template -- what the model REALLY reads")
     prompt = ("<|start_header_id|>user<|end_header_id|>\n\n"
