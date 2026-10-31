@@ -7,11 +7,13 @@ CONCEPT IN ONE LINE:
                                                      (basics: lesson 14, details: simple/10)
 
    INDEXING (run once, or when docs change)
-   ┌──────────┐   ┌───────────────┐   ┌──────────────┐   ┌──────────────────────┐
-   │ handbook │──▶│ chunk         │──▶│ embed each   │──▶│ save index to disk   │
-   │ (long)   │   │ ~2 sentences, │   │ chunk        │   │ .rag_index.json      │
-   └──────────┘   │ 1 overlapping │   └──────────────┘   │ (a mini vector DB)   │
-                  └───────────────┘                      └──────────────────────┘
+   ┌──────────┐   ┌────────────────┐   ┌──────────────┐   ┌──────────────────────┐
+   │ handbook │──▶│ chunk per      │──▶│ embed each   │──▶│ save index to disk   │
+   │ (long)   │   │ section: 2     │   │ chunk        │   │ .rag_index.json      │
+   └──────────┘   │ sentences, 1   │   └──────────────┘   │ (a mini vector DB)   │
+                  │ overlapping,   │                      └──────────────────────┘
+                  │ + section title│
+                  └────────────────┘
    QUERY (every question)
    question ──▶ embed ──▶ score vs all chunks ──▶ best score too low? ── yes ──▶ "I don't know"
                                                        │ no                      (no LLM call)
@@ -32,15 +34,24 @@ from pathlib import Path
 from ollama_client import ask, embed
 
 HANDBOOK = """
-Acme Handbook. Acme sells smart lamps online. Our head office is in Berlin.
-Refunds. You can return a product within 14 days of delivery. The product must be unused.
+# About
+Acme sells smart lamps online. Our head office is in Berlin.
+
+# Refunds
+You can return a product within 14 days of delivery. The product must be unused.
 Refund money goes back to the original card. It takes 5 to 7 business days to arrive.
 Shipping costs are not refunded. Damaged products are refunded in full, including shipping.
-Shipping. We ship to all EU countries and the UK. Standard delivery takes 3 to 5 days.
+
+# Shipping
+We ship to all EU countries and the UK. Standard delivery takes 3 to 5 days.
 Express delivery takes 1 day and costs 9 euros. Orders over 50 euros ship for free.
-Warranty. All lamps have a 2 year warranty. The warranty covers electrical faults.
+
+# Warranty
+All lamps have a 2 year warranty. The warranty covers electrical faults.
 It does not cover water damage or broken glass caused by the customer.
-Accounts. To reset your password, use the Forgot password link on the login page.
+
+# Accounts
+To reset your password, use the Forgot password link on the login page.
 Accounts with no login for 3 years are deleted. We email you 30 days before deletion.
 """
 INDEX_FILE = Path(__file__).with_name(".rag_index.json")
@@ -48,11 +59,16 @@ MIN_SCORE = 0.45          # below this the best chunk is "not related" -> don't 
 CHUNK_SIZE, OVERLAP = 2, 1   # sentences per chunk, sentences shared with the next chunk
 
 
-# STEP 1: chunk -- 2 sentences per chunk, each chunk repeats 1 sentence of the previous one
+# STEP 1: chunk -- split by section ("# Title"), then 2 sentences per chunk with 1 overlapping.
+# Each chunk starts with its section title, so "It takes 5 to 7 days" still says WHAT takes 5-7 days.
 def chunk(text, size=CHUNK_SIZE, overlap=OVERLAP):
-    sentences = [s.strip() + "." for s in text.replace("\n", " ").split(".") if s.strip()]
-    step = size - overlap
-    return [" ".join(sentences[i:i + size]) for i in range(0, len(sentences) - overlap, step)]
+    chunks = []
+    for section in text.split("# ")[1:]:                     # never mix two sections in one chunk
+        title, body = section.split("\n", 1)
+        sentences = [s.strip() + "." for s in body.replace("\n", " ").split(".") if s.strip()]
+        for i in range(0, max(len(sentences) - overlap, 1), size - overlap):
+            chunks.append(f"{title}: " + " ".join(sentences[i:i + size]))
+    return chunks
 
 
 # STEP 2: build or load the index (only re-embed when the handbook OR the chunk settings changed)
