@@ -13,6 +13,8 @@ and the rest of the file is diagrams. Every file follows the same pattern:
 The numbers in the diagrams are the same as the script output, and the output is the same
 on every run. So run the file and read the diagram next to the output.
 
+**Videos:** [VIDEOS.md](VIDEOS.md) lists a video or visual tool for each lesson, plus a weekly plan.
+
 The full, detailed lessons are still in the parent folder. Open them when you want more depth.
 
 ## The big picture: how one chat request works
