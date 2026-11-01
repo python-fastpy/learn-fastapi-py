@@ -12,6 +12,10 @@ WHERE YOU ARE IN THE JOURNEY:
                                                                                           │
      you see ◀── [12 response] ◀── 11 stop? ◀── 10 loop ◀── 09 detokenize ◀── 08 pick ◀── 07 softmax
 
+  CONTEXT HERE: prompt_eval_count + eval_count = how much of the window this call used.
+  /api/generate also returns "context" -- the token IDs of the whole exchange (below).
+  Map of the context in all steps: 00_the_journey.py.
+
 WHAT HAPPENS:
 
    Inside, the model produced token IDs one at a time (08-10) and Ollama turned each into

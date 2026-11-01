@@ -11,6 +11,10 @@ WHERE YOU ARE IN THE JOURNEY:
                                                                                           │
      you see ◀── 12 response ◀── 11 stop? ◀── [10 loop] ◀── 09 detokenize ◀── 08 pick ◀── 07 softmax
 
+  CONTEXT HERE: the loop is where the context GROWS -- every picked token is appended
+  (22 -> 23 -> 24 ...). How big it may get: "THE CONTEXT WINDOW" below.
+  Map of the context in all steps: 00_the_journey.py.
+
 WHAT HAPPENS -- the real loop for "Count from 1 to 5, separated by spaces." (PART 1):
 
    step   input tokens            model run (03-08)        picked     input grows to

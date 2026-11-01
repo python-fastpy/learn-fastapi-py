@@ -38,6 +38,71 @@ WHAT IS 128,256? -- the size of llama3.2's VOCABULARY, the fixed list of every t
 
   It belongs to the MODEL: GPT-2 has 50,257 tokens, OpenAI's newer tokenizers ~200,000.
 
+VOCABULARY vs PARAMETERS -- two different numbers people mix up:
+
+     llama3.2   VOCABULARY  128,256         PARAMETERS  3,212,749,888  (~3.2 B, the "3B")
+                = the TOKENS it knows       = the learned NUMBERS that decide what it does
+
+  A PARAMETER (also called a WEIGHT) is one learned number that gets multiplied with the
+  input (05_layers.py, "WHAT IS A WEIGHT?"). Nothing in the model is a rule or a fact --
+  just 3.2 billion of these numbers, set by training.
+
+     part              vocabulary                        parameters
+     what it is        a list of text pieces             a box of decimal numbers
+     example           tokens[9822] == "ĠFrance"         blk.0.attn_norm.weight[0] = 0.0645
+     size              128,256 entries                   3,212,749,888 numbers
+     made by           BPE, run ONCE before training     training (start random, nudge, repeat)
+     changes?          never                             only during training, then frozen
+     answers           "which pieces can it read/write"  "what does it DO with them"
+     where in GGUF     tokenizer.ggml.tokens             the tensors (token_embd, blk.0-27.*)
+
+  WHERE THE 3.2 B PARAMETERS LIVE (full table in 05):
+
+     embedding table (04)     128,256 x 3,072       394,002,432   12.3%   <- one row per token
+     28 layers (05)           28 x 100,669,440    2,818,744,320   87.7%   <- the "thinking"
+     the rest                 output_norm, rope_freqs     3,136    ~0%
+                                                  ─────────────
+     total                                        3,212,749,888
+
+  THE LINK: the vocabulary SIZE sets the size of the embedding table. Each of the 128,256
+  tokens gets 3,072 parameters (its vector, lesson 04). The vocabulary is NOT counted as
+  parameters -- the strings "ĠFrance", "Paris" are not learned -- but their VECTORS are.
+  The same table is reused at the end to score every token (06), so it is counted once.
+
+  SAME VOCABULARY, DIFFERENT SIZES -- all Llama 3 models share the same 128,256 tokens:
+
+     model           vector size   layers   parameters   embedding table share
+     llama3.2 1B     2,048         16       ~1.2 B       128,256 x 2,048 = 263 M   ~21%
+     llama3.2 3B     3,072         28       ~3.2 B       128,256 x 3,072 = 394 M   ~12%
+     llama3.1 70B    8,192         80       ~70 B        128,256 x 8,192 = 1.05 B  ~1.5%
+
+  Bigger models add WIDER vectors and MORE layers, not more tokens. Vocabulary = what it can
+  read; parameters = how much it knows. "3B" / "70B" in a model name always means PARAMETERS.
+
+  OTHER MODEL FAMILIES -- same idea, different choices (public config files; GPT/Claude
+  don't publish theirs):
+
+     model           vocabulary   vector   layers   parameters   embedding table
+     GPT-2 small         50,257      768       12      124 M      38.6 M   31%
+     Mistral 7B          32,000    4,096       32      7.2 B     131 M x 2  3.6%  (in + out)
+     llama3.2 3B        128,256    3,072       28      3.2 B     394 M     12%
+     Gemma 2 2B         256,000    2,304       26      2.6 B     590 M     23%
+     GPT-4o            ~200,000   (secret) (secret)   (secret)   -
+     Claude             (secret)  (secret) (secret)   (secret)   -
+
+  HOW IT WORKS IS THE SAME FOR ALL OF THEM:
+     text -> tokenizer (its OWN vocabulary) -> IDs -> embedding table -> layers ->
+     one score per vocabulary entry -> pick a token -> repeat
+  WHAT DIFFERS:
+     - the tokenizer: BPE on bytes (GPT-2, Llama 3, GPT-4o) or SentencePiece (Mistral, Gemma)
+     - the vocabulary size -- a TRADE-OFF:
+          small (32 k)    fewer parameters, but more tokens per text (slower, uses more context)
+          large (256 k)   fewer tokens per text (esp. non-English), but a bigger table to store
+     - whether the output scoring reuses the embedding table ("tied": GPT-2, Llama 3.2, Gemma)
+       or has its own copy (Mistral 7B -> its vocabulary costs parameters twice)
+     - width (vector size) and depth (layers) -> that's where most parameters come from
+  A small model can have a HUGE vocabulary share (Gemma 2B: 23%); a big one hardly any.
+
 WHERE YOU ARE IN THE JOURNEY:
 
      you type ─▶ 01 request ─▶ 02 template ─▶ [03 tokens] ─▶ 04 vectors ─▶ 05 layers ─▶ 06 scores
@@ -48,6 +113,11 @@ WHERE YOU ARE IN THE JOURNEY:
   OUT:  a list of IDs, e.g. 22 of them:
         [128000, 128006, 882, 128007, 271, 12833, 279, 11914, 449, 832, 3492, 25,
          578, 6864, 315, 9822, 374, 128009, 128006, 78191, 128007, 271]
+
+  CONTEXT HERE: this list IS the start of the context. The window (num_ctx, 4,096) is
+  counted in TOKENS, not characters -- 22 used here, 4,074 left for the answer. A prompt
+  longer than the window is cut at this point, silently (10_loop.py PART 4: 618 -> 66).
+  Map of the context in all steps: 00_the_journey.py.
 
 FIRST: CHARACTERS vs TOKENS -- two different ways to count the same text
 

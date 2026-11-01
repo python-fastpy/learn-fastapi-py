@@ -14,6 +14,11 @@ WHERE YOU ARE IN THE JOURNEY:
   IN:   22 tokens x 3,072 numbers   (from 04: one embedding row per token)
   OUT:  22 tokens x 3,072 numbers   (same shape -- 06 uses only the LAST one)
 
+  CONTEXT HERE: this is where the context is USED. Attention is the only step in which a
+  token looks at the OTHER tokens -- all earlier ones in the context. Their K and V are
+  kept in the KV cache (10_loop.py), which is why a bigger window needs more memory.
+  Map of the context in all steps: 00_the_journey.py.
+
 WHAT HAPPENS -- ONE LAYER, TENSOR BY TENSOR (real names from the model file):
 
      x  (one token's 3,072 numbers)

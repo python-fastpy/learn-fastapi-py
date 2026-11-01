@@ -11,6 +11,10 @@ WHERE YOU ARE IN THE JOURNEY:
                                                                                           │
      you see ◀── 12 response ◀── 11 stop? ◀── 10 loop ◀── 09 detokenize ◀── 08 pick ◀── 07 softmax
 
+  CONTEXT HERE: the request is where you SET the window size -- "options": {"num_ctx": ...}.
+  Not set = Ollama's default 4,096 tokens (the model could do 131,072). A bigger window
+  reserves more memory for the KV cache. Map of the context in all steps: 00_the_journey.py.
+
 WHAT HAPPENS:
 
    ┌──────────────────────────┐

@@ -13,6 +13,34 @@ THE MAP (read left to right, then back along the bottom):
                                                 │
                                                 └──▶ not finished? back to 04 with one more token
 
+WHERE THE CONTEXT FITS IN -- not a step, but the TOKEN LIST that flows through the steps:
+
+   CONTEXT = every token the model can see right now (prompt + answer so far).
+   CONTEXT WINDOW = the MAX length of that list: 131,072 trained, 4,096 used by Ollama (num_ctx).
+
+     you type ─▶ 01 request ─▶ 02 template ─▶ 03 tokens ─▶ 04 vectors ─▶ 05 layers ─▶ 06 scores
+                    │                            │                          │              │
+             num_ctx SET HERE           CONTEXT IS BORN           CONTEXT IS READ          │
+             (options, default          your prompt = 22 IDs      attention: each token    │
+              4,096 -> memory for       (longer than num_ctx?     looks back at ALL the    │
+              the KV cache)              -> cut, silently)        earlier ones (KV cache)  │
+                                                                                           │
+     you see ◀── 12 response ◀── 11 stop? ◀── 10 loop ◀── 09 detokenize ◀── 08 pick ◀── 07 softmax
+                     │               │            │
+              "context": [IDs]  CONTEXT FULL?  CONTEXT GROWS
+              the whole list    drop the old   new token appended: 22 -> 23 -> 24 ...
+              returned to you   tokens, keep   then back to 04 with the longer list
+                                going ("context
+                                shift") -> it forgets the start
+
+   lesson   what it shows about the context
+   01       num_ctx option; /api/ps "context_length": 4096
+   03       the prompt's token count = how much of the window you use before the answer starts
+   05       attention is the ONLY step that looks across tokens -- that's what "using context" means
+   10       the window limit, the KV cache, and a live demo of a prompt being cut (PART 4)
+   11       what happens when the window is full
+   12       the "context" field: the token IDs of the whole exchange
+
 ONE EXAMPLE, ALL THE WAY THROUGH (real llama3.2 values, the same prompt as 01b):
 
    step              what goes IN                     what comes OUT                     file
@@ -40,28 +68,108 @@ ONE EXAMPLE, ALL THE WAY THROUGH (real llama3.2 values, the same prompt as 01b):
 
    For "Paris." the steps 04-11 run 3 times:   'Paris'   then   '.'   then   <end>
 
-WHO DOES EACH STEP:
+WHO DOES EACH STEP -- the same 12 steps, four different places they run:
+
+   OLLAMA (this folder):
 
    ┌──────────────────┐    ┌──────────────────────────────────────────────────────────────┐
-   │ YOUR CODE        │    │ OLLAMA SERVER (a program on your machine, port 11434)         │
+   │ YOUR CODE        │    │ OLLAMA SERVER (a program on your machine, port 11434)        │
    │                  │    │                                                              │
-   │  you type        │───▶│  01 receive request, load the model file into memory          │
-   │                  │    │  02 apply the chat template                                   │
-   │                  │    │  03 tokenize (rules come FROM the model file)                 │
+   │  you type        │───▶│  01 receive request, load the model file into memory         │
+   │                  │    │  02 apply the chat template                                  │
+   │                  │    │  03 tokenize (rules come FROM the model file)                │
    │                  │    │   ┌────────────────────────────────────────────────────────┐ │
    │                  │    │   │ THE MODEL (3.2 billion weights from Meta, in the GGUF) │ │
    │                  │    │   │  04 embedding table lookup                             │ │
    │                  │    │   │  05 28 layers                                          │ │
    │                  │    │   │  06 output table -> scores                             │ │
    │                  │    │   └────────────────────────────────────────────────────────┘ │
-   │                  │    │  07 softmax   08 pick (uses YOUR temperature etc.)            │
-   │                  │    │  09 ID -> text   10 loop   11 stop check                      │
-   │  you see     ◀───│────│  12 send the response                                         │
+   │                  │    │  07 softmax   08 pick (uses YOUR temperature etc.)           │
+   │                  │    │  09 ID -> text   10 loop   11 stop check                     │
+   │  you see     ◀───│────│  12 send the response                                        │
    └──────────────────┘    └──────────────────────────────────────────────────────────────┘
+   YOU SEE: the template (/api/show), token COUNTS, top probabilities (logprobs),
+   the text, done_reason, timings. The weights are on YOUR disk -- this folder
+   reads the token IDs, vectors and layer weights straight from the file.
 
-   The MODEL is only steps 04-06: numbers in, scores out. Everything else -- templates,
-   tokenizing, picking, looping, stopping -- is done by the program running the model
-   (Ollama here; OpenAI's / Anthropic's servers for their models; your code with HF).
+   OPENAI (GPT models):
+
+   ┌──────────────────┐    ┌──────────────────────────────────────────────────────────────┐
+   │ YOUR CODE        │    │ OPENAI'S SERVERS (api.openai.com, in their data centres)     │
+   │                  │    │                                                              │
+   │  you type        │───▶│  01 receive request, check API key, limits, billing          │
+   │ or: the ChatGPT  │    │  02 apply THEIR chat format (hidden from you)                │
+   │     app          │    │  03 tokenize: tiktoken (e.g. o200k_base, a public library)   │
+   │                  │    │   ┌────────────────────────────────────────────────────────┐ │
+   │                  │    │   │ THE MODEL (GPT weights: private, not downloadable)     │ │
+   │                  │    │   │  04-06 same idea: embed -> layers -> scores            │ │
+   │                  │    │   │  (sizes and layer counts are not published)            │ │
+   │                  │    │   └────────────────────────────────────────────────────────┘ │
+   │                  │    │  07 softmax   08 pick (your temperature, top_p, seed)        │
+   │                  │    │  09 ID -> text   10 loop   11 stop check (+ safety checks)   │
+   │  you see     ◀───│────│  12 send the response (JSON, or an SSE stream) + usage       │
+   └──────────────────┘    └──────────────────────────────────────────────────────────────┘
+   YOU SEE: the text, usage token counts, finish_reason, optional top logprobs.
+   HIDDEN: the template, the weights, the layers. Token IDs only if you run
+   tiktoken yourself. You pay per token, counted on their side. (hedged)
+
+   ANTHROPIC (Claude models):
+
+   ┌──────────────────┐    ┌──────────────────────────────────────────────────────────────┐
+   │ YOUR CODE        │    │ ANTHROPIC'S SERVERS (api.anthropic.com)                      │
+   │                  │    │                                                              │
+   │  you type        │───▶│  01 receive request, check x-api-key, limits, billing        │
+   │ or: Claude.ai,   │    │  02 apply THEIR chat format (hidden); system = own field     │
+   │     Claude Code  │    │  03 tokenize: Claude's own tokenizer (not published)         │
+   │                  │    │   ┌────────────────────────────────────────────────────────┐ │
+   │                  │    │   │ THE MODEL (Claude weights: private, not downloadable)  │ │
+   │                  │    │   │  04-06 same idea: embed -> layers -> scores            │ │
+   │                  │    │   │  (sizes and layer counts are not published)            │ │
+   │                  │    │   └────────────────────────────────────────────────────────┘ │
+   │                  │    │  07 softmax   08 pick (your temperature, top_p, top_k)       │
+   │                  │    │  09 ID -> text   10 loop   11 stop check                     │
+   │  you see     ◀───│────│  12 send the response (JSON, or SSE events) + usage          │
+   └──────────────────┘    └──────────────────────────────────────────────────────────────┘
+   YOU SEE: the text, usage input/output tokens, stop_reason. HIDDEN: the template,
+   the tokenizer, token IDs, probabilities (no logprobs), the weights. A token COUNT
+   is available from the token-counting endpoint. You pay per token. (hedged)
+
+   HUGGING FACE transformers (on your machine, no server):
+
+   ┌──────────────────┐    ┌──────────────────────────────────────────────────────────────┐
+   │ YOU              │    │ YOUR PYTHON PROCESS (transformers library -- you run it)     │
+   │                  │    │                                                              │
+   │  you type        │───▶│  01 from_pretrained(): download from the Hub once            │
+   │                  │    │     (~/.cache/huggingface), load weights into RAM / GPU      │
+   │                  │    │  02 tokenizer.apply_chat_template(messages)                  │
+   │                  │    │  03 tokenizer(text) -> input_ids         (tokenizer.json)    │
+   │                  │    │   ┌────────────────────────────────────────────────────────┐ │
+   │                  │    │   │ THE MODEL (the SAME Llama 3.2 weights -- public)       │ │
+   │                  │    │   │  04-06 model(input_ids).logits -> all 128,256 scores   │ │
+   │                  │    │   │  (safetensors, 16-bit: ~6.4 GB vs Ollama's 2.0 GB)     │ │
+   │                  │    │   └────────────────────────────────────────────────────────┘ │
+   │                  │    │  07-11 model.generate(): softmax, pick, loop, stop at EOS    │
+   │                  │    │        (or write the loop yourself around model())           │
+   │  you see     ◀───│────│  12 tokenizer.decode(output_ids) -> you print it             │
+   └──────────────────┘    └──────────────────────────────────────────────────────────────┘
+   YOU SEE: everything -- token IDs, vectors (output_hidden_states=True), every layer,
+   all raw scores. Nothing is hidden, because it all runs in YOUR code. (Hugging Face
+   also offers hosted inference APIs -- those work like the OpenAI / Anthropic boxes.)
+
+   SIDE BY SIDE:
+
+   question                 Ollama             OpenAI            Anthropic         HF transformers
+   where does it run?       your machine       their servers     their servers     your machine
+   the weights              downloaded (GGUF)  private           private           downloaded
+                                                                                   (safetensors)
+   the chat template        visible            hidden            hidden            visible
+   token IDs                count only (03     only via          count only        visible
+                            rebuilds them)     tiktoken
+   probabilities            top logprobs       top logprobs      none              all raw scores
+   cost                     free (your PC)     per token         per token         free (your PC)
+
+   In ALL four, the MODEL is only steps 04-06: numbers in, scores out. Everything else --
+   templates, tokenizing, picking, looping, stopping -- is done by the program around it.
 
 WHAT IS "THE MODEL"?
 
@@ -79,6 +187,37 @@ WHAT IS "THE MODEL"?
      between calls -- a chat works because the app resends everything (01_request.py)
    - in Ollama, "llama3.2" = one GGUF file (weights + shape + vocabulary + Meta's template)
      plus Ollama's own template and stop words, listed in a manifest (01_request.py)
+
+   WHAT DOES "llama3.2" / "Llama 3.2 3B" MEAN?  -- every part of the name:
+
+      Llama   3   .2   3B   Instruct   Q4_K_M
+        │     │    │    │      │         └─ QUANTIZATION: each weight squeezed to ~4-5 bits
+        │     │    │    │      │            (16-bit original ≈ 6.4 GB -> this file ≈ 2.0 GB)
+        │     │    │    │      └─ fine-tuned to CHAT (answer, then stop) -- not the "base" model
+        │     │    │    └─ SIZE: ~3 Billion PARAMETERS (exactly 3,212,749,888, rounded to "3B")
+        │     │    └─ point release of generation 3 (September 2024)
+        │     └─ GENERATION 3 (new training data, new 128,256 vocabulary vs Llama 2's 32,000)
+        └─ the model FAMILY, made by Meta
+
+   CAREFUL: "3.2" is the VERSION, "3B" is the SIZE. It is NOT "3.2 B parameters" --
+   that the real count is also ~3.2 billion is a coincidence. llama3.2:1b is version 3.2 too.
+
+   THE LLAMA 3 FAMILY (all share the same 128,256-token vocabulary -- 03_tokens.py):
+      version     released    sizes (parameters)          note
+      Llama 3     Apr 2024    8B, 70B                     8k context
+      Llama 3.1   Jul 2024    8B, 70B, 405B               128k context
+      Llama 3.2   Sep 2024    1B, 3B  (+ 11B, 90B vision)  128k context, small for laptops
+      Llama 3.3   Dec 2024    70B                         better 70B
+
+   OLLAMA NAMES -- "name:tag", the tag picks size / variant:
+      llama3.2            = llama3.2:latest = llama3.2:3b   (3B, Instruct, Q4_K_M, 2.0 GB)
+      llama3.2:1b         the 1B one        (same vocabulary, 16 layers instead of 28)
+      llama3.1:70b        a different version AND size   (~40 GB)
+      `ollama show llama3.2` prints: parameters 3.2B, quantization Q4_K_M, context 131072
+
+   CONTEXT = how many TOKENS (prompt + answer) the model can look at at once.
+      131,072 is what Meta TRAINED it for; Ollama only USES 4,096 unless you set num_ctx.
+      Longer than that and old tokens are dropped -- the model forgets. Full story: 10_loop.py.
 
    LIFE OF A MODEL:
       pre-training    predict the next token over trillions     -> "base" model: continues

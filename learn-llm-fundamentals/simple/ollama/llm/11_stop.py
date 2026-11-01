@@ -11,6 +11,9 @@ WHERE YOU ARE IN THE JOURNEY:
                                                                                           │
      you see ◀── 12 response ◀── [11 stop?] ◀── 10 loop ◀── 09 detokenize ◀── 08 pick ◀── 07 softmax
 
+  CONTEXT HERE: a FULL context is NOT a stop reason in Ollama -- old tokens are dropped
+  and it keeps going (check (5) below). Map of the context in all steps: 00_the_journey.py.
+
 WHAT HAPPENS -- after EVERY picked token the server checks, in effect:
 
    picked token
