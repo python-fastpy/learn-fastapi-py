@@ -64,6 +64,20 @@ VOCABULARY vs PARAMETERS -- two different numbers people mix up:
                                                   ─────────────
      total                                        3,212,749,888
 
+  WHAT IS 3,072? -- the VECTOR SIZE (also: "embedding size", "hidden size", "model width"):
+     - every token ID becomes a row of 3,072 decimal numbers = its "meaning" (lesson 04)
+     - that row keeps the SAME size through all 28 layers: 3,072 in -> 3,072 out (05)
+     - picture 3,072 sliders describing one token. Training decided what they mean; no
+       single slider is human-readable ("place", "formal", ... is spread over many)
+     - Meta's DESIGN choice, stored in the GGUF as llama.embedding_length = 3072
+     - wider = more detail per token, but EVERY layer grows too -> more parameters
+       (GPT-2 768, llama3.2 1B 2,048, 3B 3,072, Mistral 7B 4,096, llama3.1 70B 8,192)
+
+  THE THREE BIG NUMBERS OF llama3.2 3B:
+     128,256          how many TOKENS it knows          (vocabulary, this lesson)
+     3,072            how many NUMBERS per token        (vector size, 04)
+     3,212,749,888    how many LEARNED numbers in total (parameters, 05)
+
   THE LINK: the vocabulary SIZE sets the size of the embedding table. Each of the 128,256
   tokens gets 3,072 parameters (its vector, lesson 04). The vocabulary is NOT counted as
   parameters -- the strings "ĠFrance", "Paris" are not learned -- but their VECTORS are.
