@@ -6,6 +6,38 @@ CONCEPT IN ONE LINE:
   with its POSITION in that list (its ID). Here we build the REAL llama3.2 tokenizer in
   plain Python, straight from the model file, and check it against Ollama.
 
+WHAT IS 128,256? -- the size of llama3.2's VOCABULARY, the fixed list of every token it knows:
+
+     position (ID)   token
+     0               "!"
+     1               '"'
+     791             "The"
+     6864            " capital"
+     9822            " France"
+     60704           "Paris"
+     127999          (the last normal token)
+     128000          <|begin_of_text|>     ┐
+     128009          <|eot_id|>            ├─ 256 special tokens
+     128255          (reserved, unused)    ┘
+     (all the positions in between hold the other tokens -- 128,256 in total)
+
+     part              count      what they are
+     normal tokens     128,000    word pieces, letters, digits, single bytes
+     special tokens        256    markers like <|eot_id|> (8 used, 248 reserved spares)
+     total             128,256
+
+  WHERE IT COMES FROM: Meta built the list ONCE, before training (BPE, step 5 below), stopped
+  at 128,000 normal tokens and added 256 special slots. Stored in the model file as
+  llama.vocab_size = 128256 (Ollama's /api/show shows the same).
+
+  WHY IT MATTERS IN THE OTHER LESSONS:
+     03 tokens    every ID is a position in this list -> always between 0 and 128,255
+     04 vectors   the embedding table has 128,256 rows, one per token
+     06 scores    the model gives 128,256 scores every step, one per possible next token
+     08 pick      every generated token is ONE choice out of these 128,256
+
+  It belongs to the MODEL: GPT-2 has 50,257 tokens, OpenAI's newer tokenizers ~200,000.
+
 WHERE YOU ARE IN THE JOURNEY:
 
      you type ─▶ 01 request ─▶ 02 template ─▶ [03 tokens] ─▶ 04 vectors ─▶ 05 layers ─▶ 06 scores
