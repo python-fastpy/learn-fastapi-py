@@ -47,6 +47,13 @@ def main():
     print("STEP 1: create a custom model 'acme-support' from llama3.2")
     r = post("/api/create", {"model": "acme-support", "from": CHAT_MODEL, "system": SYSTEM,
                              "parameters": {"temperature": 0}, "stream": False})
+    # ^ the same settings in other APIs:
+    #   API       | endpoint         | system prompt           | temperature
+    #   ----------+------------------+-------------------------+---------------------------------
+    #   Ollama    | POST /api/create | "system": SYSTEM        | "parameters": {"temperature": 0}
+    #   OpenAI    | (not available)  | {"role": "system", ...} | "temperature": 0
+    #   Anthropic | (not available)  | "system": SYSTEM        | "temperature": 0
+    #   Only Ollama bakes these in (others: per request). Fine-tuning: OpenAI POST /v1/fine_tuning/jobs, Anthropic none.
     print("   status:", r.get("status"))
     print("   (same as a Modelfile:  FROM llama3.2 / SYSTEM \"...\" / PARAMETER temperature 0)")
 
@@ -54,7 +61,21 @@ def main():
     for model in ("acme-support", CHAT_MODEL):
         r = post("/api/chat", {"model": model, "messages": QUESTION, "stream": False,
                                "options": {"num_predict": 80}})
+        # ^ the same call in other APIs:
+        #   API          | endpoint                  | stream          | max output tokens
+        #   -------------+---------------------------+-----------------+------------------
+        #   Ollama       | POST /api/chat            | "stream": False | "num_predict": 80
+        #   OpenAI       | POST /v1/chat/completions | "stream": false | "max_tokens": 80
+        #   Anthropic    | POST /v1/messages         | "stream": false | "max_tokens": 80
+        #   Hugging Face | model.generate(...)       | -               | max_new_tokens=80
+        #   Ollama wraps num_predict in "options"; Anthropic requires max_tokens.
         print(f"   {model:<13}: {r['message']['content'].strip()[:200]}")
+        # ^ the same field in other APIs:
+        #   API       | reply text
+        #   ----------+--------------------------------------
+        #   Ollama    | r["message"]["content"]
+        #   OpenAI    | r["choices"][0]["message"]["content"]
+        #   Anthropic | r["content"][0]["text"]
     print("   -> acme-support follows the baked-in rules; plain llama3.2 does not know them.")
 
     print("\nSTEP 3: what fine-tuning would add (not run here -- it needs a GPU and data)")

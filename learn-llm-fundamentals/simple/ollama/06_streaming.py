@@ -29,6 +29,13 @@ CHAT_MODEL = "llama3.2"
 
 def stream_chat(question):
     body = {"model": CHAT_MODEL, "stream": True, "options": {"temperature": 0},
+            # ^ the same settings in other APIs:
+            #   API       | streaming      | temperature
+            #   ----------+----------------+-----------------
+            #   Ollama    | "stream": True | "temperature": 0
+            #   OpenAI    | "stream": true | "temperature": 0
+            #   Anthropic | "stream": true | "temperature": 0
+            #   Ollama streams 1 JSON per line, the others SSE "data: ..." lines; only Ollama uses "options".
             "messages": [{"role": "user", "content": question}]}
     start, first = time.time(), None
     with httpx.stream("POST", OLLAMA + "/api/chat", json=body, timeout=300) as resp:
@@ -40,10 +47,22 @@ def stream_chat(question):
             if first is None:
                 first = time.time() - start          # time to first token (TTFT)
             print(part["message"]["content"], end="", flush=True)
+            # ^ the same field in other APIs:
+            #   API       | streamed text piece
+            #   ----------+------------------------------------------------------
+            #   Ollama    | part["message"]["content"]
+            #   OpenAI    | part["choices"][0]["delta"]["content"]
+            #   Anthropic | part["delta"]["text"]   (event "content_block_delta")
             if part["done"]:
                 total = time.time() - start
                 print(f"\n\n  first token after {first:.2f} s, full answer after {total:.2f} s, "
                       f"{part['eval_count']} tokens")
+                # ^ the same field in other APIs:
+                #   API       | output tokens
+                #   ----------+-----------------------------------
+                #   Ollama    | part["eval_count"]
+                #   OpenAI    | part["usage"]["completion_tokens"]
+                #   Anthropic | part["usage"]["output_tokens"]
 
 
 def main():

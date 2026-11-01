@@ -35,6 +35,12 @@ def ask(question, **extra):
     }
     r = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300).raise_for_status().json()
     return r["message"]["content"].strip()
+    # ^ the same field in other APIs:
+    #   API       | answer text
+    #   ----------+--------------------------------------
+    #   Ollama    | r["message"]["content"]
+    #   OpenAI    | r["choices"][0]["message"]["content"]
+    #   Anthropic | r["content"][0]["text"]
 
 
 def main():
@@ -42,6 +48,14 @@ def main():
 
     print("STEP 1: answer directly (no room to think)")
     print("  ", ask(PROBLEM + " Reply with the number only.", options={"temperature": 0, "num_predict": 5}))
+    # ^ the same settings in other APIs:
+    #   API          | max output tokens            | temperature
+    #   -------------+------------------------------+-----------------
+    #   Ollama       | "num_predict": 5             | "temperature": 0
+    #   OpenAI       | "max_tokens": 5              | "temperature": 0
+    #   Anthropic    | "max_tokens": 5   (required) | "temperature": 0
+    #   Hugging Face | max_new_tokens=5             | do_sample=False
+    #   Ollama puts num_predict + temperature inside "options"; the others put them at top level.
 
     print("\nSTEP 2: ask for the steps first (chain of thought)")
     print("  ", ask(PROBLEM + " Think step by step, then give the final answer on the last line.",
@@ -49,6 +63,12 @@ def main():
 
     print(f"\nSTEP 3: a real thinking model ({THINKING_MODEL})")
     tags = httpx.get(OLLAMA + "/api/tags", timeout=30).raise_for_status().json()
+    # ^ the same endpoint in other APIs:
+    #   API       | list models
+    #   ----------+---------------
+    #   Ollama    | GET /api/tags
+    #   OpenAI    | GET /v1/models
+    #   Anthropic | GET /v1/models
     installed = [m["name"] for m in tags["models"]]
     if THINKING_MODEL not in installed:
         print(f"   not installed -- to try it:  ollama pull {THINKING_MODEL}")
@@ -58,13 +78,31 @@ def main():
         "messages": [{"role": "user", "content": PROBLEM}],
         "stream": False,
         "think": True,                      # return the steps in message.thinking
+        # ^ the same setting in other APIs:
+        #   API       | turn on thinking
+        #   ----------+-------------------------------------------------------------------
+        #   Ollama    | "think": True
+        #   OpenAI    | "reasoning_effort": "low" / "medium" / "high"   (reasoning models)
+        #   Anthropic | "thinking": {"type": "enabled", "budget_tokens": N}
         "options": {"temperature": 0},
     }
     r = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300).raise_for_status().json()
     thinking = r["message"].get("thinking", "")
+    # ^ the same field in other APIs:
+    #   API       | thinking text
+    #   ----------+----------------------------------
+    #   Ollama    | r["message"]["thinking"]
+    #   OpenAI    | (mostly hidden)
+    #   Anthropic | "thinking" blocks in r["content"]
     print(f"   thinking ({len(thinking)} chars): {thinking[:300]!r}...")
     print(f"   answer: {r['message']['content'].strip()}")
     print(f"   output tokens: {r['eval_count']}  <- the thinking is included, so it costs more")
+    # ^ the same field in other APIs:
+    #   API       | output tokens
+    #   ----------+--------------------------------
+    #   Ollama    | r["eval_count"]
+    #   OpenAI    | r["usage"]["completion_tokens"]
+    #   Anthropic | r["usage"]["output_tokens"]
 
 
 if __name__ == "__main__":

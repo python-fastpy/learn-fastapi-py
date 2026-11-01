@@ -56,6 +56,14 @@ def embed(texts):
     """Text(s) -> list of vectors, one raw POST to Ollama's /api/embed."""
     body = {"model": EMBED_MODEL, "input": texts}          # input = one string or a list of strings
     resp = httpx.post(OLLAMA + "/api/embed", json=body, timeout=300)   # json= sends body as JSON
+    # ^ the same call in other APIs:
+    #   API          | endpoint                 | sent            | vectors in reply
+    #   -------------+--------------------------+-----------------+------------------------------------
+    #   Ollama       | POST /api/embed          | "input": texts  | r["embeddings"]
+    #   OpenAI       | POST /v1/embeddings      | "input": texts  | [d["embedding"] for d in r["data"]]
+    #   Anthropic    | (not available)          | (not available) | (not available)
+    #   Hugging Face | SentenceTransformer(...) | .encode(texts)  | the return value
+    #   Anthropic has no embeddings API -- they point to Voyage AI.
     resp.raise_for_status()                                # 4xx/5xx -> exception (e.g. 404 = model not pulled)
     return resp.json()["embeddings"]
 
@@ -94,16 +102,48 @@ def ask_endpoint(body: Question):
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": q}],
         "stream": False,
         "options": {"temperature": 0, "num_predict": 200},
+        # ^ the same settings in other APIs:
+        #   API          | system message          | stream          | max output tokens  | temperature
+        #   -------------+-------------------------+-----------------+--------------------+------------------------
+        #   Ollama       | {"role": "system", ...} | "stream": False | "num_predict": 200 | "temperature": 0
+        #   OpenAI       | {"role": "system", ...} | "stream": false | "max_tokens": 200  | "temperature": 0  (0-2)
+        #   Anthropic    | "system": system        | "stream": false | "max_tokens": 200  | "temperature": 0  (0-1)
+        #   Hugging Face | -                       | -               | max_new_tokens=200 | do_sample=False
+        #   Ollama wraps these in "options"; Anthropic: "system" at top level, max_tokens required.
     }
     resp = httpx.post(OLLAMA + "/api/chat", json=payload, timeout=300)
+    # ^ the same call in other APIs:
+    #   API       | endpoint
+    #   ----------+--------------------------
+    #   Ollama    | POST /api/chat
+    #   OpenAI    | POST /v1/chat/completions
+    #   Anthropic | POST /v1/messages
     resp.raise_for_status()
     r = resp.json()
 
     # 5 + 6. check and return
     return {
         "answer": r["message"]["content"].strip(),
+        # ^ the same field in other APIs:
+        #   API       | reply text
+        #   ----------+--------------------------------------
+        #   Ollama    | r["message"]["content"]
+        #   OpenAI    | r["choices"][0]["message"]["content"]
+        #   Anthropic | r["content"][0]["text"]
         "cut_off": r.get("done_reason") == "length",
+        # ^ the same field in other APIs:
+        #   API       | field           | finished   | cut off
+        #   ----------+-----------------+------------+-------------
+        #   Ollama    | "done_reason"   | "stop"     | "length"
+        #   OpenAI    | "finish_reason" | "stop"     | "length"
+        #   Anthropic | "stop_reason"   | "end_turn" | "max_tokens"
         "sources": sources,
         "input_tokens": r.get("prompt_eval_count"),
         "output_tokens": r.get("eval_count"),
+        # ^ the same fields in other APIs:
+        #   API       | input tokens                | output tokens
+        #   ----------+-----------------------------+--------------------------------
+        #   Ollama    | r["prompt_eval_count"]      | r["eval_count"]
+        #   OpenAI    | r["usage"]["prompt_tokens"] | r["usage"]["completion_tokens"]
+        #   Anthropic | r["usage"]["input_tokens"]  | r["usage"]["output_tokens"]
     }

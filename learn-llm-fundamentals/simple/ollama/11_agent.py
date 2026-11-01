@@ -64,10 +64,29 @@ def run_agent(goal, max_steps=6):
     messages = [{"role": "system", "content": "You are a support agent. Use the tools step by step. "
                                               "Call one tool at a time."},
                 {"role": "user", "content": goal}]
+    # ^ the same message in other APIs:
+    #   API       | system prompt
+    #   ----------+-----------------------------------------------------------
+    #   Ollama    | {"role": "system", "content": "You are ..."} in "messages"
+    #   OpenAI    | {"role": "system", "content": "You are ..."} in "messages"
+    #   Anthropic | top-level "system": "You are ..."   (not a message)
     for step in range(1, max_steps + 1):
         body = {"model": CHAT_MODEL, "messages": messages, "stream": False,
                 "tools": TOOLS, "options": {"temperature": 0}}
+        # ^ the same settings in other APIs:
+        #   API       | tools                                              | temperature
+        #   ----------+----------------------------------------------------+-----------------
+        #   Ollama    | "tools": TOOLS                                     | "temperature": 0
+        #   OpenAI    | "tools": TOOLS   (same shape as Ollama)            | "temperature": 0
+        #   Anthropic | "tools": [{"name", "description", "input_schema"}] | "temperature": 0
+        #   Ollama puts temperature inside "options"; the others put it at top level.
         msg = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300).raise_for_status().json()["message"]
+        # ^ the same field in other APIs:
+        #   API       | tool calls in reply
+        #   ----------+-----------------------------------------
+        #   Ollama    | r["message"]["tool_calls"]
+        #   OpenAI    | r["choices"][0]["message"]["tool_calls"]
+        #   Anthropic | "tool_use" blocks in r["content"]
         messages.append(msg)
         if not msg.get("tool_calls"):
             print(f"  step {step}: DONE -> {msg['content']}")
@@ -80,6 +99,12 @@ def run_agent(goal, max_steps=6):
                 result = {"error": f"bad arguments: {e}"}
             print(f"  step {step}: {name}({args}) -> {result}")
             messages.append({"role": "tool", "tool_name": name, "content": json.dumps(result)})
+            # ^ the same message in other APIs:
+            #   API       | tool result message
+            #   ----------+-------------------------------------------------------------------------------------------
+            #   Ollama    | {"role": "tool", "tool_name": name, "content": ...}
+            #   OpenAI    | {"role": "tool", "tool_call_id": ..., "content": ...}
+            #   Anthropic | {"role": "user", "content": [{"type": "tool_result", "tool_use_id": ..., "content": ...}]}
     print(f"  STOPPED: reached max_steps={max_steps}")
 
 

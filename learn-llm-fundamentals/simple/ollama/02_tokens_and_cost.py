@@ -14,6 +14,13 @@ WHAT WE DO:
                     └─▶ prompt_eval_count = how many tokens went IN
                         eval_count        = how many tokens came OUT
 
+   The same counts in other APIs:
+     API       | tokens IN                | tokens OUT
+     ----------+--------------------------+-------------------------
+     Ollama    | prompt_eval_count        | eval_count
+     OpenAI    | usage.prompt_tokens      | usage.completion_tokens
+     Anthropic | usage.input_tokens       | usage.output_tokens
+
   NOTE: every chat message also gets hidden "template" tokens (role markers),
   so even a 1-word message costs ~25-30 tokens. We subtract that baseline.
 """
@@ -32,10 +39,24 @@ def count_tokens(text):
         "messages": [{"role": "user", "content": text}],
         "stream": False,
         "options": {"num_predict": 1},
+        # ^ the same setting in other APIs:
+        #   API          | max output tokens
+        #   -------------+------------------
+        #   Ollama       | "num_predict": 1
+        #   OpenAI       | "max_tokens": 1
+        #   Anthropic    | "max_tokens": 1
+        #   Hugging Face | max_new_tokens=1
+        #   Ollama puts num_predict inside "options"; the others put it at top level.
     }
     resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)
     resp.raise_for_status()
     return resp.json()["prompt_eval_count"]
+    # ^ the same field in other APIs:
+    #   API          | tokens in
+    #   -------------+----------------------------
+    #   Ollama       | r["prompt_eval_count"]
+    #   OpenAI       | r["usage"]["prompt_tokens"]
+    #   Anthropic    | r["usage"]["input_tokens"]
 
 
 def main():

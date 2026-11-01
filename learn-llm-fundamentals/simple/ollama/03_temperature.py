@@ -32,6 +32,12 @@ def ask(question, options):
     resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)
     resp.raise_for_status()
     return resp.json()["message"]["content"].strip()
+    # ^ the same field in other APIs:
+    #   API          | answer text
+    #   -------------+--------------------------------------
+    #   Ollama       | r["message"]["content"]
+    #   OpenAI       | r["choices"][0]["message"]["content"]
+    #   Anthropic    | r["content"][0]["text"]
 
 
 def main():
@@ -40,6 +46,15 @@ def main():
         for i in range(4):
             # a different seed each time = different dice, but temp 0 ignores the dice
             name = ask(PROMPT, options={"temperature": temp, "seed": i, "num_predict": 20})
+            # ^ the same settings in other APIs:
+            #   API          | temperature         | seed            | max output tokens
+            #   -------------+---------------------+-----------------+------------------
+            #   Ollama       | "temperature": temp | "seed": i       | "num_predict": 20
+            #   OpenAI       | "temperature": temp | "seed": i       | "max_tokens": 20
+            #   Anthropic    | "temperature": temp | (not available) | "max_tokens": 20
+            #   Hugging Face | temperature=temp    | set_seed(i)     | max_new_tokens=20
+            #   Ollama puts these inside "options"; the others put them at top level.
+            #   temperature range: OpenAI 0-2, Anthropic 0-1. OpenAI seed = best effort. HF: temperature 0 = do_sample=False.
             print(f"   {i + 1}. {name}")
         print()
 
@@ -58,3 +73,11 @@ if __name__ == "__main__":
     main()
 
 # Try: add options top_p=0.5 -- it cuts away the unlikely words, so high temperature gets calmer.
+# ^ the same setting in other APIs:
+#   API          | keep only likely words
+#   -------------+--------------------------
+#   Ollama       | "options": {"top_p": 0.5}
+#   OpenAI       | "top_p": 0.5
+#   Anthropic    | "top_p": 0.5
+#   Hugging Face | top_p=0.5
+#   top_k (keep the top N words): Ollama, Anthropic and HF have it; OpenAI does not.

@@ -38,6 +38,14 @@ def main():
         "stream": False,
         "logprobs": True, "top_logprobs": 5,        # show the model's top 5 choices
         "options": {"temperature": 0, "num_predict": 6},
+        # ^ the same settings in other APIs:
+        #   API          | top choices                         | max output tokens | temperature
+        #   -------------+-------------------------------------+-------------------+-----------------
+        #   Ollama       | "logprobs": True, "top_logprobs": 5 | "num_predict": 6  | "temperature": 0
+        #   OpenAI       | "logprobs": true, "top_logprobs": 5 | "max_tokens": 6   | "temperature": 0
+        #   Anthropic    | (not available)                     | "max_tokens": 6   | "temperature": 0
+        #   Hugging Face | output_scores=True                  | max_new_tokens=6  | do_sample=False
+        #   Ollama puts num_predict + temperature inside "options"; the others put them at top level.
     }
     resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)   # json= sends body as JSON
     # WHAT HAPPENS INSIDE THIS ONE CALL, TURN BY TURN (Ollama runs the loop, we just wait):
@@ -89,8 +97,11 @@ def main():
     #   "model": "llama3.2",
     #   "created_at": "2026-10-31T11:43:16.765081Z",
     #   "message": {"role": "assistant", "content": "Paris."},     <- the answer text
+    #                                                                  (OpenAI: choices[0].message.content, Anthropic: content[0].text)
     #   "done": true,
     #   "done_reason": "stop",                                      <- model chose to stop ("length" = hit num_predict)
+    #                                                                  (OpenAI: finish_reason "stop"/"length",
+    #                                                                   Anthropic: stop_reason "end_turn"/"max_tokens")
     #   "logprobs": [                                               <- one entry per token it wrote
     #     {"token": "Paris", "logprob": -0.0003, "bytes": [80, 97, 114, 105, 115],
     #      "top_logprobs": [                                        <- the 5 best choices at that step
@@ -110,9 +121,13 @@ def main():
     #   "total_duration": 357036100,                                <- all times are in nanoseconds (0.36 s)
     #   "load_duration": 9208900,                                   <- loading the model into memory
     #   "prompt_eval_count": 37,                                    <- tokens IN (your prompt + chat template)
+    #                                                                  (OpenAI: usage.prompt_tokens, Anthropic: usage.input_tokens)
     #   "prompt_eval_cached_count": 20,                             <- of those, reused from the last call
+    #                                                                  (OpenAI: usage.prompt_tokens_details.cached_tokens,
+    #                                                                   Anthropic: usage.cache_read_input_tokens)
     #   "prompt_eval_duration": 201598000,
     #   "eval_count": 3,                                            <- tokens OUT
+    #                                                                  (OpenAI: usage.completion_tokens, Anthropic: usage.output_tokens)
     #   "eval_duration": 140305000
     # }
     # logprob -> probability: math.exp(logprob).  -0.0003 -> 1.00,  -8.40 -> 0.0002

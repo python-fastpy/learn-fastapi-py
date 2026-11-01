@@ -24,21 +24,47 @@ OLLAMA = "http://localhost:11434"
 CHAT_MODEL = "llama3.2"
 POLICY = "Acme refund policy: refunds within 14 days of delivery. Shipping costs are not refunded."
 OPT = {"temperature": 0}
+# ^ the same setting in other APIs:
+#   API          | temperature
+#   -------------+------------------------------------------------
+#   Ollama       | "temperature": 0   (inside "options")
+#   OpenAI       | "temperature": 0   (range 0-2)
+#   Anthropic    | "temperature": 0   (range 0-1)
+#   Hugging Face | do_sample=False   (temperature 0 = no sampling)
 
 
 def ask(question, system=None, options=None):
     """One question in (+ optional system prompt), answer text out (POST /api/chat)."""
     messages = [{"role": "system", "content": system}] if system else []
+    # ^ the same message in other APIs:
+    #   API       | system prompt
+    #   ----------+----------------------------------------------------
+    #   Ollama    | {"role": "system", "content": system} in "messages"
+    #   OpenAI    | {"role": "system", "content": system} in "messages"
+    #   Anthropic | top-level "system": system   (not a message)
     messages.append({"role": "user", "content": question})
     body = {
         "model": CHAT_MODEL,
         "messages": messages,
         "stream": False,
         "options": options or {},
+        # ^ the same wrapper in other APIs:
+        #   API       | settings wrapper
+        #   ----------+------------------------------
+        #   Ollama    | "options": {"temperature": 0}
+        #   OpenAI    | (no wrapper) "temperature": 0
+        #   Anthropic | (no wrapper) "temperature": 0
+        #   "options" exists only in Ollama; the others put settings at top level.
     }
     resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)
     resp.raise_for_status()
     return resp.json()["message"]["content"].strip()
+    # ^ the same field in other APIs:
+    #   API       | answer text
+    #   ----------+------------------------------------------------
+    #   Ollama    | resp.json()["message"]["content"]
+    #   OpenAI    | resp.json()["choices"][0]["message"]["content"]
+    #   Anthropic | resp.json()["content"][0]["text"]
 
 
 def main():

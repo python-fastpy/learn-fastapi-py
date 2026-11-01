@@ -48,6 +48,12 @@ TOOLS = [
         "parameters": {"type": "object", "required": ["order_id"],
                        "properties": {"order_id": {"type": "string"}}}}},
 ]
+# ^ the same tool list in other APIs:
+#   API       | one tool description
+#   ----------+-----------------------------------------------------------------------------------------
+#   Ollama    | {"type": "function", "function": {"name": ..., "description": ..., "parameters": {...}}}
+#   OpenAI    | {"type": "function", "function": {"name": ..., "description": ..., "parameters": {...}}}
+#   Anthropic | {"name": ..., "description": ..., "input_schema": {...}}
 
 
 # 3) the loop
@@ -60,9 +66,22 @@ def run(question, max_turns=5):
             "stream": False,
             "tools": TOOLS,                                   # the model sees only these descriptions
             "options": {"temperature": 0},
+            # ^ the same setting in other APIs:
+            #   API       | temperature
+            #   ----------+-----------------
+            #   Ollama    | "temperature": 0
+            #   OpenAI    | "temperature": 0
+            #   Anthropic | "temperature": 0
+            #   Ollama puts temperature inside "options"; the others put it at top level.
         }
         r = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300).raise_for_status().json()
         msg = r["message"]
+        # ^ the same field in other APIs:
+        #   API       | tool calls in reply
+        #   ----------+-----------------------------------------
+        #   Ollama    | r["message"]["tool_calls"]
+        #   OpenAI    | r["choices"][0]["message"]["tool_calls"]
+        #   Anthropic | "tool_use" blocks in r["content"]
         messages.append(msg)
         if not msg.get("tool_calls"):                         # no tool wanted -> final answer
             print(f"   turn {turn}: final answer -> {msg['content']}")
@@ -76,6 +95,12 @@ def run(question, max_turns=5):
                 result = {"error": f"bad arguments: {e}"}     # send the error back, don't crash
             print(f"   turn {turn}: model asks {name}({args}) -> your code returns {result}")
             messages.append({"role": "tool", "tool_name": name, "content": json.dumps(result)})
+            # ^ the same message in other APIs:
+            #   API       | tool result message
+            #   ----------+-------------------------------------------------------------------------------------------
+            #   Ollama    | {"role": "tool", "tool_name": name, "content": ...}
+            #   OpenAI    | {"role": "tool", "tool_call_id": ..., "content": ...}
+            #   Anthropic | {"role": "user", "content": [{"type": "tool_result", "tool_use_id": ..., "content": ...}]}
     print("   stopped: too many turns")
 
 

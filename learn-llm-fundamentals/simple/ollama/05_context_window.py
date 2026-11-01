@@ -32,7 +32,7 @@ def chat(messages, options):
         "model": CHAT_MODEL,
         "messages": messages,
         "stream": False,
-        "options": options,                 # num_ctx = context window size in tokens
+        "options": options,
     }
     resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)
     resp.raise_for_status()
@@ -45,7 +45,22 @@ def ask_code(num_ctx):
                 {"role": "assistant", "content": "Noted."},
                 {"role": "user", "content": "What is the customer's secret order code? Number only."}]
     r = chat(messages, options={"temperature": 0, "num_ctx": num_ctx, "num_predict": 10})
+    # ^ the same settings in other APIs:
+    #   API          | context window     | max output tokens | temperature
+    #   -------------+--------------------+-------------------+-----------------
+    #   Ollama       | "num_ctx": num_ctx | "num_predict": 10 | "temperature": 0
+    #   OpenAI       | (fixed per model)  | "max_tokens": 10  | "temperature": 0
+    #   Anthropic    | (fixed per model)  | "max_tokens": 10  | "temperature": 0
+    #   Hugging Face | (model config)     | max_new_tokens=10 | do_sample=False
+    #   Ollama puts these inside "options"; the others put them at top level.
+    #   num_ctx in other local servers: llama.cpp n_ctx, vLLM max_model_len.
     return r["prompt_eval_count"], r["message"]["content"].strip()
+    # ^ the same fields in other APIs:
+    #   API          | tokens in                   | answer text
+    #   -------------+-----------------------------+--------------------------------------
+    #   Ollama       | r["prompt_eval_count"]      | r["message"]["content"]
+    #   OpenAI       | r["usage"]["prompt_tokens"] | r["choices"][0]["message"]["content"]
+    #   Anthropic    | r["usage"]["input_tokens"]  | r["content"][0]["text"]
 
 
 def main():

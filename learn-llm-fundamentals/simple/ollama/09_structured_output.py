@@ -59,9 +59,22 @@ def classify(email, tries=3):
             "stream": False,
             "format": SCHEMA,                       # only allow tokens that fit the schema
             "options": {"temperature": 0},
+            # ^ the same settings in other APIs:
+            #   API       | force JSON schema                                                | temperature
+            #   ----------+------------------------------------------------------------------+-----------------
+            #   Ollama    | "format": SCHEMA                                                 | "temperature": 0
+            #   OpenAI    | "response_format": {"type": "json_schema", "json_schema": {...}} | "temperature": 0
+            #   Anthropic | structured outputs (JSON schema), or a tool with "input_schema"  | "temperature": 0
+            #   Ollama puts temperature inside "options"; the others put it at top level.
         }
         r = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300).raise_for_status().json()
         text = r["message"]["content"]
+        # ^ the same field in other APIs:
+        #   API       | answer text
+        #   ----------+--------------------------------------
+        #   Ollama    | r["message"]["content"]
+        #   OpenAI    | r["choices"][0]["message"]["content"]
+        #   Anthropic | r["content"][0]["text"]
         try:
             data = json.loads(text)
             error = check(data)

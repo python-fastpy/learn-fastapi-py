@@ -17,6 +17,13 @@ CONCEPT IN ONE LINE:
    RESPONSE: message.content   the answer
              done_reason       "stop" = finished,  "length" = CUT OFF by num_predict (max_tokens)
              prompt_eval_count / eval_count = input / output tokens (your bill)
+
+   The same things in other APIs:
+     API       | system rules              | answer text                           | why it stopped                           | tokens in / out
+     ----------+---------------------------+---------------------------------------+------------------------------------------+----------------------------------------
+     Ollama    | {"role": "system", ...}   | r["message"]["content"]               | "done_reason": "stop" / "length"         | prompt_eval_count / eval_count
+     OpenAI    | {"role": "system", ...}   | r["choices"][0]["message"]["content"] | "finish_reason": "stop" / "length"       | usage.prompt_tokens / completion_tokens
+     Anthropic | top-level "system": "..." | r["content"][0]["text"]               | "stop_reason": "end_turn" / "max_tokens" | usage.input_tokens / output_tokens
 """
 
 import httpx
@@ -60,6 +67,13 @@ def main():
     question = [{"role": "user", "content": "Explain what an API is in 3 sentences."}]
     for limit in (8, 200):
         r = chat(question, options={"temperature": 0, "num_predict": limit})
+        # ^ the same setting and field in other APIs:
+        #   API          | max output tokens    | why it stopped
+        #   -------------+----------------------+----------------------------------------------------
+        #   Ollama       | "num_predict": limit | r["done_reason"]  "stop" / "length"
+        #   OpenAI       | "max_tokens": limit  | r["choices"][0]["finish_reason"]  "stop" / "length"
+        #   Anthropic    | "max_tokens": limit  | r["stop_reason"]  "end_turn" / "max_tokens"
+        #   Ollama puts num_predict inside "options"; the others put it at top level.
         print(f"  num_predict={limit:<4} done_reason={r['done_reason']!r:<9} "
               f"text={r['message']['content'][:70]!r}")
     print("  -> 'length' means the answer was CUT OFF. In your app: raise the limit or warn the user.")

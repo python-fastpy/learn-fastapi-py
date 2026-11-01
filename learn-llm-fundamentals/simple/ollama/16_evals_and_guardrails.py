@@ -60,10 +60,30 @@ def run_eval(system):
                          {"role": "user", "content": ticket}],
             "stream": False,
             "options": {"temperature": 0, "num_predict": 10},    # same input -> same output; 1 word is enough
+            # ^ the same settings in other APIs:
+            #   API          | system message          | stream          | max output tokens | temperature
+            #   -------------+-------------------------+-----------------+-------------------+------------------------
+            #   Ollama       | {"role": "system", ...} | "stream": False | "num_predict": 10 | "temperature": 0
+            #   OpenAI       | {"role": "system", ...} | "stream": false | "max_tokens": 10  | "temperature": 0  (0-2)
+            #   Anthropic    | "system": system        | "stream": false | "max_tokens": 10  | "temperature": 0  (0-1)
+            #   Hugging Face | -                       | -               | max_new_tokens=10 | do_sample=False
+            #   Ollama wraps these in "options"; Anthropic: "system" at top level, max_tokens required.
         }
         resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)   # json= sends body as JSON
+        # ^ the same call in other APIs:
+        #   API       | endpoint
+        #   ----------+--------------------------
+        #   Ollama    | POST /api/chat
+        #   OpenAI    | POST /v1/chat/completions
+        #   Anthropic | POST /v1/messages
         resp.raise_for_status()                            # 4xx/5xx -> exception
         got = output_guard(resp.json()["message"]["content"].strip())
+        # ^ the same field in other APIs:
+        #   API       | reply text
+        #   ----------+--------------------------------------
+        #   Ollama    | r["message"]["content"]
+        #   OpenAI    | r["choices"][0]["message"]["content"]
+        #   Anthropic | r["content"][0]["text"]
         per_label[expected][1] += 1
         per_label[expected][0] += got == expected
         print(f"    {'ok   ' if got == expected else 'WRONG'} {ticket:<40} expected {expected:<8} got {got}")

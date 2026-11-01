@@ -39,6 +39,14 @@ def embed(texts):
     """Text(s) -> list of vectors (each vector = a list of numbers)."""
     body = {"model": EMBED_MODEL, "input": texts}          # input = one string or a list of strings
     resp = httpx.post(OLLAMA + "/api/embed", json=body, timeout=300)   # json= sends body as JSON
+    # ^ the same call in other APIs:
+    #   API          | endpoint                 | sent            | vectors in reply
+    #   -------------+--------------------------+-----------------+------------------------------------
+    #   Ollama       | POST /api/embed          | "input": texts  | r["embeddings"]
+    #   OpenAI       | POST /v1/embeddings      | "input": texts  | [d["embedding"] for d in r["data"]]
+    #   Anthropic    | (not available)          | (not available) | (not available)
+    #   Hugging Face | SentenceTransformer(...) | .encode(texts)  | the return value
+    #   Anthropic has no embeddings API -- they point to Voyage AI.
     resp.raise_for_status()                                # 4xx/5xx -> exception (e.g. 404 = model not pulled)
     return resp.json()["embeddings"]
 
@@ -77,10 +85,30 @@ def main():
                      {"role": "user", "content": question}],
         "stream": False,
         "options": {"temperature": 0},
+        # ^ the same settings in other APIs:
+        #   API          | system message          | stream          | temperature
+        #   -------------+-------------------------+-----------------+------------------------
+        #   Ollama       | {"role": "system", ...} | "stream": False | "temperature": 0
+        #   OpenAI       | {"role": "system", ...} | "stream": false | "temperature": 0  (0-2)
+        #   Anthropic    | "system": system        | "stream": false | "temperature": 0  (0-1)
+        #   Hugging Face | -                       | -               | do_sample=False
+        #   Ollama wraps temperature in "options"; Anthropic puts "system" at top level, not in messages.
     }
     resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)
+    # ^ the same call in other APIs:
+    #   API       | endpoint
+    #   ----------+--------------------------
+    #   Ollama    | POST /api/chat
+    #   OpenAI    | POST /v1/chat/completions
+    #   Anthropic | POST /v1/messages
     resp.raise_for_status()
     answer = resp.json()["message"]["content"].strip()
+    # ^ the same field in other APIs:
+    #   API       | reply text
+    #   ----------+--------------------------------------
+    #   Ollama    | r["message"]["content"]
+    #   OpenAI    | r["choices"][0]["message"]["content"]
+    #   Anthropic | r["content"][0]["text"]
     print("  answer   :", answer)
 
 

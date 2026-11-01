@@ -64,6 +64,12 @@ def main():
     print("STEP 1: is Ollama running?")
     try:
         models = [m["name"] for m in httpx.get(OLLAMA + "/api/tags", timeout=5).json()["models"]]
+        # ^ the same endpoint in other APIs:
+        #   API          | list models
+        #   -------------+---------------
+        #   Ollama       | GET /api/tags
+        #   OpenAI       | GET /v1/models
+        #   Anthropic    | GET /v1/models
     except httpx.TransportError:                             # can't connect / timed out
         print("  NO -- install from https://ollama.com and start it.")
         return
@@ -80,10 +86,25 @@ def main():
         "messages": [{"role": "user", "content": "Say hello in exactly 5 words."}],
         "stream": False,                    # one JSON answer, not a stream of chunks
         "options": {"temperature": 0},
+        # ^ the same settings in other APIs:
+        #   API          | one answer, no stream | temperature
+        #   -------------+-----------------------+-----------------
+        #   Ollama       | "stream": False       | "temperature": 0
+        #   OpenAI       | "stream": false       | "temperature": 0
+        #   Anthropic    | "stream": false       | "temperature": 0
+        #   Hugging Face | (default)             | do_sample=False
+        #   Ollama puts temperature inside "options"; the others put it at top level.
+        #   With streaming on: Ollama sends one JSON object per line, OpenAI/Anthropic send SSE "data: ..." lines.
     }
     resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300)    # json= sends body as JSON
     resp.raise_for_status()                                            # 404 = model not pulled
     answer = resp.json()["message"]["content"].strip()
+    # ^ the same endpoint and field in other APIs:
+    #   API          | endpoint                  | answer text
+    #   -------------+---------------------------+--------------------------------------
+    #   Ollama       | POST /api/chat            | r["message"]["content"]
+    #   OpenAI       | POST /v1/chat/completions | r["choices"][0]["message"]["content"]
+    #   Anthropic    | POST /v1/messages         | r["content"][0]["text"]
     print("  answer:", answer)
     print("\nAll good -- go to 01_next_token.py")
 

@@ -34,7 +34,21 @@ def call_model(model, question, timeout=60):
     """One raw call that RAISES on errors, so the caller can decide: retry or give up."""
     body = {"model": model, "stream": False, "options": {"temperature": 0, "num_predict": 60},
             "messages": [{"role": "user", "content": question}]}
+    # ^ the same settings in other APIs:
+    #   API          | stream          | max output tokens | temperature
+    #   -------------+-----------------+-------------------+------------------------
+    #   Ollama       | "stream": False | "num_predict": 60 | "temperature": 0
+    #   OpenAI       | "stream": false | "max_tokens": 60  | "temperature": 0  (0-2)
+    #   Anthropic    | "stream": false | "max_tokens": 60  | "temperature": 0  (0-1)
+    #   Hugging Face | -               | max_new_tokens=60 | do_sample=False
+    #   Ollama wraps num_predict + temperature in "options"; Anthropic requires max_tokens.
     resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=timeout)
+    # ^ the same call in other APIs:
+    #   API       | endpoint
+    #   ----------+--------------------------
+    #   Ollama    | POST /api/chat
+    #   OpenAI    | POST /v1/chat/completions
+    #   Anthropic | POST /v1/messages
     resp.raise_for_status()                                 # 4xx/5xx -> httpx.HTTPStatusError
     return resp.json()
 
@@ -45,6 +59,12 @@ def with_retry(model, question, tries=3):
             return call_model(model, question)
         except httpx.HTTPStatusError as e:
             code = e.response.status_code
+            # ^ the same error codes in other APIs:
+            #   API       | bad key | rate limited | overloaded
+            #   ----------+---------+--------------+-----------
+            #   OpenAI    | 401     | 429          | 5xx
+            #   Anthropic | 401     | 429          | 5xx / 529
+            #   Ollama (local, no key): 404 = model not pulled.
             if code < 500:                                  # 4xx = OUR mistake (e.g. 404 no such model)
                 raise RuntimeError(f"{model}: HTTP {code}, not retrying") from e   # retry won't help
             error = f"HTTP {code} server error"             # 5xx = server problem, may pass
@@ -72,8 +92,20 @@ def answer(question, models=(CHAT_MODEL,)):
         secs = r["total_duration"] / 1e9                    # Ollama reports nanoseconds
         log = {"model": model, "in": r["prompt_eval_count"], "out": r["eval_count"],
                "latency_s": round(secs, 2), "tok_per_s": round(r["eval_count"] / (r["eval_duration"] / 1e9), 1)}
+        # ^ the same fields in other APIs:
+        #   API       | input tokens                | output tokens
+        #   ----------+-----------------------------+--------------------------------
+        #   Ollama    | r["prompt_eval_count"]      | r["eval_count"]
+        #   OpenAI    | r["usage"]["prompt_tokens"] | r["usage"]["completion_tokens"]
+        #   Anthropic | r["usage"]["input_tokens"]  | r["usage"]["output_tokens"]
         print("    log:", json.dumps(log))                  # in a real app: send to your logging system
         CACHE[key] = r["message"]["content"].strip()
+        # ^ the same field in other APIs:
+        #   API       | reply text
+        #   ----------+--------------------------------------
+        #   Ollama    | r["message"]["content"]
+        #   OpenAI    | r["choices"][0]["message"]["content"]
+        #   Anthropic | r["content"][0]["text"]
         return CACHE[key]
     return "Sorry, the assistant is not available right now."  # never show a stack trace to users
 

@@ -91,8 +91,21 @@ def main():
         for turn in range(1, 5):
             body = {"model": CHAT_MODEL, "messages": messages, "stream": False,
                     "tools": tools, "options": {"temperature": 0}}      # tools from the server
+            # ^ the same settings in other APIs:
+            #   API       | tools                                              | temperature
+            #   ----------+----------------------------------------------------+-----------------
+            #   Ollama    | "tools": tools                                     | "temperature": 0
+            #   OpenAI    | "tools": tools   (same shape as Ollama)            | "temperature": 0
+            #   Anthropic | "tools": [{"name", "description", "input_schema"}] | "temperature": 0
+            #   Ollama puts temperature inside "options"; the others put it at top level.
             resp = httpx.post(OLLAMA + "/api/chat", json=body, timeout=300).raise_for_status()
             msg = resp.json()["message"]
+            # ^ the same field in other APIs:
+            #   API       | tool calls in reply
+            #   ----------+---------------------------------------------------
+            #   Ollama    | resp.json()["message"]["tool_calls"]
+            #   OpenAI    | resp.json()["choices"][0]["message"]["tool_calls"]
+            #   Anthropic | "tool_use" blocks in resp.json()["content"]
             messages.append(msg)
             if not msg.get("tool_calls"):
                 print(f"  final answer: {msg['content']}")
@@ -103,6 +116,12 @@ def main():
                 result = server.request("tools/call", {"name": name, "arguments": args})
                 text = " ".join(c["text"] for c in result["content"] if c["type"] == "text")
                 messages.append({"role": "tool", "tool_name": name, "content": text})
+                # ^ the same message in other APIs:
+                #   API       | tool result message
+                #   ----------+-------------------------------------------------------------------------------------------
+                #   Ollama    | {"role": "tool", "tool_name": name, "content": ...}
+                #   OpenAI    | {"role": "tool", "tool_call_id": ..., "content": ...}
+                #   Anthropic | {"role": "user", "content": [{"type": "tool_result", "tool_use_id": ..., "content": ...}]}
     finally:
         server.close()
 

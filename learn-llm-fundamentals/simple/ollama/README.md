@@ -130,3 +130,45 @@ Each lesson here names its matching `simple/` lesson in its first lines ("detail
 - **The first call is slow** (about 5–20 s) while the model loads into memory. Later calls are fast.
 - **No helper module.** Each lesson calls Ollama directly with `httpx`, so you see the
   raw JSON request and response in every file.
+
+## Same idea, different names: Ollama vs other APIs
+
+The concepts are the same everywhere; only the field names change. Each lesson also notes
+these next to the first place a name is used.
+
+**Request settings**
+
+| Ollama | OpenAI | Anthropic | Hugging Face `transformers` |
+|---|---|---|---|
+| `POST /api/chat` | `POST /v1/chat/completions` (or `/v1/responses`) | `POST /v1/messages` | `model.generate()` |
+| `"options": {...}` wrapper | settings at top level | settings at top level | arguments to `generate()` |
+| `num_predict` (max output tokens) | `max_tokens` / `max_completion_tokens` | `max_tokens` (required) | `max_new_tokens` |
+| `num_ctx` (context window) | fixed per model | fixed per model | model config (`max_position_embeddings`) |
+| `temperature` | `temperature` (0–2) | `temperature` (0–1) | `temperature` |
+| `top_p` / `top_k` | `top_p` only | `top_p`, `top_k` | `top_p`, `top_k` |
+| `seed` | `seed` (best effort) | – | `set_seed()` |
+| `logprobs`, `top_logprobs` | `logprobs`, `top_logprobs` | – | `output_scores=True` |
+| `"stream": true` (one JSON per line) | `"stream": true` (SSE `data:` lines) | `"stream": true` (SSE events) | `TextStreamer` |
+| `"think": true` | `reasoning_effort` | `thinking: {"type": "enabled", "budget_tokens": N}` | – |
+| `format: <JSON schema>` | `response_format: {"type": "json_schema", ...}` | structured outputs / tool `input_schema` | – |
+| `tools: [{"type": "function", ...}]` | same shape | `tools: [{"name", "description", "input_schema"}]` | – |
+| `{"role": "system", ...}` message | same | top-level `"system"` field | in the chat template |
+| `/api/generate` + `"raw": true` | legacy `/v1/completions` | – | `generate()` on raw tokens |
+| `POST /api/embed` | `POST /v1/embeddings` | – (Voyage AI) | `sentence-transformers` `encode()` |
+| `GET /api/tags` | `GET /v1/models` | `GET /v1/models` | – |
+| `keep_alive`, `/api/create`, `/api/show` | – (managed for you) | – | `config.json` (for `/api/show`) |
+
+**Response fields**
+
+| Ollama | OpenAI | Anthropic |
+|---|---|---|
+| `message.content` | `choices[0].message.content` | `content[0].text` |
+| `message.tool_calls` | `choices[0].message.tool_calls` | `tool_use` content blocks |
+| `done_reason`: `stop` / `length` | `finish_reason`: `stop` / `length` | `stop_reason`: `end_turn` / `max_tokens` |
+| `prompt_eval_count` (tokens in) | `usage.prompt_tokens` | `usage.input_tokens` |
+| `eval_count` (tokens out) | `usage.completion_tokens` | `usage.output_tokens` |
+| `prompt_eval_cached_count` | `usage.prompt_tokens_details.cached_tokens` | `usage.cache_read_input_tokens` |
+| `embeddings[i]` | `data[i].embedding` | – |
+
+Ollama also has an OpenAI-compatible endpoint at `http://localhost:11434/v1`, so OpenAI-style
+code works against it unchanged.
