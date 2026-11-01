@@ -119,6 +119,30 @@ IS IT OLLAMA-SPECIFIC?
 COMMON CONFUSIONS:
    - "The model remembers our chat."  No -- the app resends ALL messages in every request.
    - "Ollama is the model."  No -- Ollama is the server; llama3.2 is the model file it runs.
+     The same mix-up happens everywhere -- there are always 3 separate things:
+
+        who            the APP you chat in     the SERVER / runner            the MODEL
+        Ollama         your script, Open       Ollama (localhost:11434)       llama3.2, qwen, gemma ...
+                       WebUI, ...                                             (files you pull)
+        OpenAI         ChatGPT (website/app)   the OpenAI API                 GPT models (e.g. the
+                                               (api.openai.com)               "gpt-..." names you pass)
+        Anthropic      Claude.ai (website/     the Anthropic API              Claude models (Opus,
+                       app), Claude Code       (api.anthropic.com)            Sonnet, Haiku)
+        Hugging Face   your Python script      transformers library (runs     the files on the Hub, e.g.
+                                               on your machine) or their      meta-llama/Llama-3.2-3B-
+                                               hosted inference               Instruct
+
+     - "ChatGPT is the model"  -> ChatGPT is an APP; it calls GPT models through OpenAI's
+       servers, and adds its own system prompt, memory and tools on top.
+     - "Claude.ai is Claude"   -> Claude.ai is an APP; "Claude" is a family of models, served
+       by Anthropic's API. The same model can answer differently in the app vs the API,
+       because the app adds its own system prompt and features.
+     - "Hugging Face is a model" -> Hugging Face is a WEBSITE that hosts model files (the
+       "Hub") plus libraries (transformers) that RUN them -- closest to Ollama's role. The
+       model is the repo you download (it can even be the same Llama 3.2 as here).
+     - One model, many servers: llama3.2 runs in Ollama, in transformers, and on many hosted
+       APIs -- same weights, same answers (up to sampling settings). OpenAI's and Anthropic's
+       models only run on their own servers: the weights are not published.
    - "The first answer is slow because the model is thinking."  Mostly it's load_duration:
      reading 2 GB from disk. The second call is fast.
    - "size 2.0 GB on disk = 2.0 GB in memory."  Memory is bigger (2.57 GB here) because the
