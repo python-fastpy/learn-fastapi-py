@@ -15,7 +15,7 @@ WHAT HAPPENS -- after EVERY picked token the server checks, in effect:
 
    picked token
         │
-        ├─ is it an end token (<|eot_id|> ...)?          -> STOP   done_reason "stop"    (1)
+        ├─ is it an end token (<|eot_id|>)?              -> STOP   done_reason "stop"    (1)
         ├─ does the text now contain a stop string?      -> STOP   done_reason "stop"    (2)(4)
         ├─ reached num_predict tokens?                   -> STOP   done_reason "length"  (3)
         ├─ context window full?                          -> make room, CONTINUE           (5)
@@ -51,8 +51,9 @@ THE 6 WAYS, ONE BY ONE:
       Cut mid-sentence: the model was NOT finished. (01b uses num_predict 1 on purpose.)
       Other APIs call this max_tokens / max_new_tokens.
 
-  (4) YOUR OWN STOP STRINGS -- options "stop": [...] (PART 5)
-          stop ["5"]  ->  '...\n\n1, 2, 3, 4, '   done_reason "stop"
+  (4) YOUR OWN STOP STRINGS -- options "stop": ["5"] (PART 5)
+          stop ["5"]  ->  'Here is the count from 1 to 10, separated by commas:\n\n1, 2, 3, 4, '
+                          done_reason "stop"
       The stop string itself is NOT included. Note: done_reason is "stop" for both (1) and
       (4) -- Ollama doesn't tell you which one happened.
 
@@ -91,7 +92,12 @@ IS IT OLLAMA-SPECIFIC?
                                               (required)                         end_turn /
                                                                                  max_tokens /
                                                                                  stop_sequence /
-                                                                                 tool_use ...
+                                                                                 tool_use /
+                                                                                 pause_turn /
+                                                                                 refusal
+                                                                                 (hedged -- newer
+                                                                                 values may exist,
+                                                                                 see the docs)
    Hugging Face        eos_token_id in        max_new_tokens    stop_strings     you check the
                        generation_config                        (newer versions, output yourself
                                                                 hedged)

@@ -143,9 +143,9 @@ def main():
     #       step  3  picked '2'    input 24  cached 23     54 ms  length
     #       step  4  picked ' '    input 25  cached 24     56 ms  length
     #       step  5  picked '3'    input 26  cached 25     53 ms  length
-    #       step  6  picked ' '    input 27  cached 26     96 ms  length
-    #       step  7  picked '4'    input 28  cached 27     95 ms  length
-    #       step  8  picked ' '    input 29  cached 28    121 ms  length
+    #       step  6  picked ' '    input 27  cached 26     55 ms  length
+    #       step  7  picked '4'    input 28  cached 27     69 ms  length
+    #       step  8  picked ' '    input 29  cached 28     66 ms  length
     #       step  9  picked '5'    input 30  cached 29     59 ms  length
     #       step 10  picked ''     input 31  cached 30     51 ms  stop     <- <end>, nothing visible
     # (cached counts vary run to run -- they depend on what the server still has in memory;

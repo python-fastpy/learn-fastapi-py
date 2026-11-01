@@ -28,12 +28,14 @@ WHAT HAPPENS:
    THE PIECES:
       <|begin_of_text|>        start of everything (ID 128000) -- added at TOKENIZE time (03)
       <|start_header_id|>      "a role name follows"            (ID 128006)
-      system / user / ...      the role, as ordinary text       ("user" = ID 882)
+      system / user /          the role, as ordinary text       ("user" = ID 882)
+      assistant / ipython      (ipython = a tool's result)
       <|end_header_id|>        "role name finished"             (ID 128007)
       \n\n                     two newlines, then the content   (ID 271)
       <|eot_id|>               "end of this turn"               (ID 128009)
-      the LAST header          ...assistant<|end_header_id|>\n\n with NOTHING after it: the
-                               model's only job is to continue the text from here
+      the LAST header          <|start_header_id|>assistant<|end_header_id|>\n\n with
+                               NOTHING after it: the model's only job is to continue the
+                               text from here
 
    THESE IDs BELONG TO THE MODEL, NOT TO OLLAMA:
       They are positions in Meta's vocabulary list, stored inside the model file
@@ -72,25 +74,82 @@ WHERE THIS COMES FROM:
       the weights learned -- use a different format and answers get worse.
 
    2. The GGUF file stores Meta's version as a Jinja template:
-         metadata key  tokenizer.chat_template   (3,827 characters, read by main() below)
-         {{- "<|start_header_id|>system<|end_header_id|>\n\n" }}
-         {{- "Cutting Knowledge Date: December 2023\n" }}
-         {{- "Today Date: " + date_string + "\n\n" }}      <- Meta's adds TODAY'S DATE
-         ...
-         {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'
-             + message['content'] | trim + '<|eot_id|>' }}
+         metadata key  tokenizer.chat_template   (3,827 characters, 93 lines, read by main())
+      The lines that build a normal chat (line numbers from the real template):
+          1  {{- bos_token }}                                         <- <|begin_of_text|>
+         28  {{- "<|start_header_id|>system<|end_header_id|>\n\n" }}
+         32  {{- "Cutting Knowledge Date: December 2023\n" }}
+         33  {{- "Today Date: " + date_string + "\n\n" }}      <- Meta's adds TODAY'S DATE
+         43  {{- system_message }}
+         44  {{- "<|eot_id|>" }}
+         67  {%- for message in messages %}
+         69          {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' }}
+         90  {%- endfor %}
+         91  {%- if add_generation_prompt %}
+         92      {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' }}
+         93  {%- endif %}
+      The other 81 lines: lines 2-17 set defaults (date_string falls back to "26 Jul 2024"
+      when no date is passed; tools default to none), lines 19-25 pull the system message out
+      of the list, lines 29-31 and 34-42 add tool instructions to the system block when tools
+      are given, lines 46-65 put tool definitions into the first user message, and lines
+      70-89 write tool calls (assistant) and tool results (role "ipython").
 
    3. OLLAMA ships its OWN copy, written as a Go template (/api/show "template", 1,429 bytes,
-      the "image.template" layer of the manifest -- 01_request.py):
+      the "image.template" layer of the manifest -- 01_request.py). The complete template:
+
          <|start_header_id|>system<|end_header_id|>
 
          Cutting Knowledge Date: December 2023
 
          {{ if .System }}{{ .System }}
-         {{- end }} ... <|eot_id|>
-         {{- range $i, $_ := .Messages }} ...
-      Same markers, small differences: no "Today Date" line, and its own tool-calling text.
-      THIS is the one /api/chat uses.
+         {{- end }}
+         {{- if .Tools }}When you receive a tool call response, use the output to format an answer to the orginal user question.
+
+         You are a helpful assistant with tool calling capabilities.
+         {{- end }}<|eot_id|>
+         {{- range $i, $_ := .Messages }}
+         {{- $last := eq (len (slice $.Messages $i)) 1 }}
+         {{- if eq .Role "user" }}<|start_header_id|>user<|end_header_id|>
+         {{- if and $.Tools $last }}
+
+         Given the following functions, please respond with a JSON for a function call with its proper arguments that best answers the given prompt.
+
+         Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}. Do not use variables.
+
+         {{ range $.Tools }}
+         {{- . }}
+         {{ end }}
+         {{ .Content }}<|eot_id|>
+         {{- else }}
+
+         {{ .Content }}<|eot_id|>
+         {{- end }}{{ if $last }}<|start_header_id|>assistant<|end_header_id|>
+
+         {{ end }}
+         {{- else if eq .Role "assistant" }}<|start_header_id|>assistant<|end_header_id|>
+         {{- if .ToolCalls }}
+         {{ range .ToolCalls }}
+         {"name": "{{ .Function.Name }}", "parameters": {{ .Function.Arguments }}}{{ end }}
+         {{- else }}
+
+         {{ .Content }}
+         {{- end }}{{ if not $last }}<|eot_id|>{{ end }}
+         {{- else if eq .Role "tool" }}<|start_header_id|>ipython<|end_header_id|>
+
+         {{ .Content }}<|eot_id|>{{ if $last }}<|start_header_id|>assistant<|end_header_id|>
+
+         {{ end }}
+         {{- end }}
+         {{- end }}
+
+      ("orginal" is a typo in Ollama's own template, kept as-is.) How to read it:
+         {{ if .System }} to {{- end }}     your system message, only if you sent one
+         {{- range $i, $_ := .Messages }}   loop over your messages, one block per message
+         $last                              true for the final message -> add the empty
+                                            assistant header so the model writes next
+         {{- if .Tools }} / .ToolCalls      only used when you pass "tools" (lesson 10)
+      Same markers as Meta's, small differences: no "Today Date" line, and its own
+      tool-calling text. THIS is the one /api/chat uses.
 
    4. YOUR CHOICE: /api/chat applies the template for you. /api/generate with "raw": True
       sends your string as-is -- you write the template yourself (01b_inside_the_llm.py STEP 2 does this).
@@ -220,11 +279,17 @@ def main():
     #     <|start_header_id|>assistant<|end_header_id|>\n\n'
     #    /api/chat: 31 tokens    our string via raw: 31 tokens
     #    --- system + user
-    #    '...December 2023\n\nYou are a pirate.<|eot_id|><|start_header_id|>user...'
+    #    '<|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\n\n
+    #     You are a pirate.<|eot_id|>
+    #     <|start_header_id|>user<|end_header_id|>\n\nSay hi in one word.<|eot_id|>
+    #     <|start_header_id|>assistant<|end_header_id|>\n\n'
     #    /api/chat: 36 tokens    our string via raw: 36 tokens
     #    --- 2-turn chat
-    #    '...What is the capital of France?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-    #     \n\nParis.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nAnd of Germany?<|eot_id|>...'
+    #    '<|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\n\n<|eot_id|>
+    #     <|start_header_id|>user<|end_header_id|>\n\nWhat is the capital of France?<|eot_id|>
+    #     <|start_header_id|>assistant<|end_header_id|>\n\nParis.<|eot_id|>
+    #     <|start_header_id|>user<|end_header_id|>\n\nAnd of Germany?<|eot_id|>
+    #     <|start_header_id|>assistant<|end_header_id|>\n\n'
     #    /api/chat: 48 tokens    our string via raw: 48 tokens
     #    (prompt strings wrapped here for reading)
     # Same count = same string: this IS what /api/chat sends to the model.

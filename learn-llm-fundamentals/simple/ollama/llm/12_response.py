@@ -24,8 +24,14 @@ WHAT HAPPENS:
                  "content": "Blue, green, yellow"},        {"message":{"content":" green"},"done":false}
      "done": true,                                         {"message":{"content":","},     "done":false}
      "done_reason": "stop",                                {"message":{"content":" yellow"},"done":false}
-     ...stats...                                           {"message":{"content":""},      "done":true,
-   }                                                         "done_reason":"stop", ...stats...}
+     "total_duration": 319995400,                          {"message":{"content":""},      "done":true,
+     "load_duration": 6550100,                               "done_reason":"stop",
+     "prompt_eval_count": 33,                                + the same 7 stats fields as on the left}
+     "prompt_eval_cached_count": 20,
+     "prompt_eval_duration": 111707000,                    (only the LAST line carries the stats)
+     "eval_count": 6,
+     "eval_duration": 198481000
+   }
 
    Streaming format = NDJSON ("newline-delimited JSON", content-type application/x-ndjson):
    each line is a complete JSON object. Read line by line, append "content", stop at done:true.
@@ -78,8 +84,9 @@ WHAT HAPPENS:
    /api/generate vs /api/chat -- same model, different envelope:
      /api/chat       "message": {"role": "assistant", "content": "Hello."}
      /api/generate   "response": "Hello."
-                     + (non-raw, non-stream) "context": [128006, 9125, ...]  <- the token IDs
-                       of the whole exchange; old way to continue a chat, now deprecated
+                     + (non-raw, non-stream) "context": the token IDs of the whole exchange
+                       (32 IDs here, all listed in STEP 4 below); old way to continue a chat,
+                       now deprecated
 
 WHERE THIS COMES FROM:
    - the TEXT                -> the model's picked token IDs, turned back into text (09)
@@ -94,13 +101,16 @@ IS IT OLLAMA-SPECIFIC?
    meaning           Ollama /api/chat         OpenAI chat completions        Anthropic messages
    the text          message.content          choices[0].message.content     content[0].text
    why it stopped    done_reason              choices[0].finish_reason       stop_reason
-                     "stop" / "length"        "stop" / "length" / ...        "end_turn" / "max_tokens"
-                                                                             / "stop_sequence" / ...
+                     "stop" / "length"        "stop" / "length" /            "end_turn" / "max_tokens"
+                                              "tool_calls" /                 / "stop_sequence" /
+                                              "content_filter"               "tool_use" / "pause_turn"
+                                                                             / "refusal"
+                                              (both hedged -- newer values may exist, see the docs)
    tokens in         prompt_eval_count        usage.prompt_tokens            usage.input_tokens
    tokens out        eval_count               usage.completion_tokens        usage.output_tokens
    timings           yes, in ns               no                             no
    streaming format  NDJSON lines             Server-Sent Events             Server-Sent Events
-                                              ("data: {...}" lines)          (typed events)
+                                              ("data: {json}" lines)         (typed events)
    Hugging Face transformers: model.generate() returns token IDs; you call
    tokenizer.decode() yourself and count/measure everything yourself.
 
@@ -138,8 +148,8 @@ def main():
     #      "message": {"role": "assistant", "content": "Blue, green, yellow"},
     #      "done": true,
     #      "done_reason": "stop",
-    #      "total_duration": 4498680600,      <- 4.5 s in total ...
-    #      "load_duration": 3925580900,       <- ... 3.9 s of it loading: model wasn't in memory
+    #      "total_duration": 4498680600,      <- 4.5 s in total, and
+    #      "load_duration": 3925580900,       <- 3.9 s of that was loading: model wasn't in memory
     #      "prompt_eval_count": 33,
     #      "prompt_eval_cached_count": 0,     <- nothing cached after a fresh load
     #      "prompt_eval_duration": 331440000,
@@ -202,13 +212,22 @@ def main():
     print("   keys:", list(g))
     print("   response:", repr(g["response"]))
     if "context" in g:
-        print(f"   context: {len(g['context'])} token IDs, first 6 = {g['context'][:6]}")
+        print(f"   context: {len(g['context'])} token IDs = {g['context']}")
     # -> keys: ['model', 'created_at', 'response', 'done', 'done_reason', 'context',
-    #           'total_duration', 'load_duration', 'prompt_eval_count', ...]
+    #           'total_duration', 'load_duration', 'prompt_eval_count', 'prompt_eval_cached_count',
+    #           'prompt_eval_duration', 'eval_count', 'eval_duration']
     #    response: 'Hello.'
-    #    context: 32 token IDs, first 6 = [128006, 9125, 128007, 271, 38766, 1303]
-    #             <|start_header_id|> "system" <|end_header_id|> "\n\n" "Cut" "ting" ...
-    #             = the templated prompt + the answer, as IDs (03_tokens.py)
+    #    context: 32 token IDs = [128006, 9125, 128007, 271, 38766, 1303, 33025, 2696, 25, 6790,
+    #             220, 2366, 18, 271, 128009, 128006, 882, 128007, 271, 46864, 15960, 304, 832,
+    #             3492, 13, 128009, 128006, 78191, 128007, 271, 9906, 13]
+    #    the same 32 IDs as tokens (looked up in the vocabulary, 03_tokens.py):
+    #       <|start_header_id|> system <|end_header_id|> \n\n
+    #       Cut ting " Knowledge" " Date" : " December" " " 202 3 \n\n <|eot_id|>
+    #       <|start_header_id|> user <|end_header_id|> \n\n
+    #       Say " hi" " in" " one" " word" . <|eot_id|>
+    #       <|start_header_id|> assistant <|end_header_id|> \n\n
+    #       Hello .
+    #    = the templated prompt + the answer, as IDs
 
 
 if __name__ == "__main__":
