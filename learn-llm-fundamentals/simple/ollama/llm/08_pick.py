@@ -20,7 +20,7 @@ WHAT HAPPENS -- a real distribution (llama3.2, prompt "Name a color. Answer with
    │ 'Purple'  0.0596         │  ───▶   │ temperature  sharpen /   │  ───▶   │ 'Purple' │
    │ 'Green'   0.0157         │         │              flatten     │  dice   └──────────┘
    │ 'Yellow'  0.0065         │         │ top_p        keep top P% │  (seed)
-   │ ... 128,251 more         │         │ min_p        drop tiny   │
+   │ (128,251 more)           │         │ min_p        drop tiny   │
    └──────────────────────────┘         └──────────────────────────┘
       the MODEL's output                   the SAMPLER (no weights, plain code in Ollama)
 
@@ -71,9 +71,10 @@ THE SETTINGS, ONE BY ONE (Ollama names, all go inside "options"):
   /api/show "parameters" for llama3.2 only sets the stop words (11), so those defaults apply.
 
 THE DICE, EXACTLY:
-   probabilities after filtering:   Blue 0.836 | Red 0.066 | Purple 0.060 | ...
+   probabilities after filtering:   Blue 0.836 | Red 0.066 | Purple 0.060 | Green 0.016 |
+                                    Yellow 0.007 | Brown, N, Orange, Pink, Te 0.015 together
    lay them end to end on a line from 0 to 1:
-      0 ├──────────── Blue ────────────┤ Red ├ Purple ┤...┤ 1
+      0 ├──────────── Blue ────────────┤ Red ├ Purple ┤ Green, Yellow and the other 5 ┤ 1
                                      0.836  0.902   0.962
    draw a random number r in [0, 1):   r = 0.93  -> lands in Purple -> pick 'Purple'
    Over many draws each token wins about as often as its probability (PART 3 checks this).
@@ -92,7 +93,7 @@ IS IT OLLAMA-SPECIFIC?
    OpenAI              temperature: 0     0 - 2         no      yes     no      yes (best effort)
    Anthropic           temperature: 0     0 - 1         yes     yes     no      no
    Hugging Face        do_sample=False    yes           yes     yes     yes     torch.manual_seed
-   (Hugging Face: model.generate(do_sample=True, temperature=..., top_k=..., top_p=...))
+   (Hugging Face: model.generate(input_ids, do_sample=True, temperature=0.8, top_k=40, top_p=0.9))
 
 COMMON CONFUSIONS:
    - "temperature makes the model smarter/dumber"  -> no, the model's output is identical;
@@ -195,13 +196,34 @@ def main():
     show(top_k(dist, 2), "   top_k 2:")
     show(top_p(dist, 0.9), "   top_p 0.9:")
     show(min_p(dist, 0.05), "   min_p 0.05:")
-    # ->    temperature 0.5:     'Blue' 0.988  'Red' 0.006  'Purple' 0.005  'Green' 0.000 ...
-    #       temperature 1.5:     'Blue' 0.631  'Red' 0.116  'Purple' 0.109  'Green' 0.045 ...
-    #       temperature 2.0:     'Blue' 0.482  'Red' 0.135  'Purple' 0.130  'Green' 0.067 ...
-    #       top_k 2:             'Blue' 0.927  'Red' 0.073
-    #       top_p 0.9:           'Blue' 0.927  'Red' 0.073
-    #       min_p 0.05:          'Blue' 0.869  'Red' 0.068  'Purple' 0.063
-    #    (printed one per line; squeezed here)
+    # ->    temperature 0.5:
+    #       'Blue'     0.988
+    #       'Red'      0.006
+    #       'Purple'   0.005
+    #       'Green'    0.000
+    #       'Yellow'   0.000
+    #       temperature 1.5:
+    #       'Blue'     0.631
+    #       'Red'      0.116
+    #       'Purple'   0.109
+    #       'Green'    0.045
+    #       'Yellow'   0.025
+    #       temperature 2.0:
+    #       'Blue'     0.482
+    #       'Red'      0.135
+    #       'Purple'   0.130
+    #       'Green'    0.067
+    #       'Yellow'   0.043
+    #       top_k 2:
+    #       'Blue'     0.927
+    #       'Red'      0.073
+    #       top_p 0.9:
+    #       'Blue'     0.927
+    #       'Red'      0.073
+    #       min_p 0.05:
+    #       'Blue'     0.869
+    #       'Red'      0.068
+    #       'Purple'   0.063
 
     print("\nPART 3: roll the dice 1,000 times at temperature 1 -- wins match probabilities")
     rng = random.Random(42)

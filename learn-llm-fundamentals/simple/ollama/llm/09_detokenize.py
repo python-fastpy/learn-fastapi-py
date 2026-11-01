@@ -21,7 +21,7 @@ WHAT HAPPENS -- lesson 03 run in reverse:
      │  1. LOOK UP      tokens[60704]                          (the vocabulary list)
      ▼
    "Paris"                      the token string, written with stand-in characters
-     │  2. CHAR -> BYTE  undo the GPT-2 trick:  'Ġ' -> 32,  'P' -> 80, ...
+     │  2. CHAR -> BYTE  undo the GPT-2 trick:  'Ġ' -> 32,  'P' -> 80,  and so on for every symbol
      ▼
    [80, 97, 114, 105, 115]      the "bytes" field you saw in 01b STEP 3
      │  3. UTF-8 DECODE  bytes -> characters                    (01c_utf8_bytes_table.py)
@@ -171,8 +171,8 @@ def main():
     #       response='.'        logprobs=[('.', [46])]
     #       response=''         logprobs=[] done_reason=stop eval_count=3   <- <end>, hidden
     #    ask: Reply with only this emoji and nothing else: 🙂
-    #       response='😊'       logprobs=[('😊', [240, 159, 152, 138])]     <- ONE chunk ...
-    #       response=''         logprobs=[] done_reason=stop eval_count=3   <- ... from 2 tokens + <end>
+    #       response='😊'       logprobs=[('😊', [240, 159, 152, 138])]     <- ONE chunk, but
+    #       response=''         logprobs=[] done_reason=stop eval_count=3   <- 3 = 2 tokens + <end>
 
 
 if __name__ == "__main__":

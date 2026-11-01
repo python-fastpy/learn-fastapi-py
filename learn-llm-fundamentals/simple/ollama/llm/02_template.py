@@ -35,6 +35,18 @@ WHAT HAPPENS:
       the LAST header          ...assistant<|end_header_id|>\n\n with NOTHING after it: the
                                model's only job is to continue the text from here
 
+   THESE IDs BELONG TO THE MODEL, NOT TO OLLAMA:
+      They are positions in Meta's vocabulary list, stored inside the model file
+      (tokenizer.ggml.tokens: position 128009 = <|eot_id|>, read for real in 03_tokens.py).
+
+      llama3.2 in Ollama / Hugging Face / llama.cpp   -> the SAME IDs (same vocabulary file)
+      other Llama 3.x models (3, 3.1, 3.3)            -> the same tokenizer, the same IDs
+      other families                                  -> other markers, other IDs
+                                                         (GPT-2's end token: <|endoftext|> = 50256)
+      OpenAI / Anthropic                              -> hidden, you never see their IDs
+
+      Ollama only decides WHETHER the markers are added (/api/chat yes, "raw": True no).
+
    The model was trained on millions of conversations written exactly like this. When it
    sees "assistant<|end_header_id|>\n\n" it has learned: "now I write the reply, and I end
    it with <|eot_id|>" (that's how it knows when to stop -- 11_stop.py).

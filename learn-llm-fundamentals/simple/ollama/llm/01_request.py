@@ -36,7 +36,7 @@ WHAT HAPPENS:
    │    ~/.ollama/models/manifests/registry.ollama.ai/            │
    │        library/llama3.2/latest      (small JSON "manifest")  │
    │    -> layer "application/vnd.ollama.image.model"             │
-   │    -> ~/.ollama/models/blobs/sha256-dde5aa3f...  (2.0 GB)    │
+   │    -> ~/.ollama/models/blobs/sha256-<digest>, 2.0 GB (below) │
    │                                                              │
    │ 2. LOAD (only if not already in memory)                      │
    │    read the GGUF file -> weights into RAM / GPU VRAM         │
@@ -46,16 +46,25 @@ WHAT HAPPENS:
    │    so the next request skips step 2                          │
    └────────────┬─────────────────────────────────────────────────┘
                 ▼
-          02 template (next file) ...
+          02 template (next file)
 
   THE MANIFEST -- why "llama3.2" finds the right file:
      The model name is just a label. The manifest is a tiny JSON listing the pieces of the
-     download, each by its sha256 hash (the hash IS the file name in blobs/):
+     download, each by its sha256 hash (the hash IS the file name in blobs/, with "sha256-"):
 
-        mediaType ...image.model      -> the GGUF: weights + vocabulary + metadata (2.0 GB)
-        mediaType ...image.template   -> the chat template (02_template.py)
-        mediaType ...image.license    -> license text
-        mediaType ...image.params     -> default parameters (the stop words, 11_stop.py)
+        application/vnd.ollama.image.model       2,019,377,376 bytes
+           -> the GGUF: weights + vocabulary + metadata
+           sha256:dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff
+        application/vnd.ollama.image.template    1,429 bytes
+           -> the chat template (02_template.py)
+           sha256:966de95ca8a62200913e3f8bfbf84c8494536f1b94b49166851e76644e966396
+        application/vnd.ollama.image.license     7,711 bytes  and  6,016 bytes
+           -> two license texts
+           sha256:fcc5a6bec9daf9b561a68827b67ab6088e1dba9d1fa2a50d7bbcc8384e0a265d
+           sha256:a70ff7e570d97baaf4e62ac6e6ad9975e04caa6d900d3742d37698494479e0cd
+        application/vnd.ollama.image.params      96 bytes
+           -> default parameters (the stop words, 11_stop.py)
+           sha256:56bb8bd477a519ffa694fc449c2413c6f0e1d3b1c88fa7e3c9d88d3ae49d4dcb
 
   COLD vs WARM -- the same request, twice (real numbers from main() below):
 
@@ -72,15 +81,17 @@ WHAT HAPPENS:
         "size_vram": 0              <- 0 = running on CPU only (no GPU used)
         "context_length": 4096      <- how many tokens it was loaded for (Ollama's default
                                        num_ctx; the model itself supports 131,072)
-        "expires_at": "...12:29"    <- loaded time + keep_alive; then it's unloaded
+        "expires_at": "2026-11-01T12:29:38.0164829+05:30"
+                                    <- loaded time + keep_alive; then it's unloaded
 
   ANATOMY OF THE REQUEST BODY (/api/chat):
         field         required?   meaning
         model         yes         name:tag of a model you pulled ("llama3.2" = "llama3.2:latest")
         messages      yes         list of {"role": "system"|"user"|"assistant"|"tool",
-                                  "content": "..."} -- the WHOLE conversation, every time
+                                  "content": "<the text>"} -- the WHOLE conversation, every time
         stream        no          true (default) = many small JSON chunks; false = one at the end
-        options       no          temperature, top_k, top_p, seed, num_predict, num_ctx, stop ...
+        options       no          temperature, top_k, top_p, min_p, seed, num_predict, num_ctx,
+                                  stop, repeat_penalty, repeat_last_n -- and more in Ollama's docs
         keep_alive    no          "5m" (default), "1h", 0 = unload right after, -1 = forever
         format        no          "json" or a JSON schema -> structured output (lesson 09)
         tools         no          functions the model may call (lesson 10)
@@ -97,23 +108,25 @@ IS IT OLLAMA-SPECIFIC?
    where it runs         -                  your machine        their servers           their servers             your machine (Python)
    endpoint              -                  POST /api/chat      POST /v1/chat/          POST /v1/messages         no server: model.generate()
                                                                 completions
-   auth                  -                  none (local)        Authorization:          x-api-key: ... +          none (local)
+   auth                  -                  none (local)        Authorization:          x-api-key: <key> +        none (local)
                                                                 Bearer <key>            anthropic-version header
    loading weights       -                  you see it          hidden                  hidden                    from_pretrained() -- you
                                             (load_duration)                                                       wait for it yourself
    max output tokens     -                  optional            optional                REQUIRED (max_tokens)     max_new_tokens
-                                            (num_predict)       (max_tokens / ...)
+                                            (num_predict)       (max_tokens or
+                                                                max_completion_tokens)
    The MODEL never sees HTTP or JSON -- it only ever receives token IDs (03_tokens.py).
    Everything in this file is the "delivery service" around it.
 
    The same request in other APIs (shapes only, hedged -- check each provider's docs):
      OpenAI     POST https://api.openai.com/v1/chat/completions
                 headers: Authorization: Bearer $OPENAI_API_KEY
-                body:    {"model": "...", "messages": [{"role": "user", "content": "..."}]}
+                body:    {"model": "<model name>",
+                          "messages": [{"role": "user", "content": "Say hi in one word."}]}
      Anthropic  POST https://api.anthropic.com/v1/messages
                 headers: x-api-key: $ANTHROPIC_API_KEY, anthropic-version: 2023-06-01
-                body:    {"model": "...", "max_tokens": 100,
-                          "messages": [{"role": "user", "content": "..."}]}
+                body:    {"model": "<model name>", "max_tokens": 100,
+                          "messages": [{"role": "user", "content": "Say hi in one word."}]}
                 (system prompt goes in a top-level "system" field, not in messages)
 
 COMMON CONFUSIONS:
@@ -122,10 +135,10 @@ COMMON CONFUSIONS:
      The same mix-up happens everywhere -- there are always 3 separate things:
 
         who            the APP you chat in     the SERVER / runner            the MODEL
-        Ollama         your script, Open       Ollama (localhost:11434)       llama3.2, qwen, gemma ...
-                       WebUI, ...                                             (files you pull)
-        OpenAI         ChatGPT (website/app)   the OpenAI API                 GPT models (e.g. the
-                                               (api.openai.com)               "gpt-..." names you pass)
+        Ollama         your script, Open       Ollama (localhost:11434)       llama3.2, qwen, gemma or
+                       WebUI or any other app                                 any other file you pull
+        OpenAI         ChatGPT (website/app)   the OpenAI API                 GPT models (the "gpt-"
+                                               (api.openai.com)               model names you pass)
         Anthropic      Claude.ai (website/     the Anthropic API              Claude models (Opus,
                        app), Claude Code       (api.anthropic.com)            Sonnet, Haiku)
         Hugging Face   your Python script      transformers library (runs     the files on the Hub, e.g.
@@ -195,9 +208,12 @@ def main():
     tags = httpx.get(OLLAMA + "/api/tags", timeout=30).json()
     for m in tags["models"]:
         print(f"   {m['name']}  {m['size']:,} bytes  {m['details']['parameter_size']}"
-              f"  {m['details']['quantization_level']}  digest={m['digest'][:12]}...")
-    # -> llama3.2:latest  2,019,393,189 bytes  3.2B  Q4_K_M  digest=a80c4f17acd5...
-    #    (the digest here is of the MANIFEST; the GGUF blob has its own sha256-dde5aa3f...)
+              f"  {m['details']['quantization_level']}")
+        print(f"   digest={m['digest']}")
+    # -> llama3.2:latest  2,019,393,189 bytes  3.2B  Q4_K_M
+    #    digest=a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72
+    #    (this digest is of the MANIFEST; the GGUF blob has its own:
+    #     sha256-dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff)
 
     print("\nSTEP 2: unload it, so we can watch a cold start (keep_alive: 0)")
     httpx.post(OLLAMA + "/api/generate", json={"model": CHAT_MODEL, "keep_alive": 0}, timeout=60)
@@ -227,16 +243,23 @@ def main():
     manifest = (Path.home() / ".ollama" / "models" / "manifests" / "registry.ollama.ai"
                 / "library" / CHAT_MODEL / "latest")
     for layer in json.loads(manifest.read_text())["layers"]:
-        print(f"   {layer['mediaType']:<45} {layer['size']:>13,}  {layer['digest'][:19]}...")
-    # -> application/vnd.ollama.image.model             2,019,377,376  sha256:dde5aa3fc5f...
-    #    application/vnd.ollama.image.template                  1,429  sha256:966de95ca8a...
-    #    application/vnd.ollama.image.license                   7,711  sha256:fcc5a6bec9d...
-    #    application/vnd.ollama.image.license                   6,016  sha256:a70ff7e570d...
-    #    application/vnd.ollama.image.params                       96  sha256:56bb8bd477a...
-    #    application/vnd.docker.distribution.manifest.v2+json  1,005  sha256:a80c4f17acd...
+        print(f"   {layer['mediaType']:<53} {layer['size']:>13,} bytes")
+        print(f"      {layer['digest']}")
+    # -> application/vnd.ollama.image.model                    2,019,377,376 bytes
+    #       sha256:dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff
+    #    application/vnd.ollama.image.template                         1,429 bytes
+    #       sha256:966de95ca8a62200913e3f8bfbf84c8494536f1b94b49166851e76644e966396
+    #    application/vnd.ollama.image.license                          7,711 bytes
+    #       sha256:fcc5a6bec9daf9b561a68827b67ab6088e1dba9d1fa2a50d7bbcc8384e0a265d
+    #    application/vnd.ollama.image.license                          6,016 bytes
+    #       sha256:a70ff7e570d97baaf4e62ac6e6ad9975e04caa6d900d3742d37698494479e0cd
+    #    application/vnd.ollama.image.params                              96 bytes
+    #       sha256:56bb8bd477a519ffa694fc449c2413c6f0e1d3b1c88fa7e3c9d88d3ae49d4dcb
+    #    application/vnd.docker.distribution.manifest.v2+json          1,005 bytes
+    #       sha256:a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72
     #    (the last one is the manifest itself -- its hash is the digest /api/tags shows;
-    #     the .model blob is ~/.ollama/models/blobs/sha256-dde5aa3f... -- the file
-    #     gguf_reader.py opens in the later lessons)
+    #     the .model blob is the file gguf_reader.py opens in the later lessons:
+    #     ~/.ollama/models/blobs/sha256-dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff)
 
 
 if __name__ == "__main__":

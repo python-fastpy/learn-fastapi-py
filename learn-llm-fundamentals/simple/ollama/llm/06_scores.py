@@ -30,11 +30,11 @@ WHAT HAPPENS:
 
   ONE SCORE = ONE DOT PRODUCT: multiply position by position, add it all up.
 
-     final vector    [ 0.12,  -0.40,   0.03,  ...,   0.25 ]       (3,072 numbers)
-     row of 'Paris'  [ 0.30,  -0.20,   0.01,  ...,   0.18 ]       (row 60704 of token_embd)
-                       ─────────────────────────────────────
-     score('Paris') = 0.12*0.30 + (-0.40)*(-0.20) + 0.03*0.01 + ... + 0.25*0.18
-                                                              (numbers illustrative)
+     final vector    [ 0.12,  -0.40,   0.03,   0.25 ]   (+ 3,068 more numbers)
+     row of 'Paris'  [ 0.30,  -0.20,   0.01,   0.18 ]   (+ 3,068 more, row 60704 of token_embd)
+                       ─────────────────────────────
+     score('Paris') = 0.12*0.30 + (-0.40)*(-0.20) + 0.03*0.01 + 0.25*0.18
+                      and so on for all 3,072 pairs           (numbers illustrative)
      same direction  -> big positive score     unrelated -> ~0     opposite -> negative
 
   Done for all 128,256 rows:
@@ -55,7 +55,7 @@ WHAT HAPPENS:
      'France'  -9.8171         -9.82
      ' Paris'  -9.8229         -9.82
      'Berlin'  -11.0300       -11.03
-     ...       ... 128,236 more, all lower
+     (128,251 more tokens, all lower)
 
   Ollama doesn't send raw scores, only logprobs (07). But softmax only cares about
   DIFFERENCES, so  score_A - score_B = logprob_A - logprob_B  exactly. We get the real
@@ -76,8 +76,8 @@ IS IT OLLAMA-SPECIFIC?
   Ollama             "logprobs": true, "top_logprobs": N   (we got 20 here)
   OpenAI             logprobs + top_logprobs (Chat Completions, up to 20)
   Anthropic          no logprobs / scores in the API
-  Hugging Face       the full raw scores: model(...).logits, or
-                     generate(..., output_scores=True, return_dict_in_generate=True)
+  Hugging Face       the full raw scores: model(input_ids).logits, or
+                     generate(input_ids, output_scores=True, return_dict_in_generate=True)
 
 COMMON CONFUSIONS:
 
@@ -184,18 +184,26 @@ def main():
         print(f"  {t['token']!r:10} logprob {t['logprob']:9.4f}   score gap {t['logprob'] - best:7.2f}")
     # -> STEP 3: the REAL score gaps for the 01b prompt, from Ollama's logprobs
     #      'Paris'    logprob   -0.0012   score gap    0.00
-    #      'Par'      logprob   -7.1457   score gap   -7.14
-    #      'France'   logprob   -9.8171   score gap   -9.82
-    #      ' Paris'   logprob   -9.8229   score gap   -9.82
-    #      'par'      logprob   -9.9723   score gap   -9.97
-    #      'PAR'      logprob  -10.2513   score gap  -10.25
-    #      ' paris'   logprob  -10.6798   score gap  -10.68
-    #      'Berlin'   logprob  -11.0300   score gap  -11.03
-    #      'London'   logprob  -11.5730   score gap  -11.57
-    #      'French'   logprob  -11.9831   score gap  -11.98
-    #      '"'        logprob  -12.0649   score gap  -12.06
-    #      ...
-    #      'B'        logprob  -13.1097   score gap  -13.11
+    #      'Par'      logprob   -7.1360   score gap   -7.13
+    #      'France'   logprob   -9.6981   score gap   -9.70
+    #      ' Paris'   logprob   -9.8432   score gap   -9.84
+    #      'par'      logprob   -9.9892   score gap   -9.99
+    #      'PAR'      logprob  -10.3009   score gap  -10.30
+    #      ' paris'   logprob  -10.6985   score gap  -10.70
+    #      'Berlin'   logprob  -10.8706   score gap  -10.87
+    #      'London'   logprob  -11.5082   score gap  -11.51
+    #      'French'   logprob  -11.7519   score gap  -11.75
+    #      '"'        logprob  -11.8354   score gap  -11.83
+    #      'Parm'     logprob  -11.9406   score gap  -11.94
+    #      '.Par'     logprob  -12.0984   score gap  -12.10
+    #      'P'        logprob  -12.3785   score gap  -12.38
+    #      ' PAR'     logprob  -12.4612   score gap  -12.46
+    #      'Tok'      logprob  -12.4755   score gap  -12.47
+    #      '**'       logprob  -12.7175   score gap  -12.72
+    #      'The'      logprob  -12.8154   score gap  -12.81
+    #      '_par'     logprob  -12.9715   score gap  -12.97
+    #      'B'        logprob  -12.9938   score gap  -12.99
+    # (the last decimals wobble a little between runs -- CPU maths noise)
     # Notice: the runners-up are spellings of Paris ('Par', ' Paris', 'PAR') and other
     # capitals ('Berlin', 'London') -- the final vector points at "a capital city".
 

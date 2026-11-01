@@ -13,7 +13,9 @@ WHERE YOU ARE IN THE JOURNEY:
      you see ◀── 12 response ◀── 11 stop? ◀── 10 loop ◀── 09 detokenize ◀── 08 pick ◀── 07 softmax
 
   IN:   one long string (your message wrapped in the template, lesson 02)
-  OUT:  a list of IDs, e.g. 22 of them:  [128000, 128006, 882, ..., 271]
+  OUT:  a list of IDs, e.g. 22 of them:
+        [128000, 128006, 882, 128007, 271, 12833, 279, 11914, 449, 832, 3492, 25,
+         578, 6864, 315, 9822, 374, 128009, 128006, 78191, 128007, 271]
 
 FIRST: CHARACTERS vs TOKENS -- two different ways to count the same text
 
@@ -54,15 +56,19 @@ FIRST: CHARACTERS vs TOKENS -- two different ways to count the same text
 
 WHAT HAPPENS -- 5 small steps:
 
-   "<|start_header_id|>user<|end_header_id|>\n\nComplete ... The capital of France is<|eot_id|>..."
+   "<|start_header_id|>user<|end_header_id|>\n\nComplete the sentence with one word: The capital
+    of France is<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
         │
         │ 1. SPECIAL SPLIT   cut out the special tokens first -- they are never split up
         ▼
-   <|start_header_id|>   "user"   <|end_header_id|>   "\n\nComplete ... France is"   <|eot_id|> ...
+   <|start_header_id|>   "user"   <|end_header_id|>
+   "\n\nComplete the sentence with one word: The capital of France is"
+   <|eot_id|>   <|start_header_id|>   "assistant"   <|end_header_id|>   "\n\n"
         │
         │ 2. PRE-SPLIT       a regex cuts normal text into word-sized chunks;
         ▼                    the SPACE stays glued to the FRONT of the word
-   "\n\n"  "Complete"  " the"  " sentence"  ...  " capital"  " of"  " France"  " is"
+   "\n\n"  "Complete"  " the"  " sentence"  " with"  " one"  " word"  ":"
+   " The"  " capital"  " of"  " France"  " is"
         │
         │ 3. BYTES           each chunk -> UTF-8 bytes  (01c_utf8_bytes_table.py)
         ▼                    " capital" -> [32, 99, 97, 112, 105, 116, 97, 108]
@@ -267,11 +273,18 @@ def main():
     #       rank 17,793  ['Ġcapital']
     #    ' France'  starts as ['Ġ', 'F', 'r', 'a', 'n', 'c', 'e']
     #       rank     30  ['Ġ', 'F', 'r', 'an', 'c', 'e']
-    #       ...
+    #       rank    141  ['Ġ', 'F', 'r', 'an', 'ce']
+    #       rank    296  ['ĠF', 'r', 'an', 'ce']
+    #       rank    808  ['ĠF', 'r', 'ance']
+    #       rank  6,626  ['ĠFr', 'ance']
     #       rank 26,043  ['ĠFrance']
     #    ' Ouagadougou'  starts as ['Ġ', 'O', 'u', 'a', 'g', 'a', 'd', 'o', 'u', 'g', 'o', 'u']
     #       rank     39  ['Ġ', 'O', 'u', 'a', 'g', 'a', 'd', 'ou', 'g', 'o', 'u']
-    #       ...
+    #       rank     39  ['Ġ', 'O', 'u', 'a', 'g', 'a', 'd', 'ou', 'g', 'ou']
+    #       rank    109  ['Ġ', 'O', 'u', 'a', 'g', 'ad', 'ou', 'g', 'ou']
+    #       rank    147  ['Ġ', 'O', 'u', 'ag', 'ad', 'ou', 'g', 'ou']
+    #       rank    445  ['ĠO', 'u', 'ag', 'ad', 'ou', 'g', 'ou']
+    #       rank 125,898  ['ĠO', 'u', 'ag', 'ad', 'oug', 'ou']
     #       rank 170,827  ['ĠOu', 'ag', 'ad', 'oug', 'ou']      <- no rule left: stuck at 5 pieces
 
     print("\nSTEP 3: 01b's full prompt -- do we match Ollama?")

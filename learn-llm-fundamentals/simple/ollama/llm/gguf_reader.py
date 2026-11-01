@@ -16,11 +16,13 @@ GGUF FILE LAYOUT (version 3):
    ├───────────────────────────────────────────────┤
    │ key/value metadata (30 entries for llama3.2)  │  llama.block_count = 28,
    │                                               │  tokenizer.ggml.tokens = [128,256 strings],
-   │                                               │  tokenizer.ggml.merges = [280,147 rules], ...
+   │                                               │  tokenizer.ggml.merges = [280,147 rules],
+   │                                               │  and 27 more keys
    ├───────────────────────────────────────────────┤
    │ tensor table (255 entries)                    │  name, shape, type, offset
    ├───────────────────────────────────────────────┤
-   │ tensor data (~2 GB of weights)                │  token_embd.weight, blk.0.attn_q.weight, ...
+   │ tensor data (~2 GB of weights)                │  token_embd.weight, blk.0.attn_q.weight,
+   │                                               │  and the other 253 tensors
    └───────────────────────────────────────────────┘
 """
 
@@ -86,7 +88,7 @@ def read_gguf(path=None):
 def bytes_to_unicode():
     """GPT-2's trick: give each of the 256 bytes a VISIBLE character, so the vocabulary can be
     stored as normal strings. Printable bytes keep their own character ('P' -> 'P'); the others
-    get 256, 257, ... in order -> space (32) = 'Ġ', newline (10) = 'Ċ', tab (9) = 'ĉ'."""
+    get 256, 257, 258 and upwards, in order -> space (32) = 'Ġ', newline (10) = 'Ċ', tab (9) = 'ĉ'."""
     keep = (list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1))
             + list(range(ord("®"), ord("ÿ") + 1)))
     table, extra = {}, 0

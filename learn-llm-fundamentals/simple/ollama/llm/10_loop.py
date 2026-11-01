@@ -16,10 +16,14 @@ WHAT HAPPENS -- the real loop for "Count from 1 to 5, separated by spaces." (PAR
    step   input tokens            model run (03-08)        picked     input grows to
     1     22 (the template)  ─▶  28 layers ─▶ pick  ─▶     '1'        22 + 1 = 23
     2     23                 ─▶  28 layers ─▶ pick  ─▶     ' '        24
-    3     24                 ─▶  ...                       '2'        25
-    ...
-    9     30                 ─▶  ...                       '5'        31
-   10     31                 ─▶  ...                       <end>      STOP (11)
+    3     24                 ─▶  28 layers ─▶ pick  ─▶     '2'        25
+    4     25                 ─▶  28 layers ─▶ pick  ─▶     ' '        26
+    5     26                 ─▶  28 layers ─▶ pick  ─▶     '3'        27
+    6     27                 ─▶  28 layers ─▶ pick  ─▶     ' '        28
+    7     28                 ─▶  28 layers ─▶ pick  ─▶     '4'        29
+    8     29                 ─▶  28 layers ─▶ pick  ─▶     ' '        30
+    9     30                 ─▶  28 layers ─▶ pick  ─▶     '5'        31
+   10     31                 ─▶  28 layers ─▶ pick  ─▶     <end>      STOP (11)
 
    ┌──────────────────────────────────────────────────────────────┐
    │  tokens ─▶ MODEL ─▶ probabilities ─▶ pick ─▶ new token        │
@@ -35,10 +39,10 @@ THE KV CACHE -- why step 10 is not 10x slower than step 1:
 
       run 1:   compute K,V for tokens 1-22         -> keep them        (expensive: 22 tokens)
       run 2:   reuse K,V 1-22, compute ONLY #23    -> keep it          (cheap: 1 token)
-      run 3:   reuse K,V 1-23, compute ONLY #24    ...
+      run 3:   reuse K,V 1-23, compute ONLY #24    -> keep it          (and so on, every run)
 
    You can SEE it: "prompt_eval_cached_count" = tokens whose K,V were reused (PART 1: 22, 23,
-   24, ... each = all but the newest). Once in a while the cache misses (seen in one run:
+   24, 25, 26, 27, 28, 29, 30 -- each = all but the newest). Once in a while the cache misses (seen in one run:
    0 cached, ~2.3 s) and everything is computed again -- same answer, just slower.
 
 PREFILL vs DECODE -- the two speeds in every response (PART 3):
@@ -139,7 +143,9 @@ def main():
     #       step  3  picked '2'    input 24  cached 23     54 ms  length
     #       step  4  picked ' '    input 25  cached 24     56 ms  length
     #       step  5  picked '3'    input 26  cached 25     53 ms  length
-    #       ...
+    #       step  6  picked ' '    input 27  cached 26     96 ms  length
+    #       step  7  picked '4'    input 28  cached 27     95 ms  length
+    #       step  8  picked ' '    input 29  cached 28    121 ms  length
     #       step  9  picked '5'    input 30  cached 29     59 ms  length
     #       step 10  picked ''     input 31  cached 30     51 ms  stop     <- <end>, nothing visible
     # (cached counts vary run to run -- they depend on what the server still has in memory;
@@ -160,21 +166,60 @@ def main():
             arrivals.append((time.time() - start, chunk["response"]))
             if chunk["done"]:
                 last = chunk
-    for t, tok in arrivals[:5]:
+    for t, tok in arrivals:
         print(f"   {t:6.3f} s  {tok!r}")
-    print(f"   ... {len(arrivals)} chunks")
+    print(f"   ({len(arrivals)} chunks in total)")
     prefill = last["prompt_eval_count"] / (last["prompt_eval_duration"] / 1e9)
     decode = last["eval_count"] / (last["eval_duration"] / 1e9)
     print(f"   prefill {last['prompt_eval_count']} tokens at {prefill:.0f} tok/s | "
           f"decode {last['eval_count']} tokens at {decode:.1f} tok/s")
-    # ->     2.780 s  'The'           <- connecting + prefill (see note below)
-    #        2.820 s  ' sea'          <- then ~40 ms per token: one loop step each
-    #        2.862 s  ' is'
-    #        2.905 s  ' a'
-    #        2.948 s  ' vast'
-    #       ... 44 chunks
-    #       prefill 17 tokens at 151 tok/s | decode 44 tokens at 20.5 tok/s
-    # NOTE: prefill itself took ~0.11 s. Most of the 2.7 s is the Windows "localhost"
+    # ->     2.639 s  'The'           <- connecting + prefill (see note below)
+    #        2.681 s  ' sea'          <- then ~45 ms per token: one loop step each
+    #        2.725 s  ' is'
+    #        2.768 s  ' a'
+    #        2.812 s  ' vast'
+    #        2.856 s  ' and'
+    #        2.901 s  ' mysterious'
+    #        2.982 s  ' body'
+    #        3.031 s  ' of'
+    #        3.074 s  ' salt'
+    #        3.117 s  'water'
+    #        3.159 s  ' that'
+    #        3.204 s  ' covers'
+    #        3.251 s  ' over'
+    #        3.296 s  ' '
+    #        3.341 s  '70'
+    #        3.388 s  '%'
+    #        3.433 s  ' of'
+    #        3.481 s  ' the'
+    #        3.531 s  ' Earth'
+    #        3.579 s  "'s"
+    #        3.626 s  ' surface'
+    #        3.676 s  '.'
+    #        3.728 s  ' Its'
+    #        3.779 s  ' waves'
+    #        3.821 s  ' and'
+    #        3.865 s  ' t'
+    #        3.912 s  'ides'
+    #        3.957 s  ' have'
+    #        4.002 s  ' shaped'
+    #        4.047 s  ' the'
+    #        4.092 s  ' coast'
+    #        4.138 s  'lines'
+    #        4.186 s  ' and'
+    #        4.234 s  ' influenced'
+    #        4.283 s  ' the'
+    #        4.339 s  ' lives'
+    #        4.388 s  ' of'
+    #        4.450 s  ' countless'
+    #        4.510 s  ' people'
+    #        4.571 s  ' throughout'
+    #        4.629 s  ' history'
+    #        4.688 s  '.'
+    #        4.742 s  ''              <- the <end> token: counted, nothing visible
+    #       (44 chunks in total)
+    #       prefill 17 tokens at 119 tok/s | decode 44 tokens at 20.9 tok/s
+    # NOTE: prefill itself took ~0.14 s. Most of the 2.6 s is the Windows "localhost"
     #       connection delay (01_request.py, COMMON CONFUSIONS), not the model.
 
     print("\nPART 4: the context window")

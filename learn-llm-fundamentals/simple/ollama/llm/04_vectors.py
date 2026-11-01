@@ -12,26 +12,29 @@ WHERE YOU ARE IN THE JOURNEY:
                                                                                           │
      you see ◀── 12 response ◀── 11 stop? ◀── 10 loop ◀── 09 detokenize ◀── 08 pick ◀── 07 softmax
 
-  IN:   22 IDs                    [128000, 128006, 882, ..., 9822, 374, ..., 271]
+  IN:   22 IDs   [128000, 128006, 882, 128007, 271, 12833, 279, 11914, 449, 832, 3492, 25,
+                  578, 6864, 315, 9822, 374, 128009, 128006, 78191, 128007, 271]
   OUT:  22 vectors x 3,072 numbers  -> the input of layer 1 (lesson 05)
 
 WHAT HAPPENS -- a lookup, no maths:
 
    the EMBEDDING TABLE  (tensor "token_embd.weight" in the model file)
 
-                         3,072 numbers per row
-                       ┌───────────────────────────────────────────────┐
-     row 0      "!"    │ ...                                           │
-     ...               │                                               │
-     row 9822 " France"│ -0.0272  0.0199  -0.0084  -0.0073  0.0010 ... │  <- REAL first numbers
-     ...               │                                               │
-     row 128255        │ ...                                           │
-                       └───────────────────────────────────────────────┘
+                           3,072 numbers per row (first 5 shown, real values)
+                       ┌──────────────────────────────────────────────────────────┐
+     row 0      "!"    │  0.0112   0.0097   0.0142   0.0239  -0.0045  + 3,067 more │
+     (rows 1 to 9821)  │                                                          │
+     row 9822 " France"│ -0.0272   0.0199  -0.0084  -0.0073   0.0010  + 3,067 more │
+     (rows 9823 to     │                                                          │
+      128254)          │                                                          │
+     row 128255        │ -0.0029   0.0022   0.0050  -0.0093   0.0165  + 3,067 more │
+     (a reserved token)└──────────────────────────────────────────────────────────┘
                          128,256 rows -- one per vocabulary token
 
      size:  128,256 x 3,072 = 394,002,432 numbers  (12.3% of all 3.2 B weights)
 
-     " France" -> ID 9822 (lesson 03) -> row 9822 -> [-0.0272, 0.0199, -0.0084, ..., ]
+     " France" -> ID 9822 (lesson 03) -> row 9822 ->
+        [-0.0272, 0.0199, -0.0084, -0.0073, 0.001, 0.0084, 0.0136, -0.0073, and 3,064 more]
 
   The numbers on their own mean nothing to a human. What matters is how rows COMPARE.
   Training moved the rows so that tokens used in similar places get similar rows.

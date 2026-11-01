@@ -144,7 +144,7 @@ PART 4 -- HOW llama3.2 SEES BYTES
   The vocabulary (llm/03_tokens.py) starts from all 256 possible bytes, then adds merged
   pieces on top. Inside the model file, invisible bytes are shown as visible stand-ins
   (the GPT-2 trick): printable bytes keep their own character ('P' stays 'P'), the 68
-  invisible ones get the characters 256, 257, 258, ... in order. For bytes 0-32 that is
+  invisible ones get the characters 256, 257, 258 and onwards, in order (up to 323). For bytes 0-32 that is
   simply byte + 256:
 
    byte   char        shown in the vocab as
@@ -181,10 +181,10 @@ def main():
         print(f"{code:>3}  {code:02X}  {code:08b}  {char}")
     # ->  32  20  00100000  space
     #     33  21  00100001  !
-    #     ...
+    #     (one line for every code from 34 to 125 -- the same rows as the PART 1 table above,
+    #      for example:)
     #     80  50  01010000  P
-    #     ...
-    #    126  7E  01111110  ~
+    #    126  7E  01111110  ~       <- the last of the 95 lines
 
     print("\nPART 2: character <-> number")
     print(ord("P"), chr(80), ord("p") - ord("P"), ord("7"), int("7"))

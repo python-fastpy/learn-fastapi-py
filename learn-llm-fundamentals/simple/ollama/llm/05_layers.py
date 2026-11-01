@@ -50,7 +50,7 @@ WHAT HAPPENS -- ONE LAYER, TENSOR BY TENSOR (real names from the model file):
     (+) ◀────────────────────────────┘   9. ADD again: x = x + feed_forward_result
      │
      ▼
-     x  for the next layer   (blk.0 -> blk.1 -> ... -> blk.27)
+     x  for the next layer   (blk.0, then blk.1, blk.2, and so on through blk.27)
 
   This "keep x, ADD a correction" path is called the RESIDUAL STREAM. Nothing is replaced,
   each layer only writes on top -- that's why 28 layers can build up understanding.
@@ -60,7 +60,7 @@ THE PIECES, IN PLAIN WORDS:
   RMSNorm         divide the vector by its average size (root-mean-square), then scale each
                   of the 3,072 numbers by its own learned weight. Keeps numbers from blowing
                   up or shrinking away over 28 layers.
-                     rms = sqrt( (x1² + x2² + ... + x3072²) / 3072 + 0.00001 )
+                     rms = sqrt( (sum of all 3,072 numbers squared) / 3072 + 0.00001 )
                      out_i = x_i / rms * weight_i
 
   ATTENTION       " is" asks: which earlier tokens matter to me?
@@ -68,7 +68,7 @@ THE PIECES, IN PLAIN WORDS:
                      softmax(scores) -> weights that add up to 1
                      result = sum of weight_t x V(t)
                   24 heads do this in parallel, each with its own 128-number slice, so each
-                  head can watch for something different (grammar, which noun, position...).
+                  head can watch for something different (grammar, which noun, position, and other patterns).
   GQA             grouped-query attention: 24 Q heads but only 8 K/V heads -- every 3 Q heads
                   share one K/V head. Smaller attn_k / attn_v (1,024 wide, not 3,072) and a
                   3x smaller KV cache (lesson 10).
@@ -119,7 +119,11 @@ WHAT IS A WEIGHT? (every tensor above is a box of them)
         start    w = [0.8,    -0.3   ]   output 0.65     error -0.35
         step 1   w = [0.87,   -0.265 ]   output 0.7375
         step 2   w = [0.9225, -0.2388]   output 0.8031
-        ...
+        step 3   w = [0.9619, -0.2191]   output 0.8523
+        step 4   w = [0.9914, -0.2043]   output 0.8893
+        step 5   w = [1.0136, -0.1932]   output 0.9169
+        step 6   w = [1.0302, -0.1849]   output 0.9377
+        step 7   w = [1.0426, -0.1787]   output 0.9533
         step 8   w = [1.052,  -0.174 ]   output 0.965    <- creeping towards 1.0
      llama3.2 did this with 3.2 BILLION weights at once. No single weight "contains" Paris --
      the fact is spread over millions of them.
@@ -175,7 +179,7 @@ WHERE THIS COMES FROM:
   the DESIGN (28 layers, GQA,     Meta (Llama 3 paper)       GGUF metadata: llama.block_count,
    RMSNorm, SiLU, RoPE)                                      llama.attention.head_count(_kv),
                                                              llama.feed_forward_length
-  the WEIGHTS in each tensor      Meta's training run        GGUF tensors blk.0.* ... blk.27.*
+  the WEIGHTS in each tensor      Meta's training run        GGUF tensors blk.0.* to blk.27.*
   the 4-bit packing (Q4_K/Q6_K)   the GGUF converter         tensor "type" in the tensor table
   running the maths               Ollama's engine (ggml /    on your CPU/GPU, per request
                                   llama.cpp family)
@@ -196,7 +200,7 @@ COMMON CONFUSIONS:
     "layers" in an Ollama download (those are files: model, template, license, params).
   - all 28 layers have the same DESIGN but different WEIGHTS -- they are not copies.
   - layers don't change the shape: 3,072 in, 3,072 out. Only the meaning changes.
-  - attention has no weights of its own -- its "weights" (0.05, 0.40, ...) are computed
+  - attention has no weights of its own -- its "weights" (0.17, 0.39, 0.17, 0.26 in STEP 3) are computed
     fresh for every prompt. The learned weights are Q, K, V, O.
 
 SEE IT VISUALLY:
@@ -257,7 +261,7 @@ def main():
             print(f"  {name:26} {str(t['shape']):16} {t['type']:5} {n:>12,}")
     print(f"  one layer = {total_layer:,} numbers")
     layers = sorted({int(n.split('.')[1]) for n in tensors if n.startswith("blk.")})
-    print(f"  layers in file: blk.{layers[0]} ... blk.{layers[-1]} = {len(layers)}"
+    print(f"  layers in file: blk.{layers[0]} to blk.{layers[-1]} = {len(layers)}"
           f"   (llama.block_count = {meta['llama.block_count']})")
     print(f"  28 x {total_layer:,} = {28 * total_layer:,}")
     # -> STEP 1: the real tensors of layer 0 (blk.0.*) in the model file
@@ -271,7 +275,7 @@ def main():
     #      blk.0.attn_q.weight        (3072, 3072)     Q4_K     9,437,184
     #      blk.0.attn_v.weight        (3072, 1024)     Q6_K     3,145,728
     #      one layer = 100,669,440 numbers
-    #      layers in file: blk.0 ... blk.27 = 28   (llama.block_count = 28)
+    #      layers in file: blk.0 to blk.27 = 28   (llama.block_count = 28)
     #      28 x 100,669,440 = 2,818,744,320
     # (file order is how the converter wrote them, not the order they run in)
 
@@ -294,7 +298,7 @@ def main():
     # Each of the 3,072 positions has its OWN learned weight: position 2 is boosted (0.39),
     # position 4 almost switched off (-0.0065).
     # That's real: same numbers Ollama computes first for ' France'. The next steps
-    # (attn_q, ...) are 4-bit packed matrices -- too slow to unpack in plain Python.
+    # (attn_q, attn_k, attn_v, attn_output, ffn_gate, ffn_up, ffn_down) are 4/6-bit packed matrices -- too slow to unpack in plain Python.
 
     print("\nSTEP 3: attention, on a TOY example (4 tokens x 4 numbers, illustrative)")
     words = ["The", " capital", " of", " France"]

@@ -17,11 +17,16 @@ ONE EXAMPLE, ALL THE WAY THROUGH (real llama3.2 values, the same prompt as 01b):
 
    step              what goes IN                     what comes OUT                     file
    ───────────────── ──────────────────────────────── ────────────────────────────────── ────────────────
-   you type          keyboard                         "...The capital of France is"
+   you type          keyboard                         "Complete the sentence with one word:
+                                                       The capital of France is"
    01 request        your text                        JSON, HTTP POST to :11434          01_request.py
-   02 template       messages [{role, content}]       ONE string with <|...|> markers    02_template.py
+   02 template       messages [{role, content}]       ONE string with markers like       02_template.py
+                                                      <|start_header_id|> and <|eot_id|>
    03 tokens         that string                      bytes -> BPE -> 22 IDs             03_tokens.py
-                                                      [128000, 128006, 882, ...]
+                                                      [128000, 128006, 882, 128007, 271,
+                                                       12833, 279, 11914, 449, 832, 3492,
+                                                       25, 578, 6864, 315, 9822, 374,
+                                                       128009, 128006, 78191, 128007, 271]
    04 vectors        22 IDs                           22 x 3,072 numbers                 04_vectors.py
    05 layers         22 x 3,072                       22 x 3,072, 28 times over          05_layers.py
    06 scores         the LAST vector                  128,256 scores, one per token      06_scores.py
@@ -89,7 +94,8 @@ WHERE EACH PIECE OF DATA COMES FROM:
 
    data                               comes from                         where you can see it
    ────────────────────────────────── ────────────────────────────────── ───────────────────────────
-   the chat format (<|eot_id|> ...)   Meta, when they fine-tuned it      /api/show "template", GGUF
+   the chat format (<|eot_id|> and    Meta, when they fine-tuned it      /api/show "template", GGUF
+    the other markers)
    vocabulary (128,256 tokens)        Meta, built ONCE with BPE          GGUF tokenizer.ggml.tokens
    merge rules (280,147)              Meta, same BPE run                 GGUF tokenizer.ggml.merges
    bytes ('P' = 80)                   the UTF-8 standard (everywhere)    ../01c_utf8_bytes_table.py
@@ -99,7 +105,8 @@ WHERE EACH PIECE OF DATA COMES FROM:
    temperature, top_k, num_predict    YOU, in "options"                  your request
    timings, counts, done_reason       Ollama, while it runs              the response JSON
 
-   "GGUF" = the model file Ollama downloaded: ~/.ollama/models/blobs/sha256-dde5...
+   "GGUF" = the model file Ollama downloaded:
+      ~/.ollama/models/blobs/sha256-dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff
    gguf_reader.py in this folder reads it with plain Python.
 
 IS ANY OF THIS OLLAMA-SPECIFIC?
@@ -109,7 +116,7 @@ IS ANY OF THIS OLLAMA-SPECIFIC?
    02 template        every chat model has one        Go template syntax; others hide it
    03-06              the model itself                nothing -- same in any program running llama3.2
    07 softmax         maths, same everywhere          what's exposed: "logprobs"
-   08 pick            every API has sampling knobs    option names (num_predict, top_k ...)
+   08 pick            every API has sampling knobs    option names (num_predict, top_k, num_ctx)
    09-11              every API does them             done_reason values
    12 response        every API returns text + usage  JSON field names
 
@@ -125,7 +132,7 @@ WHAT OLLAMA SHOWS YOU vs WHAT IS HIDDEN:
    the picked text, done_reason, timings        the raw scores       -> 06 recovers score GAPS
 
 HOW TO USE THIS FOLDER:
-   run the files in number order:   python 00_the_journey.py   python 01_request.py   ...
+   run the files in number order, from python 00_the_journey.py to python 12_response.py
    each one is standalone; all need Ollama running with llama3.2 pulled (ollama pull llama3.2)
    02, 03, 04, 05, 06, 09, 10, 11 also read the model file directly via gguf_reader.py
 """

@@ -19,9 +19,9 @@ WHAT HAPPENS -- THREE STEPS, WORKED ON REAL NUMBERS (01b prompt, top 4 of 128,25
    token      score*     1. e^score        2. add up          3. divide
    'Paris'      0.00     e^0.00  = 1.0000                       1.0000 / 1.0011 = 0.9988
    'Par'       -7.14     e^-7.14 = 0.00079                      0.00079 / 1.0011 = 0.0008
-   'France'    -9.82     e^-9.82 = 0.00005                      ...              = 0.00005
-   ' Paris'    -9.82     e^-9.82 = 0.00005                      ...              = 0.00005
-   ... 128,252 more tokens, each adding a tiny bit ...
+   'France'    -9.82     e^-9.82 = 0.00005                      0.00005 / 1.0011 = 0.00005
+   ' Paris'    -9.82     e^-9.82 = 0.00005                      0.00005 / 1.0011 = 0.00005
+   (128,252 more tokens, each adding a tiny bit to the sum)
                                    ─────────────
                                    sum ≈ 1.0011               all results add up to 1
 
