@@ -18,23 +18,45 @@ WHERE YOU ARE IN THE JOURNEY:
 
 WHAT HAPPENS -- a lookup, no maths:
 
-   the EMBEDDING TABLE  (tensor "token_embd.weight" in the model file)
+  STEP 1 -- THE TABLE. Think of a giant spreadsheet stored in the model file
+  (tensor "token_embd.weight"). Real values, first 5 columns shown:
 
-                           3,072 numbers per row (first 5 shown, real values)
-                       ┌──────────────────────────────────────────────────────────┐
-     row 0      "!"    │  0.0112   0.0097   0.0142   0.0239  -0.0045  + 3,067 more │
-     (rows 1 to 9821)  │                                                          │
-     row 9822 " France"│ -0.0272   0.0199  -0.0084  -0.0073   0.0010  + 3,067 more │
-     (rows 9823 to     │                                                          │
-      128254)          │                                                          │
-     row 128255        │ -0.0029   0.0022   0.0050  -0.0093   0.0165  + 3,067 more │
-     (a reserved token)└──────────────────────────────────────────────────────────┘
-                         128,256 rows -- one per vocabulary token
+                                 col 1    col 2    col 3    col 4    col 5   ...  col 3,072
+                               ┌──────────────────────────────────────────────────────────┐
+     row 0        "!"          │  0.0112   0.0097   0.0142   0.0239  -0.0045   ...         │
+     row 1        '"'          │   ...                                                    │
+      ...                      │                                                          │
+     row 9822     " France"    │ -0.0272   0.0199  -0.0084  -0.0073   0.0010   ...         │
+      ...                      │                                                          │
+     row 128255   (reserved)   │ -0.0029   0.0022   0.0050  -0.0093   0.0165   ...         │
+                               └──────────────────────────────────────────────────────────┘
 
-     size:  128,256 x 3,072 = 394,002,432 numbers  (12.3% of all 3.2 B weights)
+     ROWS      128,256   one per token in the vocabulary (lesson 03) -- row number = token ID
+     COLUMNS     3,072   the vector size -- the same for every token
+     SIZE      128,256 x 3,072 = 394,002,432 numbers  (12.3% of all 3.2 B weights)
+     WHO       the numbers were LEARNED in training (Meta); the row ORDER comes from the vocabulary
 
-     " France" -> ID 9822 (lesson 03) -> row 9822 ->
+  STEP 2 -- THE LOOKUP. The ID is simply the row number:
+
+     " France"  ──(03)──▶  ID 9822  ──(04)──▶  go to row 9822  ──▶  its 3,072 numbers:
         [-0.0272, 0.0199, -0.0084, -0.0073, 0.001, 0.0084, 0.0136, -0.0073, and 3,064 more]
+
+     in Python:  vector = table[9822]     no multiplying, no adding -- just "read that row"
+
+  STEP 3 -- THE WHOLE PROMPT. One lookup per ID, in order:
+
+     #    token                 ID        row read          result
+     1    <|begin_of_text|>     128000    row 128000   ->   3,072 numbers
+     2    <|start_header_id|>   128006    row 128006   ->   3,072 numbers
+     ...
+     16   " France"             9822      row 9822     ->   3,072 numbers
+     ...
+     22   "\n\n"                271       row 271      ->   3,072 numbers
+                                                            ─────────────────────
+                                                            22 x 3,072 numbers -> layer 1 (05)
+
+     The same ID twice gets the SAME row twice (128006 and 271 each appear 2x in the
+     prompt). Here a token has no idea what is next to it -- that's added in 05.
 
   The numbers on their own mean nothing to a human. What matters is how rows COMPARE.
   Training moved the rows so that tokens used in similar places get similar rows.
